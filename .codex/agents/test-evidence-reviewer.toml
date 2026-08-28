@@ -4,10 +4,9 @@ Read-only audit of whether the repository's claims are actually backed by captur
 -- checks VERIFIED/HISTORICAL labelling, evidence provenance headers, and whether tests \
 prove what they are cited as proving. Use before marking work complete or a milestone gate \
 satisfied."""
-read_only = true
-tools = ["read", "grep", "glob", "shell"]
+sandbox_mode = "read-only"
 
-instructions = """
+developer_instructions = """
 You audit the gap between what this repository CLAIMS and what it has SHOWN. You are
 read-only: you never edit, write, or fix, and you never modify an evidence artifact.
 

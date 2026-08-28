@@ -274,26 +274,62 @@ def test_codex_protocol():
     check("block writes the reason to stderr", bool(blocked.stderr.strip()))
 
     patch = run_adapter("codex", {
-        "tool": "apply_patch", "cwd": str(REPO),
-        "input": {"patch": f"*** Begin Patch\n*** Update File: {EXISTING_EVIDENCE}\n-old\n+new\n*** End Patch\n"},
+        "tool_name": "apply_patch", "cwd": str(REPO),
+        "tool_input": {"command": f"*** Begin Patch\n*** Update File: {EXISTING_EVIDENCE}\n-old\n+new\n*** End Patch\n"},
     })
     body = json.loads(patch.stdout) if patch.stdout.strip() else {}
     check("apply_patch over evidence is blocked", body.get("decision") == "block", f"got {body!r}")
 
     delete_patch = run_adapter("codex", {
-        "tool": "apply_patch", "cwd": str(REPO),
-        "input": {"patch": f"*** Begin Patch\n*** Delete File: {EXISTING_EVIDENCE}\n*** End Patch\n"},
+        "tool_name": "apply_patch", "cwd": str(REPO),
+        "tool_input": {"command": f"*** Begin Patch\n*** Delete File: {EXISTING_EVIDENCE}\n*** End Patch\n"},
     })
     body = json.loads(delete_patch.stdout) if delete_patch.stdout.strip() else {}
     check("apply_patch delete of evidence is blocked", body.get("decision") == "block", f"got {body!r}")
 
     add_patch = run_adapter("codex", {
-        "tool": "apply_patch", "cwd": str(REPO),
-        "input": {"patch": "*** Begin Patch\n*** Add File: docs/STATE.md\n+hello\n*** End Patch\n"},
+        "tool_name": "apply_patch", "cwd": str(REPO),
+        "tool_input": {"command": "*** Begin Patch\n*** Add File: docs/new state.md\n+hello\n*** End Patch\n"},
     })
     body = json.loads(add_patch.stdout) if add_patch.stdout.strip() else {}
-    check("apply_patch on a normal doc is allowed", body.get("decision") == "allow", f"got {body!r}")
+    check("apply_patch Add File with spaces is allowed", body.get("decision") == "allow", f"got {body!r}")
     check("allowed apply_patch exits 0", add_patch.returncode == 0)
+
+    update_patch = run_adapter("codex", {
+        "tool_name": "apply_patch", "cwd": str(REPO),
+        "tool_input": {"command": "*** Begin Patch\n*** Update File: docs/new state.md\n-old\n+new\n*** End Patch\n"},
+    })
+    body = json.loads(update_patch.stdout) if update_patch.stdout.strip() else {}
+    check("apply_patch Update File with spaces is allowed", body.get("decision") == "allow", f"got {body!r}")
+
+    ordinary_delete_patch = run_adapter("codex", {
+        "tool_name": "apply_patch", "cwd": str(REPO),
+        "tool_input": {"command": "*** Begin Patch\n*** Delete File: docs/obsolete file.md\n*** End Patch\n"},
+    })
+    body = json.loads(ordinary_delete_patch.stdout) if ordinary_delete_patch.stdout.strip() else {}
+    check("apply_patch Delete File with spaces is allowed", body.get("decision") == "allow", f"got {body!r}")
+
+    multi_patch = run_adapter("codex", {
+        "tool_name": "apply_patch", "cwd": str(REPO),
+        "tool_input": {"command": (
+            f"*** Begin Patch\n*** Update File: docs/new state.md\n-old\n+new\n"
+            "*** Add File: docs/another file.md\n+hello\n"
+            f"*** Delete File: {EXISTING_EVIDENCE}\n*** End Patch\n"
+        )},
+    })
+    body = json.loads(multi_patch.stdout) if multi_patch.stdout.strip() else {}
+    check("apply_patch checks every target", body.get("decision") == "block", f"got {body!r}")
+
+    for name, envelope in (
+        ("missing envelope boundary", "*** Begin Patch\n*** Add File: docs/x.md\n+hello\n"),
+        ("no file header", "*** Begin Patch\n+hello\n*** End Patch\n"),
+        ("empty file header path", "*** Begin Patch\n*** Update File:\n-old\n+new\n*** End Patch\n"),
+    ):
+        malformed = run_adapter("codex", {
+            "tool_name": "apply_patch", "cwd": str(REPO), "tool_input": {"command": envelope},
+        })
+        body = json.loads(malformed.stdout) if malformed.stdout.strip() else {}
+        check(f"apply_patch {name} fails closed", body.get("decision") == "block", f"got {body!r}")
 
     ok = run_adapter("codex", {"tool_name": "shell", "cwd": str(REPO), "input": {"command": "git status"}})
     body = json.loads(ok.stdout) if ok.stdout.strip() else {}

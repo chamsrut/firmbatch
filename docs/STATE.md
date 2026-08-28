@@ -94,7 +94,7 @@ Established by the repository-initialization pass and its R0 remediation (see
 | `scripts/verify-repository.sh` | The one verification entry point. Twelve gates. Invoked identically by the human, the `verify` skill, and CI. |
 | `.agents/skills/` | `verify`, `record-evidence`, `milestone`. Symlinked into `.claude/skills/`; single body each. |
 | `.agents/policy/guard.py` | Shared deterministic policy engine, `--adapter claude` and `--adapter codex`. An accident-prevention guardrail, **not** a sandbox or security boundary. |
-| `.agents/policy/test_guard.py` | 241 synthetic checks. |
+| `.agents/policy/test_guard.py` | 247 synthetic checks. |
 | `.claude/settings.json` | Blocking `PreToolUse` hook over `Write\|Edit\|MultiEdit\|NotebookEdit\|Bash\|Read\|Grep\|Glob`. |
 | `.codex/hooks.json` | Synchronous blocking `PreToolUse` hook over `shell\|local_shell\|apply_patch\|Edit\|Write`. Resolves the guard via `git rev-parse --show-toplevel`, so it works from any directory **inside** the work tree rather than only from its root. It is not fully cwd-independent: from outside the tree — including `/home/chams/src`, the parent directory `AGENTS.md` tells every command to run from — the substitution is empty and the hook blocks every action with empty stdout. See `docs/tasks/current.md`. |
 | Reviewers | `distributed-systems-reviewer`, `test-evidence-reviewer`, `security-operations-reviewer`, defined for both agents. **Declared** read-only: `tools: Read, Grep, Glob` on Claude (Bash removed), `read_only = true` on Codex — though Codex is also granted `shell` and must honour the flag itself. Whether either harness enforces the declaration is NOT VERIFIED; see below. |
@@ -146,8 +146,8 @@ a commit that does not contain them.
 
 | Claim | How to settle it |
 | --- | --- |
-| All twelve gates in `scripts/verify-repository.sh` pass: layout, agent configuration, hygiene, property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 241/241. | `/record-evidence` → `docs/evidence/r0/gates.txt`, after the R0 commit. |
-| The shared policy engine denies the R0 accident classes across both adapter protocols — multi-line blocks classified line by line, `git -C`/`git -c`, `gh` and `aws` global options, `env`/`timeout` prefixes, `cd`/`cd -`/`pushd`/`popd`/`||` sequences, subshell grouping, argparse-abbreviated provider selection, evidence-tree ancestors including glob and `mv` forms, source and destination operands, in-place archivers, `git restore`/`checkout` over a path, credential reads on every surface including the `.env.*` family, wrapper- and prefix-depth exhaustion, unparseable input, unknown tool names carrying a payload, and engine exceptions. 241 synthetic checks pass. | `/record-evidence` → `docs/evidence/r0/policy-tests.txt`, after the R0 commit. |
+| All twelve gates in `scripts/verify-repository.sh` pass: layout, agent configuration, hygiene, property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 247/247. | `/record-evidence` → `docs/evidence/r0/gates.txt`, after the R0 commit. |
+| The shared policy engine denies the R0 accident classes across both adapter protocols — multi-line blocks classified line by line, `git -C`/`git -c`, `gh` and `aws` global options, `env`/`timeout` prefixes, `cd`/`cd -`/`pushd`/`popd`/`||` sequences, subshell grouping, argparse-abbreviated provider selection, evidence-tree ancestors including glob and `mv` forms, source and destination operands, in-place archivers, `git restore`/`checkout` over a path, credential reads on every surface including the `.env.*` family, wrapper- and prefix-depth exhaustion, unparseable input, unknown tool names carrying a payload, and engine exceptions. 247 synthetic checks pass. | `/record-evidence` → `docs/evidence/r0/policy-tests.txt`, after the R0 commit. |
 
 ---
 

@@ -137,7 +137,7 @@ verification, not after every edit.
   sentence to the human; the cost of a false allow is a destroyed evidence record or a bill.
 - Two reviewer definitions per role must be kept in step by hand.
 
-**Covered by synthetic tests** (241 checks in `.agents/policy/test_guard.py`, all passing; no
+**Covered by synthetic tests** (247 checks in `.agents/policy/test_guard.py`, all passing; no
 destructive command is executed): both adapter protocols, each deny class in the spellings
 named there, wrapper-shell smuggling and depth exhaustion, path traversal into the evidence
 tree, `cd`-relative resolution, and fail-closed behaviour on malformed input and on an

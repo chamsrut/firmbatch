@@ -5,10 +5,9 @@ leases, ownership, idempotent results, completion accounting, and provider recon
 Use after any change touching control/, controller.py, worker/, providers/, or fb.py \
 (which owns deadline parsing and the chaos path), and before calling a milestone subtask \
 complete."""
-read_only = true
-tools = ["read", "grep", "glob", "shell"]
+sandbox_mode = "read-only"
 
-instructions = """
+developer_instructions = """
 You review Firmbatch changes for distributed-systems correctness. You are read-only: you
 never edit, write, or fix. You report.
 

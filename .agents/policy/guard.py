@@ -778,15 +778,29 @@ def decide(tool, path=None, command=None, cwd=None, patch=None):
 
 
 def check_patch(patch, cwd=None):
-    """Evaluate a Codex apply_patch envelope, one target file at a time."""
-    for line in str(patch).splitlines():
-        stripped = line.strip()
-        for marker, deleting in (("*** Delete File:", True), ("*** Update File:", False), ("*** Add File:", False)):
-            if stripped.startswith(marker):
-                target = stripped[len(marker):].strip()
-                d = check_write(target, cwd, deleting=deleting)
-                if not d.allowed:
-                    return d
+    """Evaluate every target in a complete Codex unified apply_patch envelope."""
+    if not isinstance(patch, str):
+        return deny("malformed-input", "apply_patch payload is not a string; failing closed")
+    lines = patch.splitlines()
+    if len(lines) < 3 or lines[0] != "*** Begin Patch" or lines[-1] != "*** End Patch":
+        return deny("malformed-input", "incomplete apply_patch envelope; failing closed")
+
+    targets = []
+    markers = (("*** Delete File:", True), ("*** Update File:", False), ("*** Add File:", False))
+    for line in lines[1:-1]:
+        for marker, deleting in markers:
+            if line.startswith(marker):
+                target = line[len(marker):].strip()
+                if not target:
+                    return deny("malformed-input", "apply_patch file header has no path; failing closed")
+                targets.append((target, deleting))
+                break
+    if not targets:
+        return deny("malformed-input", "apply_patch payload names no files; failing closed")
+    for target, deleting in targets:
+        d = check_write(target, cwd, deleting=deleting)
+        if not d.allowed:
+            return d
     return ALLOW
 
 
@@ -866,7 +880,7 @@ def adapter_codex(raw):
     cwd = _first(event, "cwd", "working_directory") or str(REPO_ROOT)
     path = _first(tool_input, "file_path", "path", "filename", "file")
     command = _first(tool_input, "command", "cmd", "script")
-    patch = _first(tool_input, "patch", "input", "diff")
+    patch = command if tool == "apply_patch" else _first(tool_input, "patch", "input", "diff")
 
     if isinstance(command, list):
         command = " ".join(shlex.quote(str(c)) for c in command)

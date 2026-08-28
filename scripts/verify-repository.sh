@@ -174,11 +174,16 @@ for p in paths:
         data = tomllib.loads(p.read_text())
     except Exception as exc:
         bad.append(f"{p.name}: {exc}"); continue
-    for field in ("name", "description", "instructions"):
-        if field not in data:
-            bad.append(f"{p.name}: missing '{field}'")
-    if data.get("read_only") is not True:
-        bad.append(f"{p.name}: reviewers must declare read_only = true")
+    for field in ("name", "description", "developer_instructions"):
+        if not isinstance(data.get(field), str):
+            bad.append(f"{p.name}: '{field}' must be a string")
+    if data.get("sandbox_mode") != "read-only":
+        bad.append(f"{p.name}: sandbox_mode must equal 'read-only'")
+    for field in ("read_only", "instructions"):
+        if field in data:
+            bad.append(f"{p.name}: obsolete top-level field '{field}' is present")
+    if isinstance(data.get("tools"), list):
+        bad.append(f"{p.name}: array-valued top-level 'tools' field is present")
 if bad:
     print("\n".join(bad)); sys.exit(1)
 PY
@@ -211,11 +216,10 @@ if problems:
     print("\n".join(problems)); sys.exit(1)
 PY
 
-# Two separate gates, because the two agents give different kinds of assurance and one
-# name covering both would claim more than either check performs. The Claude side is
-# checked structurally (the granted tool list); the Codex side can only be checked as a
-# DECLARATION, since `read_only = true` sits beside a granted `shell` and it is Codex that
-# must honour it. Neither gate observes runtime behaviour -- see docs/STATE.md.
+# The Claude side is checked structurally. Codex reviewers declare their read-only sandbox
+# through their TOML schema; the parser gate above also rejects obsolete schema fields and a
+# custom array-valued tools declaration. Neither gate observes runtime behaviour -- see
+# docs/STATE.md.
 gate "Claude reviewers grant only read-only tools" python3 - "${REPO_ROOT}" <<'PY'
 import sys, pathlib, re
 root = pathlib.Path(sys.argv[1])
@@ -233,19 +237,18 @@ if problems:
     print("\n".join(problems)); sys.exit(1)
 PY
 
-gate "Codex reviewers declare read_only and grant no write tool" python3 - "${REPO_ROOT}" <<'PY'
+gate "Codex reviewers declare the read-only sandbox schema" python3 - "${REPO_ROOT}" <<'PY'
 import tomllib, sys, pathlib
 root = pathlib.Path(sys.argv[1])
-WRITE_TOOLS = {"write", "edit", "apply_patch", "patch"}
 problems = []
 for p in sorted((root / ".codex" / "agents").glob("*.toml")):
     data = tomllib.loads(p.read_text())
-    if data.get("read_only") is not True:
-        problems.append(f"{p.name}: read_only is not true")
-    granted = {str(t).lower() for t in data.get("tools", [])}
-    offending = granted & WRITE_TOOLS
-    if offending:
-        problems.append(f"{p.name}: grants write tools {sorted(offending)} despite read_only")
+    if data.get("sandbox_mode") != "read-only":
+        problems.append(f"{p.name}: sandbox_mode is not 'read-only'")
+    if any(field in data for field in ("read_only", "instructions")):
+        problems.append(f"{p.name}: declares obsolete reviewer fields")
+    if isinstance(data.get("tools"), list):
+        problems.append(f"{p.name}: declares an array-valued tools field")
 if problems:
     print("\n".join(problems)); sys.exit(1)
 PY

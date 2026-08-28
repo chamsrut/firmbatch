@@ -61,7 +61,7 @@ of a link by a copy fails verification rather than drifting silently.
 
 The R0 audit found the guard's enforcement claim false for several forms an aligned agent
 plausibly types. Each is now covered by a synthetic test asserting the *invariant*, written
-before the fix. `.agents/policy/test_guard.py` is at **241 checks**.
+before the fix. `.agents/policy/test_guard.py` is at **247 checks**.
 
 Closed: `git -C` / `git -c` and other valued global options hiding the subcommand; `gh`
 equivalents of commit, push, and merge; `env`/`nohup`/`timeout`/`nice`/`stdbuf`/`command`
