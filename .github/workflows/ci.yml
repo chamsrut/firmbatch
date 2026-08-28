@@ -1,0 +1,47 @@
+name: ci
+
+# firmbatch is imported as a PACKAGE: tests/test_recovery.py does
+# `from firmbatch.control import db`. The repository must therefore be checked out
+# into a directory named `firmbatch` and the tests run from its PARENT. A default
+# checkout into the workspace root breaks the import. This is the single most
+# fragile thing in this file -- do not "simplify" the checkout path.
+#
+# Everything else is delegated to scripts/verify-repository.sh, which is the same
+# script humans and agents run. Do not re-spell its gates here: a gate that exists
+# in only one of the three places is a gate that silently stops being true.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out into a directory named firmbatch
+        uses: actions/checkout@v4
+        with:
+          path: firmbatch
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # The three gates are stdlib-only. tests/test_recovery.py imports os, sys,
+      # tempfile, time and firmbatch.control.db (json, os, sqlite3, time, uuid);
+      # the policy engine and its tests import argparse, json, os, shlex, sys,
+      # subprocess, pathlib. Nothing in this workflow imports fastapi, uvicorn, or
+      # verda, so requirements-v0-lock.txt is deliberately NOT installed -- it would
+      # be a failure surface with no coverage benefit.
+      - name: Install ruff
+        run: pip install ruff==0.16.5   # pinned to the version verified locally
+
+      # Invoked through `bash` rather than as ./scripts/... so a lost executable bit
+      # on checkout is not the thing that breaks CI.
+      - name: Verify repository
+        working-directory: firmbatch
+        run: bash ./scripts/verify-repository.sh
