@@ -1,44 +1,80 @@
 {
-  "accepted_rows": 0,
-  "conflict_note": "The v0 results table retains only the last value for each request_id, so overwritten conflicting results cannot be reconstructed.",
-  "conflicting_retry_outputs_detectable": false,
-  "database": "/home/chams/src/firmbatch/.data/v0-demo-001.db",
+  "accepted_rows": 4000,
   "declared_requests": 4000,
-  "distinct_result_ids": 0,
+  "distinct_result_ids": 4000,
   "done_shards_with_missing_results": 0,
   "event_counts": {
     "job.created": 1,
-    "worker.dead": 1,
-    "worker.launched": 1
+    "job.done": 1,
+    "shard.done": 40,
+    "shard.leased": 43,
+    "worker.dead": 4,
+    "worker.launched": 8
   },
-  "job_id": "job_7cdd5c4037",
-  "job_status": "running",
-  "maximum_shard_attempts": 0,
-  "missing_requests": 4000,
-  "recovery_events": [
+  "job_id": "job_cc1af70f82",
+  "job_name": "demo-classify",
+  "job_status": "done",
+  "limitation": "Conflicting retry outputs cannot be reconstructed because v0 overwrites the previous result for each request_id.",
+  "maximum_shard_attempts": 2,
+  "missing_requests": 0,
+  "request_rows": 4000,
+  "result_rows": 4000,
+  "results_with_wrong_shard": 0,
+  "retried_shard_count": 3,
+  "retried_shards": [
     {
-      "detail": "job_complete (released 0 shard(s))",
-      "id": 100,
-      "kind": "worker.dead",
-      "ts": 1787915353.7570534,
-      "worker_id": "w-4c86a687"
+      "attempts": 2,
+      "id": "shd_022f861ab0",
+      "idx": 32,
+      "state": "done"
+    },
+    {
+      "attempts": 2,
+      "id": "shd_4e57ab63a3",
+      "idx": 34,
+      "state": "done"
+    },
+    {
+      "attempts": 2,
+      "id": "shd_2a6c5743ed",
+      "idx": 38,
+      "state": "done"
     }
   ],
-  "request_rows": 4000,
-  "result_rows": 0,
-  "results_with_wrong_shard": 0,
-  "retried_shard_count": 0,
-  "retried_shards": [],
-  "total_shard_claims": 0,
+  "total_shard_claims": 43,
   "unexpected_results": 0,
   "workers": [
     {
-      "id": "w-4c86a687",
-      "last_seen_ts": 1787915335.7059808,
-      "started_ts": 1787915335.70598,
+      "id": "w-6365d050",
+      "last_seen_ts": 1787915130.7870886,
+      "started_ts": 1787915060.0937674,
       "state": "dead",
       "stop_reason": "job_complete",
-      "stopped_ts": 1787915353.756797
+      "stopped_ts": 1787915148.8776553
+    },
+    {
+      "id": "w-49878e68",
+      "last_seen_ts": 1787915125.6202626,
+      "started_ts": 1787915075.140259,
+      "state": "dead",
+      "stop_reason": "scaled_down",
+      "stopped_ts": 1787915134.2786677
+    },
+    {
+      "id": "w-c272929d",
+      "last_seen_ts": 1787915115.653021,
+      "started_ts": 1787915075.1734853,
+      "state": "dead",
+      "stop_reason": "scaled_down",
+      "stopped_ts": 1787915119.2418206
+    },
+    {
+      "id": "w-21303fbe",
+      "last_seen_ts": 1787915110.0199983,
+      "started_ts": 1787915089.706861,
+      "state": "dead",
+      "stop_reason": "scaled_down",
+      "stopped_ts": 1787915119.2224104
     }
   ]
 }

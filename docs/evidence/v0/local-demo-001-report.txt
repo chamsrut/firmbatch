@@ -1,9 +1,15 @@
 
-  job     job_7cdd5c4037  (demo-classify)
-  status  running   0/4000 complete, 0 accepted (0.0% of completed)
-  shards  done 0, leased 0, pending 40
+  job     job_cc1af70f82  (demo-classify)
+  status  done   4000/4000 complete, 4000 accepted (100.0% of completed)
+  shards  done 40, leased 0, pending 0
 
   worker      type              $/h   wall h  billed h     cost   reason
-  w-4c86a687  local-cpu       0.160    0.005     0.167    0.027   job_complete
+  w-6365d050  local-cpu       0.160    0.025     0.167    0.027   job_complete
+  w-49878e68  local-cpu       0.160    0.016     0.167    0.027   scaled_down
+  w-c272929d  local-cpu       0.160    0.012     0.167    0.027   scaled_down
+  w-21303fbe  local-cpu       0.160    0.008     0.167    0.027   scaled_down
 
-  total cost                 $0.0267
+  total cost                 $0.1067
+  cost per 1k accepted       $0.026667
+  COST PER 1M ACCEPTED       $26.67   <- the only number that goes in a quote
+

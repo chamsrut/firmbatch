@@ -1,0 +1,9 @@
+
+  job     job_7cdd5c4037  (demo-classify)
+  status  running   0/4000 complete, 0 accepted (0.0% of completed)
+  shards  done 0, leased 0, pending 40
+
+  worker      type              $/h   wall h  billed h     cost   reason
+  w-4c86a687  local-cpu       0.160    0.005     0.167    0.027   job_complete
+
+  total cost                 $0.0267
