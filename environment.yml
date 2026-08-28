@@ -1,0 +1,6 @@
+name: firmbatch-v0
+channels:
+  - defaults
+dependencies:
+  - pip
+  - python=3.11
