@@ -221,7 +221,7 @@ At minimum, model the following separately:
 
 For each milestone:
 
-1. Give GPT-5.6 this document, the current repository tree, the current-state document, and the
+1. Give GPT-5.6 this document, the current repository tree, `docs/STATE.md`, and the
    chosen milestone.
 2. Ask it to inspect the repository before proposing work.
 3. Ask it to divide the milestone into the smallest ordered implementation prompts that each end in
@@ -229,7 +229,7 @@ For each milestone:
 4. Give Claude one implementation prompt at a time.
 5. After each implementation prompt, run the required checks and ask for an adversarial review
    against the milestone invariants.
-6. Update a current-state document with `CURRENT`, `PLANNED`, and `VERIFIED LIVE` distinctions.
+6. Update `docs/STATE.md` with `CURRENT`, `PLANNED`, and `VERIFIED LIVE` distinctions.
 7. Mark the milestone complete only when its completion gate is satisfied with saved evidence.
 
 Suggested prompt contract:
@@ -237,7 +237,7 @@ Suggested prompt contract:
 ```text
 Implement Firmbatch roadmap milestone <N>, subtask <name>.
 
-First inspect the repository, its instructions, current-state document, ADRs, and tests. State the
+First inspect the repository, its instructions, `docs/STATE.md`, ADRs, and tests. State the
 current behaviour and the exact gap. Propose a bounded plan before editing.
 
 Preserve every Firmbatch invariant in the roadmap. Do not implement work assigned to a later
@@ -270,6 +270,78 @@ Finish by running the repository's full validation suite and reporting:
 ---
 
 # Numbered build milestones
+
+## R0 — Repository operating foundation (prerequisite)
+
+**Status:** [ ] Not started · [x] In progress · [ ] Complete · [ ] Blocked
+
+R0 is not a product milestone and adds no product behaviour. It is the prerequisite that
+makes every numbered milestone below executable by an agent without the result having to be
+taken on trust. Milestone 1 cannot honestly report a completion gate until R0 is in place,
+because "complete only when its gate passes with saved evidence" presupposes a repository
+that defines what evidence is and can tell you mechanically whether the gates passed.
+
+### Objective
+
+Make the roadmap's §7 working contract enforceable rather than aspirational: one canonical
+set of instructions both agents read, one verification command all three callers run, one
+state document, one policy engine, and an evidence standard with a stated provenance format.
+
+### Build
+
+- **Instructions.** `AGENTS.md` canonical for every agent; `CLAUDE.md` imports it and adds
+  only Claude-specific surfaces. A rule has one home.
+- **Verification.** `scripts/verify-repository.sh` as the single entry point, invoked
+  identically by the human, the `verify` skill, and CI. Gates: repository layout, agent
+  configuration parses and is read-only where it claims to be, no credential file or
+  database is tracked, property tests, `ruff check`, agent policy tests.
+- **State.** `docs/STATE.md` as the one state document, distinguishing CURRENT, PLANNED,
+  VERIFIED LIVE, HISTORICAL, and NOT VERIFIED. `docs/tasks/current.md` for active work.
+  `docs/adr/` for decisions.
+- **Evidence.** A stated provenance header, an immutability rule, and the `record-evidence`
+  skill that applies both.
+- **Policy.** One deterministic pre-tool guard shared by both agents, covering the
+  irreversible classes: evidence, destructive git, destructive filesystem, credentials,
+  cloud mutation, billable launch.
+- **Review.** Three read-only reviewers defined for both agents.
+- **CI.** A workflow that reproduces the parent-directory package import and calls the same
+  verification script.
+
+### Non-negotiable properties
+
+1. **The guard is a guardrail, not a boundary.** It exists to stop an aligned agent reaching
+   an irreversible action by accident. Nothing in this repository may describe it as a
+   sandbox or a security control, and it must not lock its own configuration — an agent that
+   cannot edit the guard cannot fix it. Human approval for those files is an instruction.
+2. **One home per rule.** No duplicated skill body, no gate spelled out in both CI and a
+   skill, no second state document.
+3. **A claim is VERIFIED only with a captured artifact.** Passing right now is not evidence.
+   Evidence captured before the code it describes was committed is not evidence of it.
+4. **R0 changes no product behaviour.** v0 defects found while doing R0 are recorded in the
+   defect register in `docs/STATE.md` and left unfixed; they are Milestone 1 inputs.
+
+### Required artifacts
+
+- `docs/adr/0001-agentic-repository-operating-model.md` recording the decisions and their
+  limits.
+- A v0 defect register in `docs/STATE.md`, each entry located in the code.
+- `docs/evidence/r0/` containing the verification gates and the policy-engine run, captured
+  **at or after** the commit that introduces the R0 files.
+
+### Completion gate
+
+R0 is complete only when:
+
+- `scripts/verify-repository.sh` passes every gate, and the human, the `verify` skill, and CI
+  all invoke that same script;
+- no document in the repository overstates the guard, or labels as VERIFIED anything without
+  a captured artifact behind it;
+- `docs/STATE.md` is the only state document, and the roadmap references it by name;
+- the three read-only reviewers are read-only in configuration, not only in prose;
+- the R0 evidence artifacts exist and cite a commit that actually contains the R0 files; and
+- CI has been executed by a runner at least once. Until then CI is NOT VERIFIED.
+
+---
 
 ## Milestone 1 — Characterize v0 and define the v0 → v1 migration boundary
 
@@ -423,7 +495,7 @@ as customer-pilot proof.
 
 ### Required artifacts
 
-- `docs/current-state.md` separating CURRENT, PLANNED, and VERIFIED LIVE behavior.
+- `docs/STATE.md` separating CURRENT, PLANNED, and VERIFIED LIVE behavior.
 - A v0 architecture and data-flow snapshot.
 - The completed retain/harden/replace/delete migration matrix.
 - Reproducible local chaos commands and an independent reconciliation report.
@@ -463,7 +535,7 @@ before implementation choices silently define them.
 - Define pilot comparison baselines: hyperscaler batch API, direct GPU rental, and at least one
   specialist inference provider where relevant.
 - Define what evidence is machine-observed versus estimated versus supplied by a provider.
-- Create a versioned current-state document and ADR format.
+- Version `docs/STATE.md` and establish the ADR format.
 - Obtain representative customer batch samples or construct a versioned surrogate corpus until
   real samples are available.
 
@@ -1164,7 +1236,7 @@ A milestone is complete only when:
 - documentation distinguishes implemented behavior from live-proven behavior;
 - migrations and rollback/repair behavior are documented;
 - no TODO in the critical path is being counted as completion; and
-- the milestone’s saved evidence is linked from the current-state document.
+- the milestone’s saved evidence is linked from `docs/STATE.md`.
 
 ## 9. Decision rules while building
 

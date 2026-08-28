@@ -29,30 +29,67 @@ python3 -m firmbatch.fb serve &                 # control plane on :8080
 python3 -m firmbatch.fb demo --n 4000 --deadline +3m --chaos-n 3
 ```
 
-`demo` submits 4,000 requests, launches workers, hard-kills three of them
-mid-flight with `SIGKILL` — no notice, no cleanup, exactly like a preemption —
-and then prints whether the deadline was met and what the run cost per million
-accepted outputs. A real run looks like this:
+`demo` submits 4,000 requests, launches workers, hard-kills some of them
+mid-flight with `SIGKILL`, and prints the run's completion, deadline, and cost
+per million accepted outputs.
 
-```
-[20:11:03] BEHIND   600/4000  | shards p16/l3/d1  | 5.00/s  | workers 3->6
+### What the captured run actually shows
 
-  >>> CHAOS: killing 3 workers mid-job <<<
-  killing w-16a59dd7 -- no notice, no cleanup, exactly like a preemption
-  killing w-61c79e5d -- no notice, no cleanup, exactly like a preemption
-  killing w-43cd2331 -- no notice, no cleanup, exactly like a preemption
+One local run is preserved as evidence. On an echo engine, with subprocess
+workers on one machine, at fake prices:
 
-[20:11:08] BEHIND   1375/4000 | shards p11/l5/d4 | 11.46/s | workers 5->6
-[20:11:33] ON TRACK 3850/4000 | shards p0/l1/d19 | 32.08/s | workers 1->1
+| Observed | Value |
+| --- | --- |
+| Requests completed | 4,000 / 4,000 accepted |
+| Requests with no result | 0 |
+| Shards marked done while still missing a result | 0 |
+| Results attributed to the wrong shard | 0 |
+| Shards re-leased after their worker was released | 3, each on attempt 2 of 2 |
+| Cost per million accepted | **$26.67** |
 
-  job job_82a590edb4: 4000/4000 complete, 4000 accepted, 6 workers used,
-  met the deadline (-135s)
+A duplicate-result count is deliberately not listed: `results` is keyed
+`PRIMARY KEY (job_id, request_id)` and upserted, so distinct ids can never exceed rows.
+It would read zero on a broken implementation too. Double processing is harmless and
+invisible **by design** — that is the idempotency invariant working, not a measurement.
 
-  COST PER 1M ACCEPTED       $40.00   <- the only number that goes in a quote
-```
+Artifacts: [`local-demo-001-report.txt`](docs/evidence/v0/local-demo-001-report.txt),
+[`local-demo-001-reconciliation.json`](docs/evidence/v0/local-demo-001-reconciliation.json),
+[`local-demo-001-environment.txt`](docs/evidence/v0/local-demo-001-environment.txt).
 
-4,000 requests in, 4,000 results out, zero missing, zero duplicates, four shards
-re-run because their machines vanished.
+So the re-lease path is observed, and for this run the output rows reconcile at the row
+level.
+
+Note what that does *not* say. The artifact records that three shards were claimed twice;
+it does not record whether the second claim carried any requests, because a re-claim that
+finds nothing left also produces `attempts: 2`. The distinguishing detail is logged but
+not preserved in the artifact. And row-level reconciliation is narrower than accounting
+correctness — the artifact says so itself: *"Conflicting retry outputs cannot be
+reconstructed because v0 overwrites the previous result for each request_id."* That
+limitation applies to exactly the three retried shards above. Request-level accounting
+correctness is NOT VERIFIED.
+
+These artifacts are **HISTORICAL**: two of the three carry no provenance header, so their
+capture commit is not recoverable from the files themselves.
+
+### What that run does not show
+
+**Recovery from a genuine unannounced preemption is NOT VERIFIED.** Every worker
+in the captured run stopped as `job_complete` or `scaled_down` — the controller's
+own release path. No `no_heartbeat` stop reason and no `lease.expired` event
+appear anywhere in it, and those are the only records an unannounced kill leaves.
+`fb chaos` writes no kill record to the database, so the kill is visible on stdout
+alone, and that output was not captured. The three re-leases above are fully
+explained by the orderly scale-downs.
+
+**The deadline verdict is NOT VERIFIED.** No captured artifact records whether the
+deadline was met.
+
+The `$26.67` is a real number from a real run, but it is an echo engine on local
+subprocesses at a hardcoded fake price. It is not a quotable figure for GPU
+supply, and no v0 result is pilot-ready customer proof.
+
+[`docs/STATE.md`](docs/STATE.md) is the canonical record of what is CURRENT,
+VERIFIED LIVE, HISTORICAL, and NOT VERIFIED, and carries the v0 defect register.
 
 Run the property tests directly:
 

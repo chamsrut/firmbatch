@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "shell|local_shell|apply_patch|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/.agents/policy/guard.py\" --adapter codex",
+            "synchronous": true,
+            "blocking": true,
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

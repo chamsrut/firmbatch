@@ -1,0 +1,37 @@
+# Ruff configuration only. This file is deliberately NOT a packaging manifest:
+# firmbatch is run as `python3 -m firmbatch.fb` from the repository's PARENT
+# directory, not pip-installed, and adding a [project] table here would invite
+# an install that breaks that import path.
+#
+# Calibrated to pass on the v0 prototype as it stands. v0 is characterized and
+# largely replaced by the v1 roadmap, so lint exists to catch real defects in new
+# and modified code -- not to trigger a mass rewrite of code on its way out.
+
+[tool.ruff]
+target-version = "py311"
+line-length = 140          # longest existing line is 136, in providers/local.py
+exclude = [".data", "docs/evidence", "__pycache__"]
+
+[tool.ruff.lint]
+# E/W: pycodestyle.  F: pyflakes -- undefined names, unused imports, real defects.
+select = ["E", "F", "W"]
+
+# FROZEN v0 EXCEPTIONS -- not conventions for new code.
+#
+# These three files are the v0 prototype, whose terse style (semicolon-joined argparse,
+# compact imports) is deliberate and which the v1 roadmap plans to replace. The ignores
+# below exist so lint can run over the whole tree without rewriting code on its way out.
+# Do NOT extend this list to new modules, and do NOT copy this style into new code:
+# anything not named here gets the full rule set.
+#
+# Each entry is a frozen record of findings that existed at commit d0aeee2. When a file
+# here is genuinely rewritten under the roadmap, delete its entry rather than growing it.
+[tool.ruff.lint.per-file-ignores]
+"fb.py" = ["E401", "E702", "E741", "F841"]
+"demo/make_requests.py" = ["E401"]
+"tests/test_recovery.py" = ["E401"]
+
+[tool.ruff.format]
+# `ruff format` is not part of any gate. v0's terse style (compact imports,
+# short files) is deliberate and must not be reflowed.
+exclude = ["*"]
