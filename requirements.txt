@@ -1,0 +1,8 @@
+fastapi>=0.110
+uvicorn>=0.27
+pydantic>=2.6
+requests>=2.31
+# provider adapter (only needed for `--provider verda`)
+verda>=1.24
+# worker engine on the GPU box (installed by the bootstrap script, not here)
+# vllm
