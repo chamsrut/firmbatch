@@ -1,0 +1,44 @@
+{
+  "accepted_rows": 0,
+  "conflict_note": "The v0 results table retains only the last value for each request_id, so overwritten conflicting results cannot be reconstructed.",
+  "conflicting_retry_outputs_detectable": false,
+  "database": "/home/chams/src/firmbatch/.data/v0-demo-001.db",
+  "declared_requests": 4000,
+  "distinct_result_ids": 0,
+  "done_shards_with_missing_results": 0,
+  "event_counts": {
+    "job.created": 1,
+    "worker.dead": 1,
+    "worker.launched": 1
+  },
+  "job_id": "job_7cdd5c4037",
+  "job_status": "running",
+  "maximum_shard_attempts": 0,
+  "missing_requests": 4000,
+  "recovery_events": [
+    {
+      "detail": "job_complete (released 0 shard(s))",
+      "id": 100,
+      "kind": "worker.dead",
+      "ts": 1787915353.7570534,
+      "worker_id": "w-4c86a687"
+    }
+  ],
+  "request_rows": 4000,
+  "result_rows": 0,
+  "results_with_wrong_shard": 0,
+  "retried_shard_count": 0,
+  "retried_shards": [],
+  "total_shard_claims": 0,
+  "unexpected_results": 0,
+  "workers": [
+    {
+      "id": "w-4c86a687",
+      "last_seen_ts": 1787915335.7059808,
+      "started_ts": 1787915335.70598,
+      "state": "dead",
+      "stop_reason": "job_complete",
+      "stopped_ts": 1787915353.756797
+    }
+  ]
+}

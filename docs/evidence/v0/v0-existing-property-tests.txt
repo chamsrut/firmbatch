@@ -1,0 +1,16 @@
+  PASS  claim returns a shard
+  PASS  expired lease is reaped
+  PASS  shard is claimable again
+  PASS  worker holds a lease
+  PASS  kill_worker releases the lease at once
+  PASS  worker no longer holds a lease
+  PASS  another worker gets that exact shard  shd_7001a9bda4
+  PASS  first claim gets all 100
+  PASS  re-claim re-issues only the unfinished 40  got 40
+  PASS  no already-answered request is re-issued
+  PASS  duplicate submissions do not double-count  completed=60
+  PASS  no work left to claim once every request has a result
+  PASS  job reports 100/100 complete
+  PASS  a 3-second worker is billed as 10 minutes  billed_h=0.1667
+
+  all checks passed

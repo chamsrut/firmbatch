@@ -1,0 +1,5 @@
+captured_at=2026-08-28T13:10:41+02:00
+database=/home/chams/src/firmbatch/.data/v0-demo-001.db
+python=Python 3.11.16
+commit=1952161cdcddc629a0b13347c683c04ac18db53d
+Linux LAPTOP-MU6OI903 6.18.33.2-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Thu Jun 18 21:54:43 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
