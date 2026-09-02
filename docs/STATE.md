@@ -14,8 +14,21 @@ Five labels, kept strictly apart:
 - **NOT VERIFIED** — asserted, expected, or reasoned about, with no captured run behind it.
   Documentation, comments, and passing-in-the-moment are not evidence.
 
-Last updated: 2026-08-28, at commit `d0aeee2` plus the uncommitted R0 working tree, branch
-`repo-init/agentic-foundation`.
+Last updated: 2026-09-02, at `main` commit
+`2f03da55fa3a4fd991f9eaad7cacf33d842a4459`, plus the Milestone 0 documentation diff.
+
+---
+
+## CURRENT — Milestone 0 documentation baseline
+
+Milestone 0 aligns repository guidance with revision C of the approved v1 target architecture:
+
+- `docs/architecture/v1-target-architecture.md` is the repo-native target specification.
+- `docs/firmbatch-v1-roadmap.md` is the active implementation sequence.
+- `docs/architecture/v1-capability-baseline.md` records the initial target gap map.
+- `docs/firmbatch-pilot-roadmap.md` is retained as superseded historical context.
+
+This milestone changes documentation and authority only. Product behavior remains the v0 prototype described below.
 
 ---
 

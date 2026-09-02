@@ -2,25 +2,26 @@
 
 Active work and open questions. Updated at the end of each task, alongside `docs/STATE.md`.
 
-Last updated: 2026-08-28, commit `d0aeee2` plus the uncommitted R0 working tree, branch
-`repo-init/agentic-foundation`.
+Last updated: 2026-09-02, `main` commit
+`2f03da55fa3a4fd991f9eaad7cacf33d842a4459`, plus the Milestone 0 documentation diff.
 
 ---
 
-## Immediate — the R0 commit
+## Immediate — complete Milestone 0
 
-The R0 files are **untracked**. Evidence must not be captured until they are committed:
-an artifact captured now would carry `commit=d0aeee2`, which does not contain them, and a
-provenance header that describes the wrong tree is worse than no header.
+The R0 repository foundation is merged on `main`. The immediate task is to establish the approved
+v1 target as the unambiguous repository plan without changing product behavior.
 
 Order:
 
-1. Human reviews and commits the R0 working tree.
-2. `/record-evidence` → `docs/evidence/r0/gates.txt` (the full
-   `scripts/verify-repository.sh` output) and `docs/evidence/r0/policy-tests.txt`.
-3. Move the two rows in `docs/STATE.md` "Asserted — artifact pending" into VERIFIED LIVE,
-   citing those artifacts.
-4. Push, so CI runs for the first time (see item 3 below).
+1. Review the Markdown target against the source PDF.
+2. Add the target, consolidated roadmap, capability baseline, and ADR.
+3. Mark the old pilot roadmap superseded and align README, STATE, and current tasks.
+4. Run `./scripts/verify-repository.sh` and confirm the diff is documentation-only.
+5. Human reviews and commits the Milestone 0 diff.
+
+The R0 evidence gap remains separate: capture R0 evidence only against a committed tree whose
+provenance matches the code under test. Do not describe the pre-merge working tree as current.
 
 ---
 

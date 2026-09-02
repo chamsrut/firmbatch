@@ -1,5 +1,11 @@
 # firmbatch
 
+> [!IMPORTANT]
+> **Current code:** v0 prototype. **Target:** Firmbatch v1 revision C.
+>
+> The canonical target is `docs/architecture/v1-target-architecture.md`.
+> The implementation sequence is `docs/firmbatch-v1-roadmap.md`.
+
 A persistent batch job that survives its machines.
 
 The customer buys one durable obligation — *this quantity of accepted output, by
