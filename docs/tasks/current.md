@@ -3,25 +3,24 @@
 Active work and open questions. Updated at the end of each task, alongside `docs/STATE.md`.
 
 Last updated: 2026-09-02, `main` commit
-`2f03da55fa3a4fd991f9eaad7cacf33d842a4459`, plus the Milestone 0 documentation diff.
+`547877382fd5eb080b20192eb68b750f5f8b2cca`, plus the Milestone 1 audit documentation diff.
 
 ---
 
-## Immediate — complete Milestone 0
+## Immediate — review and complete Milestone 1
 
-The R0 repository foundation is merged on `main`. The immediate task is to establish the approved
-v1 target as the unambiguous repository plan without changing product behavior.
+Milestone 0 is merged. Milestone 1 now supplies the code-cited audit and cutover decision without
+changing product behavior.
 
 Order:
 
-1. Review the Markdown target against the source PDF.
-2. Add the target, consolidated roadmap, capability baseline, and ADR.
-3. Mark the old pilot roadmap superseded and align README, STATE, and current tasks.
-4. Run `./scripts/verify-repository.sh` and confirm the diff is documentation-only.
-5. Human reviews and commits the Milestone 0 diff.
+1. Review `docs/architecture/v0-to-v1-migration-audit.md` against the audited commit.
+2. Review ADR 0003's no-data-migration, no-public-compatibility, and v0-deletion conditions.
+3. Run `./scripts/verify-repository.sh` and confirm the diff is documentation-only.
+4. Human reviews and commits the Milestone 1 audit diff.
 
-The R0 evidence gap remains separate: capture R0 evidence only against a committed tree whose
-provenance matches the code under test. Do not describe the pre-merge working tree as current.
+After merge, begin Milestone 2 with the shared product foundation. Do not implement execution,
+customer billing, or the portal opportunistically inside that milestone.
 
 ---
 
@@ -161,7 +160,7 @@ fail **open** instead — which makes open item 8 below load-bearing for more th
 discovery. And `/usr/bin/python3` missing gives exit 127, the canonical
 hook-could-not-run signal, which is the state the Claude adapter documents as fail-open.
 
-### 7 · CI — rewritten, still unrun
+### 7 · CI — observed externally, evidence artifact pending
 
 `.github/workflows/ci.yml` now calls the verification script instead of duplicating its
 commands, adds `permissions: contents: read`, and no longer installs
@@ -173,7 +172,9 @@ The fragile part is unchanged and deliberate: `tests/test_recovery.py` does
 `from firmbatch.control import db`, so the workflow checks out with `path: firmbatch` and the
 script runs the property tests from the **parent** directory. Do not "simplify" it.
 
-**Not yet observed: an actual CI run.** Nothing has been pushed. CI is NOT VERIFIED.
+Push and pull-request checks passed for PR #2 on 2 September 2026. Because the repository's
+VERIFIED LIVE taxonomy requires an immutable artifact under `docs/evidence/`, this remains an
+external observation until the run identity and output are captured with the evidence procedure.
 
 ---
 
@@ -223,12 +224,14 @@ longer produce that state on its own, but a missing `python3` or an unset
 
 ---
 
-## Open — roadmap Milestone 1
+## Milestone 1 result and diagnostic backlog
 
-Milestone 1 is **not** complete. Missing required artifacts are listed at the end of
-`docs/STATE.md`. The most load-bearing:
+The canonical audit gate is ready for review in
+`docs/architecture/v0-to-v1-migration-audit.md`. The following experiments remain useful
+diagnostics, but are not permission to launch billable capacity and are not prerequisites for
+the canonical Milestone 1 completion gate.
 
-### 11 · Reproduce the real preemption path
+### 11 · Reproduce the real preemption path locally
 
 The v0 baseline claimed three SIGKILLed workers; no artifact shows one. The corrected
 `--chaos` procedure in the `verify` skill now isolates the port, waits for readiness, traps
@@ -236,20 +239,21 @@ cleanup, and says explicitly that **stdout must be captured**, because the kill 
 nowhere else. Run it with `--chaos-after` past the scale-down window so the preemption path,
 not scale-down, reclaims the shards, and assert `no_heartbeat` appears.
 
-### 12 · A failing test for D1 (stale-worker settlement)
+### 12 · Preserve the D1 failing case for the target regression suite
 
 Claim a shard with `lease_secs=1`, `reap()`, re-claim as a second worker, then POST
 `/w/results` with `done: true` as the first worker. Assert the shard is not `done` and the
-second worker's remaining requests are still issuable. This test does not exist and would
-fail today — see the defect register in `docs/STATE.md`.
+second worker's remaining requests are still issuable. It fails conceptually under v0 and must
+become a passing target-attempt test in Milestone 6.
 
-### 13 · Retain / harden / replace / delete matrix
+### 13 · Make reconciliation reports reproducible
 
-Every v0 component needs an explicit disposition before the milestone gate can pass. The
-component inventory and defect register in `docs/STATE.md` are the starting point.
+No script currently generates `local-demo-001-reconciliation.json`. Any new diagnostic run must
+commit or capture the exact read-only reconciliation query set without rewriting historical evidence.
 
-### 14 · Make the reconciliation report reproducible
+### 14 · Align protected agent instructions after explicit approval
 
-`local-demo-001-reconciliation.json` satisfies a Milestone 1 required artifact, but no script
-in the repository generates it and the database it derives from is gitignored. Commit the
-script or the exact query set.
+`AGENTS.md` and `.agents/skills/milestone/SKILL.md` still directly name the superseded pilot
+roadmap. ADR 0002 and the warning banner establish the correct authority, but the protected files
+should point directly to the canonical target and roadmap. Editing them requires explicit human
+approval under `AGENTS.md`; this audit does not change them.

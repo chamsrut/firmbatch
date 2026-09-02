@@ -1,5 +1,8 @@
 # Firmbatch v1 capability baseline
 
+> [!NOTE]
+> Superseded by the code-cited Milestone 1 audit in `v0-to-v1-migration-audit.md`.
+
 **Status:** Milestone 0 baseline, not the full Milestone 1 audit
 **Compared:** current `main` at `2f03da55fa3a4fd991f9eaad7cacf33d842a4459` against `docs/architecture/v1-target-architecture.md`
 **Assessed:** 2 September 2026
