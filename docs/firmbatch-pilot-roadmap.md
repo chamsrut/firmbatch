@@ -1,5 +1,11 @@
 # Firmbatch v1: Pilot-Ready Product Specification and Build Roadmap
 
+> [!WARNING]
+> **Superseded on 2 September 2026. Do not execute this file as the current plan.**
+>
+> The active target is `docs/architecture/v1-target-architecture.md` and the active
+> implementation sequence is `docs/firmbatch-v1-roadmap.md`. The content below is historical context.
+
 ## 1. Purpose
 
 This document is the implementation roadmap from the existing Firmbatch v0 prototype to a
