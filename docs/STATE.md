@@ -15,7 +15,7 @@ Five labels, kept strictly apart:
   Documentation, comments, and passing-in-the-moment are not evidence.
 
 Last updated: 2026-09-02, at `main` commit
-`2f03da55fa3a4fd991f9eaad7cacf33d842a4459`, plus the Milestone 0 documentation diff.
+`547877382fd5eb080b20192eb68b750f5f8b2cca`, plus the Milestone 1 audit documentation diff.
 
 ---
 
@@ -29,6 +29,20 @@ Milestone 0 aligns repository guidance with revision C of the approved v1 target
 - `docs/firmbatch-pilot-roadmap.md` is retained as superseded historical context.
 
 This milestone changes documentation and authority only. Product behavior remains the v0 prototype described below.
+
+---
+
+## CURRENT — Milestone 1 migration audit
+
+Milestone 1 reconciles every v0 product module against the target:
+
+- `docs/architecture/v0-to-v1-migration-audit.md` is the code-cited migration matrix.
+- `docs/adr/0003-v0-v1-cutover-strategy.md` records the parallel-build and deletion boundary.
+
+The audit retains measured concepts and diagnostic assets, replaces all production authorities,
+and requires no v0 database or public API compatibility layer. It changes no product behavior.
+
+The Milestone 1 completion gate is ready for human review and repository verification.
 
 ---
 
@@ -71,8 +85,9 @@ provider reconciliation beyond direct calls.
 the settle path. Roadmap §5 invariant 4 ("a stale worker cannot heartbeat, publish, validate,
 or settle a newer attempt") is absent. See D1 below.
 
-CI now exists (`.github/workflows/ci.yml`, added by R0), but has never been executed by a
-runner.
+CI exists (`.github/workflows/ci.yml`, added by R0). Push and pull-request runs passed for
+PR #2 on 2 September 2026, but no immutable repository evidence artifact captures those runs,
+so they are observed external state rather than VERIFIED LIVE under this document's taxonomy.
 
 ---
 
@@ -152,10 +167,9 @@ incident itself was never explained here. It is now.
 
 ## Asserted — artifact pending
 
-True at the time of writing and re-checkable in one command, but with **no captured
-artifact**, so **NOT VERIFIED** under this repository's own standard. Evidence for these is
-deliberately deferred until the R0 files are committed: capturing now would cite `d0aeee2`,
-a commit that does not contain them.
+Re-checkable claims with **no captured artifact**, and therefore **NOT VERIFIED** under this
+repository's evidence standard. R0 and Milestone 0 are now committed; the remaining work is to
+capture new artifacts with provenance matching the committed tree.
 
 | Claim | How to settle it |
 | --- | --- |
@@ -190,8 +204,9 @@ a commit that does not contain them.
   `local-demo-001-reconciliation.json`, and the database it derives from is gitignored.
 - **Codex loading `.codex/hooks.json` and `.codex/agents/*.toml`** at runtime. Both adapter
   protocols pass synthetic tests; live discovery is unobserved.
-- **Any CI run.** `.github/workflows/ci.yml` has never been executed by a runner. It remains
-  NOT VERIFIED until GitHub actually runs it.
+- **A repository-captured CI result.** GitHub reported successful push and pull-request runs for
+  PR #2, but no artifact under `docs/evidence/` captures their run IDs and output. Do not promote
+  the result to VERIFIED LIVE until provenance is saved under the evidence procedure.
 - **That the reviewer tool declarations are enforced by either harness.** Removing `Bash`
   from the three `.claude/agents/*.md` and keeping `read_only = true` on the Codex side makes
   the declaration correct, and `scripts/verify-repository.sh` gates both. It does **not**
@@ -217,19 +232,18 @@ The Claude `PreToolUse` hook is confirmed loaded and blocking, observed denying 
 
 ## PLANNED
 
-The v1 roadmap, `docs/firmbatch-pilot-roadmap.md`. **R0 (repository operating foundation)** is
-the prerequisite section before Milestone 1; this remediation is its implementation. It is **in
-progress, not complete**: its gate additionally requires the deferred evidence artifacts *and*
-at least one CI run by a real runner, which has not happened.
+The canonical roadmap is `docs/firmbatch-v1-roadmap.md`; the pilot roadmap is superseded context.
 
-Milestone 1 (characterize v0 and define the v0 → v1 migration boundary) is in progress and
-**not** complete. Of its required artifacts, the reproducible local chaos commands and a
-reconciliation report exist, and the defect register above is a first pass at one required
-input. Still missing —
+Milestone 0 is complete. Milestone 1's audit deliverables are present and await human review,
+repository verification, and merge before the completion gate is marked complete.
 
-- a v0 architecture and data-flow snapshot;
-- the retain/harden/replace/delete migration matrix;
-- the provider qualification report with dated raw observations;
-- the minimal real-GPU run report;
-- linking every register entry above to the numbered v1 milestone that closes it;
-- an ADR defining the cutover strategy and when v0 code may be deleted.
+Next planned work follows the canonical sequence:
+
+- Milestone 2: PostgreSQL, tenancy, authorization, idempotency, audit, outbox, and state machines.
+- Milestone 3: customer accounts, workspaces, permissions, credentials, and portal shell.
+- Milestone 4: quotes, commercial records, payment projection, and billing interface.
+- Milestone 5: native JobSpec and tenant-scoped S3 payload path.
+- Milestone 6: fenced attempts, validator/canonicalizer, providers, routing, spend, and ledgers.
+
+Real-provider qualification and a real-GPU slice remain unverified, separately authorized work.
+They are not prerequisites for the canonical Milestone 1 audit gate and must not be run implicitly.
