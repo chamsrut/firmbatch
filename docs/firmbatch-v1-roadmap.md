@@ -152,9 +152,60 @@ Cross-tenant reads and writes fail closed in automated tests, and duplicate muta
 - API credential management.
 - Empty job and billing sections ready for later milestones.
 
+### AUTH-BOUND-TENANT-CONTEXT — blocks customer-facing availability
+
+**This task blocks customer-facing production launch.** Nothing in Milestones 4 to 8 may be
+served to a real customer until it is complete.
+
+Milestone 2.1 delivered *structural* tenant isolation: forced row-level security, fail-closed
+transactions, no leakage through pooled connections or ORM identity maps, and separated
+application and migration credentials. What it did not deliver, and deliberately did not
+attempt, is protection against arbitrary SQL executed with a compromised runtime credential.
+The runtime role can call `set_config('app.tenant_id', <any uuid>, true)`, and row-level
+security then evaluates faithfully against whatever tenant it was told. The application
+service is a *trusted setter* of tenant context — an assumption, not an enforced property.
+
+That is a sound place for a shared foundation to stand and an unsound place from which to
+serve customers. See ADR 0004 §8g.
+
+**What must become true**
+
+- The runtime service cannot select an arbitrary tenant or workspace UUID.
+- Tenant and workspace context is derived from a verified customer credential — a session or
+  a scoped API credential — rather than from a caller-supplied identifier.
+- The database trusts an opaque or signed capability, or a protected mapping it can verify,
+  rather than a raw `app.tenant_id` that any holder of the connection may set.
+- The runtime process does not hold the authority to mint a capability for an arbitrary
+  workspace.
+- A leaked runtime database credential, or SQL injection reaching arbitrary statements,
+  cannot select another tenant.
+
+**Completion gate**
+
+Adversarial tests, against a real PostgreSQL 16 server, each of which must fail closed:
+
+1. **Arbitrary context.** A runtime connection executes
+   `set_config('app.tenant_id', <victim uuid>, true)` and then reads tenant-scoped tables.
+   It must reach no row belonging to the victim.
+2. **Leaked runtime credential.** An attacker holding the full application database URL,
+   connecting directly with psql or psycopg, cannot read or write another tenant's rows.
+3. **SQL injection.** A statement injected into an otherwise ordinary query cannot select or
+   modify another workspace's data, including by setting the context first.
+4. **Replay and forgery.** A capability captured from one session cannot be replayed by
+   another principal, and one cannot be forged without the signing or minting authority —
+   which the runtime does not hold.
+5. **Authenticated non-member.** A genuinely authenticated user with no membership in a
+   workspace cannot obtain context for it, by any route the API exposes.
+
+Until every one of those passes, this task is open and customer-facing deployment is blocked.
+
 ### Completion gate
 
 A new customer can register, verify identity, create a workspace, invite a member, and create a scoped API credential without gaining access to supplier or internal operations.
+
+**Customer-facing availability additionally requires `AUTH-BOUND-TENANT-CONTEXT` above.**
+Registering and authenticating a customer is not the same property as being unable to serve
+them somebody else's data, and this milestone is not complete until both hold.
 
 ## Milestone 4 — commercial and billing foundations
 

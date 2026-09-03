@@ -1,0 +1,15 @@
+# Firmbatch v1 control-plane runtime dependencies.
+#
+# Separate from requirements.txt, which pins the frozen v0 prototype (fastapi, uvicorn,
+# verda). The two are never installed together by any gate: v0 is on its way out under
+# ADR 0003 and nothing in control_plane/ imports it.
+#
+# Exact pins, direct dependencies only. Transitive versions come from the resolver; if a
+# transitive break is ever observed, add the pin here with a comment saying why rather
+# than freezing the whole graph and losing the record of what we actually chose.
+#
+#   python3 -m pip install -r requirements-v1.txt
+
+SQLAlchemy==2.0.44
+alembic==1.16.5
+psycopg[binary]==3.2.10

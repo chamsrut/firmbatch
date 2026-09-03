@@ -1,14 +1,17 @@
 ---
 name: verify
-description: Run the Firmbatch verification pass — one script covering layout, agent configuration, repository hygiene, property tests, ruff, and the agent policy tests. Use before claiming any change is complete, and whenever asked to verify, check, or validate the repository. The destructive chaos experiment is opt-in via --chaos and is never part of the default pass.
+description: Run the Firmbatch verification pass — one script covering layout, agent configuration, repository hygiene, v0 property tests, ruff, the agent policy tests, and the v1 PostgreSQL foundation suite. It needs a real PostgreSQL 16 server and creates and drops a disposable database and roles. Use before claiming any change is complete, and whenever asked to verify, check, or validate the repository. The destructive chaos experiment is opt-in via --chaos and is never part of the default pass.
 ---
 
 # Firmbatch verification
 
 Two distinct things live here. Do not merge them.
 
-- **The default pass** is fast, deterministic, and side-effect free. It touches no
-  database and writes no evidence artifact. Run it before reporting any change complete.
+- **The default pass** is fast, deterministic, and writes no evidence artifact. Run it
+  before reporting any change complete. Since Milestone 2.1 it is **not side-effect
+  free**: its last gate runs the v1 foundation suite against a real PostgreSQL 16 server,
+  where it creates and then drops a disposable database and three throwaway login roles.
+  See the prerequisites below.
 - **`--chaos`** is an integration *experiment*, not verification. It hard-kills
   workers mid-job and takes minutes. Run it only when explicitly asked.
 
@@ -28,16 +31,103 @@ exists in someone's memory of the right command line is a gate that stops being 
 If a check is missing, add it to the script.
 
 It prints PASS or FAIL per gate, runs every gate even after one fails, and exits
-non-zero if any failed. Currently twelve gates, in four groups:
+non-zero if any failed. Currently **fourteen** gates, in four groups:
 
 | Group | Gates |
 | --- | --- |
-| layout | directory named `firmbatch`; required R0 files present; the three `.claude/skills` symlinks resolve into `.agents/skills` |
-| agent configuration | JSON parses; TOML parses and declares `read_only`; the Claude hook covers the right tools and invokes the shared guard; Claude reviewers grant only read-only tools; Codex reviewers declare `read_only` and grant no write tool |
+| layout | directory named `firmbatch`; all required repository files present (R0 tooling plus the v1 control-plane foundation); the three `.claude/skills` symlinks resolve into `.agents/skills` |
+| agent configuration | JSON parses; TOML parses and declares the read-only sandbox; the Claude hook covers the right tools and invokes the shared guard; Claude reviewers grant only read-only tools; Codex reviewers declare the read-only sandbox schema |
 | repository hygiene | no credential file, private key, or SQLite database is tracked by git |
-| functional | property tests (from the parent directory), `ruff check`, agent policy tests |
+| functional | v0 property tests (from the parent directory), `ruff check`, agent policy tests, the runtime import closure check, **the v1 PostgreSQL foundation suite** |
 
 Report each gate as PASS or FAIL with the failing names. All must pass.
+
+### The runtime import closure gate
+
+`scripts/check-runtime-imports.py --static` checks that every third-party import made by
+production code under `control_plane/` (the test package excluded) is provided by a
+distribution pinned in `requirements-v1-lock.txt`. The development lock is a superset, so
+without this a production module could import `pytest`, install cleanly, pass the whole
+suite, and fail on first use in production.
+
+CI runs the same script with `--dynamic` inside a clean virtual environment built from the
+runtime lock alone: it imports every production module, runs a real entry point
+(`migrate heads`), and asserts nothing was served out of another environment's
+site-packages. That half catches deferred and conditional imports, which no parser sees.
+
+### Prerequisites for the PostgreSQL gate
+
+The foundation suite tests PostgreSQL semantics -- forced row-level security, role
+attributes, referential integrity, transaction-local settings. None of that has a
+faithful in-memory substitute, so there is no fake and no fallback. **The gate fails when
+the server is absent; it never skips.** A skipped isolation suite reports the same green
+as a passing one.
+
+Two things must be true:
+
+1. **`FIRMBATCH_TEST_DATABASE_URL`** points at a *maintenance* database (`postgres` or
+   `template1`) on a PostgreSQL **16** server. The suite refuses any other major version.
+   Local WSL uses native PostgreSQL, not Docker:
+
+   ```bash
+   export FIRMBATCH_TEST_DATABASE_URL='postgresql+psycopg://USER@/postgres?host=/var/run/postgresql&port=5432'
+   ```
+
+   **Every field must be explicit** -- user, host, port, database -- and there may be
+   exactly one of each. libpq fills whatever a URL omits from `PGUSER`, `PGHOST`, `PGPORT`
+   and `PGDATABASE`, so an omitted field means the ambient environment decides where the
+   connection goes; a multi-host failover list means libpq decides at connect time. Both
+   are refused. If a URL that used to work now fails, it is almost certainly the port.
+
+   The admin role needs `CREATEDB` and `CREATEROLE`, and needs neither `SUPERUSER` nor
+   `BYPASSRLS`.
+
+2. **The server is attested as a disposable test cluster.** Every PostgreSQL cluster has a
+   `postgres` database, production included, so the URL alone is not evidence that
+   anything may be created or dropped there. The helpers require a marker somebody created
+   on purpose -- once per cluster:
+
+   ```bash
+   cd "$(git rev-parse --show-toplevel)/.."
+   FIRMBATCH_ENV=test python3 -m firmbatch.control_plane.testing.attestation --mark
+   ```
+
+   (`--check` reports without changing anything; `--unmark` withdraws it.) CI marks its
+   own ephemeral `postgres:16` service container in an explicit step, which satisfies the
+   check rather than weakening it.
+
+**Never mark a server that holds anything you would miss.** The marker is the last thing
+standing between a mistyped environment variable and a `DROP DATABASE`.
+
+### What the gate does to the database
+
+It creates `firmbatch_test_<12 random hex>` plus **three** throwaway login roles -- a
+per-run owner (which is the migration principal and the deletion authority), an
+application role and a provisioning role -- migrates the database, runs the suite, and
+removes all four.
+
+The final `DROP DATABASE` is issued **as the per-run owner**, not with admin authority, so
+PostgreSQL's ownership check applies to whatever object is present at that instant: a
+same-name replacement owned by anybody else survives. Roles are removed by
+rename-verify-drop inside one transaction, for the same reason.
+
+The helpers also refuse any database whose name does not match the disposable pattern,
+refuse to run unless `FIRMBATCH_ENV=test`, and re-check the attestation, the cluster
+identity and each object's recorded OID and provenance marker immediately before dropping.
+If the suite is interrupted, a `firmbatch_test_*` database may survive; it is safe to drop
+by hand (as its owner role, or as a superuser).
+
+**The threat boundary.** These measures stop the realistic failures: a concurrent test
+process, a stale handle, a same-name replacement, a mistyped variable, and any
+non-superuser administrator. They do **not** stop a concurrent *superuser*, who can drop
+and recreate anything under any owner at any moment; PostgreSQL offers no lock that would.
+That residual is documented in ADR 0004 rather than papered over.
+
+Dependencies come from the hash-pinned lock, not from the direct pins:
+
+```bash
+python3 -m pip install --require-hashes -r requirements-v1-dev-lock.txt
+```
 
 ### Rules for this pass
 
@@ -48,6 +138,17 @@ Report each gate as PASS or FAIL with the failing names. All must pass.
   did not touch, say so explicitly and separate those findings from yours.
 - A failing gate is a result, not an obstacle. Report it; do not weaken the rule,
   add an ignore, or narrow the scope to make it pass.
+- **Never satisfy the PostgreSQL gate by relaxing it.** Marking a real cluster as
+  disposable, pointing the URL at something that matters, or making the suite skip when
+  the server is missing all turn a failing gate green without making the claim true.
+  If the server is unavailable, say so and stop.
+- On failure the gate prints **two** windows and names a retained log file: the
+  heading and opening frames (which test, in what context) and the tail of the log (the
+  terminal exception, which is what actually explains it). A pytest failure puts the
+  actionable `OperationalError` or `InsufficientPrivilege` at the *end*, behind however
+  many wrapper frames the call took, so a window at the top alone shows nothing useful.
+  The reporter uses no pipes: `awk | head` under `set -o pipefail` exits 141 on SIGPIPE and
+  takes the whole script with it, which is how a real failure once vanished entirely.
 
 ## `--chaos` (explicit only)
 
