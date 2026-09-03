@@ -3,8 +3,8 @@
 Active work and open questions. Updated at the end of each task, alongside `docs/STATE.md`.
 
 Last updated: 2026-09-03, `main` merge commit `6b4f341`, plus Milestone 2.1 on
-`feat/milestone-2-foundation` at `521870b` and the uncommitted CI correction to the
-bootstrap administrator's trust boundary (PR #4).
+`feat/milestone-2-foundation`, delivered by PR #4: implementation commit `521870b`
+and the bootstrap trust-boundary correction introduced in `78eae1d`.
 
 ---
 
@@ -13,9 +13,9 @@ bootstrap administrator's trust boundary (PR #4).
 Milestones 0 and 1 are complete; Milestone 1 merged at `6b4f341`. Milestone 2 is now the active
 milestone. It has four slices, and only the first is built.
 
-### M2.1 — PostgreSQL and tenant-isolation spine — **current slice, awaiting review**
+### M2.1 — PostgreSQL and tenant-isolation spine — **reviewed, awaiting merge**
 
-Delivered in the working tree: the configuration boundary, Alembic migrations into a dedicated
+Delivered by PR #4: the configuration boundary, Alembic migrations into a dedicated
 `firmbatch` schema, the `tenants`/`workspaces` spine, forced row-level security with a
 transaction-local tenant context, three separated roles with a verified runtime principal,
 minimal typed repositories, a disposable-cluster attestation, and a **382-check** pytest suite
@@ -23,7 +23,7 @@ against real PostgreSQL 16 wired into `scripts/verify-repository.sh` and CI. See
 `docs/STATE.md` for what it does, and `docs/adr/0004-postgresql-tenant-isolation-foundation.md`
 for why.
 
-**Six review rounds found fifty-eight issues in total; fifty-two are corrected and one has been reclassified.** The first round found fifteen, the second ten, the third eight, the fourth ten, the fifth ten, the sixth five. The fifth-round "blocker" was PostgreSQL 16's creator-ADMIN membership row, which a non-superuser cannot revoke; it is **not a defect** but the boundary the architecture draws, and the bootstrap assertion built on it had to be withdrawn after it made CI fail. See "M2.1 CI correction" below, ADR 0004 section 8f, and `control_plane/tests/test_admin_escalation.py`. Six were
+**Six review rounds found fifty-eight issues in total; fifty-seven were corrected and one was reclassified.** The first round found fifteen, the second ten, the third eight, the fourth ten, the fifth ten, the sixth five. The fifth-round "blocker" was PostgreSQL 16's creator-ADMIN membership row, which a non-superuser cannot revoke; it is **not a defect** but the boundary the architecture draws, and the bootstrap assertion built on it had to be withdrawn after it made CI fail. See "M2.1 CI correction" below, ADR 0004 section 8f, and `control_plane/tests/test_admin_escalation.py`. Six were
 security or destructive-safety defects reproduced against a real server before being fixed:
 temporary-table shadowing, inherited tenant context, ORM identity-map leakage, an unverified
 runtime principal, a teardown that trusted its handle (which dropped a real database during
@@ -51,9 +51,10 @@ Order for the human:
 
 4. Run `./scripts/verify-repository.sh` with `FIRMBATCH_TEST_DATABASE_URL` set. Expect
    **14 gates, 0 failed**.
-5. Capture the foundation-suite run with `/record-evidence` into `docs/evidence/m2/` — until
-   that exists, the isolation properties are asserted-and-tested, not VERIFIED LIVE.
-6. Human reviews and commits.
+5. If promoting M2.1 to **VERIFIED LIVE**, capture the foundation-suite run with
+   `/record-evidence` under `docs/evidence/m2/`. Otherwise retain the current
+   **implemented and tested** classification.
+6. Human commits the reviewed branch and merges PR #4 after all required checks pass.
 
 ### M2.1 CI correction — the bootstrap administrator is trusted, not isolated
 

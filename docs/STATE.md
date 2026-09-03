@@ -15,9 +15,9 @@ Five labels, kept strictly apart:
   Documentation, comments, and passing-in-the-moment are not evidence.
 
 Last updated: 2026-09-03, at `main` merge commit `6b4f341` (Milestone 1), plus
-Milestone 2.1 on `feat/milestone-2-foundation` at `521870b` (implementation plus its
-review-hardening pass) and the uncommitted CI correction to the bootstrap
-administrator's trust boundary (PR #4; see the CI correction section below).
+Milestone 2.1 on `feat/milestone-2-foundation`, delivered by PR #4: implementation
+commit `521870b` (with its review-hardening pass) and the bootstrap trust-boundary
+correction introduced in `78eae1d` (see the CI correction section below).
 
 ---
 
