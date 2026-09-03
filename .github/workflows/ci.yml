@@ -1,14 +1,15 @@
 name: ci
 
 # firmbatch is imported as a PACKAGE: tests/test_recovery.py does
-# `from firmbatch.control import db`. The repository must therefore be checked out
-# into a directory named `firmbatch` and the tests run from its PARENT. A default
-# checkout into the workspace root breaks the import. This is the single most
-# fragile thing in this file -- do not "simplify" the checkout path.
+# `from firmbatch.control import db` and the v1 foundation suite does
+# `from firmbatch.control_plane import config`. The repository must therefore be checked
+# out into a directory named `firmbatch` and the tests run from its PARENT. A default
+# checkout into the workspace root breaks the import. This is the single most fragile
+# thing in this file -- do not "simplify" the checkout path.
 #
-# Everything else is delegated to scripts/verify-repository.sh, which is the same
-# script humans and agents run. Do not re-spell its gates here: a gate that exists
-# in only one of the three places is a gate that silently stops being true.
+# Everything else is delegated to scripts/verify-repository.sh, which is the same script
+# humans and agents run, invoked exactly once. Do not re-spell its gates here: a gate
+# that exists in only one of the three places is a gate that silently stops being true.
 
 on:
   push:
@@ -19,7 +20,18 @@ permissions:
   contents: read
 
 jobs:
-  verify:
+  # --------------------------------------------------------------------------------
+  # Both dependency locks, each installed into its OWN clean virtual environment.
+  #
+  # Installing only the development lock cannot prove the runtime lock is usable: the
+  # development lock is a superset, so a stale runtime pin, an incompatible resolution or
+  # a wrong hash in requirements-v1-lock.txt would be masked by whatever the development
+  # lock happens to install first. Separate environments are the only way the runtime lock
+  # gets tested as the thing a production install would actually use.
+  #
+  # --require-hashes on both, so a re-uploaded or substituted distribution fails the job
+  # rather than running in it.
+  locks:
     runs-on: ubuntu-latest
     steps:
       - name: Check out into a directory named firmbatch
@@ -31,17 +43,121 @@ jobs:
         with:
           python-version: "3.11"
 
-      # The three gates are stdlib-only. tests/test_recovery.py imports os, sys,
-      # tempfile, time and firmbatch.control.db (json, os, sqlite3, time, uuid);
-      # the policy engine and its tests import argparse, json, os, shlex, sys,
-      # subprocess, pathlib. Nothing in this workflow imports fastapi, uvicorn, or
-      # verda, so requirements-v0-lock.txt is deliberately NOT installed -- it would
-      # be a failure surface with no coverage benefit.
-      - name: Install ruff
-        run: pip install ruff==0.16.5   # pinned to the version verified locally
+      - name: Runtime lock installs cleanly
+        working-directory: firmbatch
+        run: |
+          python -m venv /tmp/runtime-env
+          /tmp/runtime-env/bin/python -m pip install --require-hashes -r requirements-v1-lock.txt
+          /tmp/runtime-env/bin/python -c "import sqlalchemy, alembic, psycopg; print(sqlalchemy.__version__, alembic.__version__, psycopg.__version__)"
 
-      # Invoked through `bash` rather than as ./scripts/... so a lost executable bit
-      # on checkout is not the thing that breaks CI.
+      # Installing third-party packages proves the LOCK resolves. It says nothing about
+      # whether Firmbatch runs on it. A production module that grew an import satisfied
+      # only by the development lock -- pytest, ruff, or anything they drag in -- would
+      # install here, import cleanly in the `verify` job (which has the development lock),
+      # and fail on first use in production.
+      #
+      # So: import every production module on an interpreter that has ONLY the runtime
+      # lock, run a real production entry point, and assert every third-party module was
+      # served out of THIS environment rather than leaking in from the development one.
+      # Deliberately no PYTHONPATH beyond the checkout parent -- the script adds it -- so
+      # nothing else can satisfy an import.
+      #
+      # The same script runs from verify-repository.sh with --static, which is the half
+      # that works without a virtual environment. This is the half that catches deferred
+      # and conditional imports, which no parser can see.
+      - name: Production code runs on the runtime lock alone
+        working-directory: firmbatch
+        run: /tmp/runtime-env/bin/python scripts/check-runtime-imports.py --dynamic
+
+      - name: Development lock installs cleanly in a separate environment
+        working-directory: firmbatch
+        run: |
+          python -m venv /tmp/dev-env
+          /tmp/dev-env/bin/python -m pip install --require-hashes -r requirements-v1-dev-lock.txt
+          /tmp/dev-env/bin/python -c "import sqlalchemy, alembic, psycopg, pytest; print('dev lock ok')"
+
+      - name: The two locks agree on every shared pin
+        working-directory: firmbatch
+        run: |
+          python - <<'PY'
+          import re, pathlib
+          def pins(path):
+              out = {}
+              for line in pathlib.Path(path).read_text().splitlines():
+                  m = re.match(r"^([A-Za-z0-9_.\-]+)==([^\s\\]+)", line)
+                  if m:
+                      out[m.group(1).lower().replace("_", "-")] = m.group(2)
+              return out
+          runtime, dev = pins("requirements-v1-lock.txt"), pins("requirements-v1-dev-lock.txt")
+          assert runtime, "runtime lock has no pins"
+          drift = {k: (v, dev.get(k)) for k, v in runtime.items() if dev.get(k) != v}
+          assert not drift, f"the locks disagree on shared pins: {drift}"
+          print(f"{len(runtime)} runtime pins, {len(dev)} development pins, no drift")
+          PY
+
+  verify:
+    runs-on: ubuntu-latest
+    needs: locks
+
+    # The Milestone 2.1 foundation suite tests PostgreSQL semantics -- row-level
+    # security, forced policies, role attributes, transaction-local settings -- so it
+    # runs against a real server. 16 to match the local development environment and the
+    # RDS version named in the target architecture; the suite refuses any other major
+    # version rather than reporting a green that says nothing about the target.
+    #
+    # The suite creates and drops its own disposable database and roles inside this
+    # container; nothing here persists beyond the job.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres   # test-only credential for an ephemeral container
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # A maintenance connection to the ephemeral service container. Every identity and
+      # endpoint field is explicit -- user, password, host, port, database -- because an
+      # omitted field would be supplied by PGUSER/PGHOST/PGPORT rather than by this file,
+      # and the configuration boundary refuses URLs that leave anything to infer.
+      FIRMBATCH_TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/postgres
+
+    steps:
+      - name: Check out into a directory named firmbatch
+        uses: actions/checkout@v4
+        with:
+          path: firmbatch
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # The development lock, which includes the runtime closure. The `locks` job above has
+      # already proven the runtime lock stands on its own; this job needs pytest too.
+      - name: Install pinned v1 test dependencies
+        working-directory: firmbatch
+        run: python -m pip install --require-hashes -r requirements-v1-dev-lock.txt
+
+      # The test helpers refuse to create or drop anything on a server that is not
+      # explicitly attested as disposable -- every PostgreSQL cluster has a `postgres`
+      # database, so the URL alone proves nothing. This container is created and destroyed
+      # by this job, which is exactly what the marker is for. This does not weaken the
+      # check: it satisfies it, in the open, for a server that genuinely is throwaway.
+      - name: Attest the ephemeral service container as a disposable test cluster
+        working-directory: ${{ github.workspace }}
+        env:
+          FIRMBATCH_ENV: test
+        run: python -m firmbatch.control_plane.testing.attestation --mark
+
+      # Invoked through `bash` rather than as ./scripts/... so a lost executable bit on
+      # checkout is not the thing that breaks CI.
       - name: Verify repository
         working-directory: firmbatch
         run: bash ./scripts/verify-repository.sh

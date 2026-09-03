@@ -10,9 +10,19 @@ A persistent batch job that survives its machines. The customer buys one durable
 this quantity of accepted output, by this deadline, for this price. Underneath, machines are
 rented, used, killed and replaced. That property is the entire product.
 
-`README.md` explains the system and how to run it. `docs/firmbatch-pilot-roadmap.md` is the
-plan from the v0 prototype to a pilot-ready v1, and is authoritative over the README where
-they differ.
+`README.md` explains the system and how to run it.
+
+Authority, in order (ADR 0002):
+
+- `docs/firmbatch-v1-roadmap.md` is **the canonical implementation sequence** from the v0
+  prototype to v1, and is authoritative over the README where they differ.
+- `docs/architecture/v1-target-architecture.md` is **the implementation specification** —
+  what v1 must become. Its §17 invariants are the acceptance criteria carried into every
+  milestone.
+- `docs/STATE.md` says what the code does **now**. Target and roadmap documents never
+  prove that a capability is implemented.
+- `docs/firmbatch-pilot-roadmap.md` is **superseded historical context**, retained for its
+  engineering analysis. It is not an executable plan; do not take work from it.
 
 ## Running anything
 
@@ -26,9 +36,21 @@ python3 -m firmbatch.fb serve
 python3 -m firmbatch.tests.test_recovery
 ```
 
-Running from inside the repository fails on the import. There is no `pytest` suite and no
-`Makefile`; `tests/test_recovery.py` is a script that prints PASS/FAIL and exits non-zero on
-failure. Conda environment: `firmbatch-v0` (Python 3.11).
+Running from inside the repository fails on the import. There is no `Makefile`.
+
+Two test suites, with different shapes — do not confuse them:
+
+- **v0 property checks** (`tests/test_recovery.py`) are **not** pytest. It is a script that
+  prints PASS/FAIL and exits non-zero on failure:
+  `python3 -m firmbatch.tests.test_recovery`, from the parent directory.
+- **The v1 PostgreSQL foundation suite** (`control_plane/tests/`) **is** pytest, and needs
+  a real PostgreSQL 16 server plus the disposable-cluster attestation:
+  `FIRMBATCH_ENV=test python3 -m pytest firmbatch/control_plane/tests`, also from the
+  parent directory. See `.agents/skills/verify/SKILL.md` for its prerequisites.
+
+Both are run by `./scripts/verify-repository.sh`; run that rather than either directly.
+Conda environment: `firmbatch-v0` (Python 3.11); v1 dependencies come from
+`requirements-v1-dev-lock.txt`.
 
 ## Verifying anything
 
@@ -39,9 +61,14 @@ One command, run from anywhere:
 ```
 
 It resolves its own repository root and runs each gate from the directory that gate needs —
-layout, agent configuration, repository hygiene, property tests, `ruff check`, and the agent
-policy tests. It prints PASS/FAIL per gate, runs them all even after one fails, and exits
-non-zero if any did.
+layout, agent configuration, repository hygiene, v0 property tests, `ruff check`, the agent
+policy tests, and the v1 PostgreSQL foundation suite. It prints PASS/FAIL per gate, runs
+them all even after one fails, and exits non-zero if any did.
+
+The foundation suite needs a real PostgreSQL 16 server and `FIRMBATCH_TEST_DATABASE_URL`
+pointing at a maintenance database (see `.env.example`). It creates and drops its own
+disposable database and roles. Without that variable the gate **fails** — it does not skip,
+because a skipped isolation suite reports the same green as a passing one.
 
 **This script is the only verification entry point.** The human, the `verify` skill, and
 `.github/workflows/ci.yml` all invoke this same file, so all three provably run the same
@@ -51,17 +78,19 @@ to the script.
 
 ## Working contract
 
-From roadmap §7. Apply it to every non-trivial task.
+Originally roadmap §7, and unchanged by the move to the canonical roadmap. Apply it to
+every non-trivial task.
 
-1. **Inspect first.** Read the roadmap section, `docs/STATE.md`, `docs/tasks/current.md`,
-   `docs/adr/`, and the code the task touches — before proposing anything.
+1. **Inspect first.** Read the canonical milestone in `docs/firmbatch-v1-roadmap.md`,
+   `docs/STATE.md`, `docs/tasks/current.md`, `docs/adr/`, and the code the task touches —
+   before proposing anything.
 2. **State the current behaviour and the exact gap**, from reading the code, not the
    documentation. Where the two disagree, the code is the fact and the disagreement is a
    finding worth recording.
 3. **Propose a bounded plan before editing**, and wait for approval. The smallest ordered set
    of changes that ends in a reviewable, tested repository state.
-4. **Preserve every invariant** in roadmap §5. If a change appears to require breaking one,
-   stop and say so rather than working around it.
+4. **Preserve every invariant** in `docs/architecture/v1-target-architecture.md` §17. If a
+   change appears to require breaking one, stop and say so rather than working around it.
 5. **Do not implement later-milestone work** opportunistically. If a prerequisite must be
    pulled forward, name it explicitly.
 6. **Close with the report**: files changed; decisions made; tests and results; remaining
@@ -93,9 +122,9 @@ are HISTORICAL evidence and are cited as such — they are not invalid, and they
 rewritten to add a header, which would fabricate provenance. Everything captured from R0
 onward carries the full header.
 
-Roadmap Milestone 1 is explicit that no v0 result may be presented as pilot-ready customer
-proof. A local echo-engine chaos run is diagnostic evidence about durability under process
-kill — nothing more.
+The canonical roadmap's Milestone 1 is explicit that no v0 result may be presented as
+pilot-ready customer proof. A local echo-engine chaos run is diagnostic evidence about
+durability under process kill — nothing more.
 
 ## Boundaries
 

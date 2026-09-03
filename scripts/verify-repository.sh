@@ -12,9 +12,18 @@
 # gate fails, and it never stops at the first failure -- a run reports the whole
 # picture, because a partial answer is what sends an agent round a second time.
 #
-# This pass is fast, deterministic, and side-effect free. It touches no database and
-# writes no evidence artifact. The destructive chaos experiment is NOT here; it is
-# explicit, opt-in, and lives in .agents/skills/verify/SKILL.md.
+# This pass is fast, deterministic, and writes no evidence artifact.
+#
+# It is NOT side-effect free any more. Since Milestone 2.1 the last gate runs the v1
+# foundation suite against a real PostgreSQL 16 server, where it creates a disposable
+# `firmbatch_test_<random>` database and three throwaway roles and drops them again. It
+# touches nothing else: the helpers in control_plane/testing/bootstrap.py refuse any
+# database whose name does not match that pattern, refuse to run at all unless
+# FIRMBATCH_ENV=test, and issue the final DROP as the per-run database owner so that a
+# same-name replacement owned by anybody else survives.
+#
+# The destructive chaos experiment is still NOT here; it is explicit, opt-in, and lives
+# in .agents/skills/verify/SKILL.md.
 
 set -euo pipefail
 
@@ -69,6 +78,82 @@ gate_in() {
   fi
 }
 
+# The pytest gate, reported so a database failure is diagnosable from the output.
+#
+# `gate_in` tails 15 lines, which for pytest is the short summary -- the part that names
+# which tests failed and nothing about why. Runs with --maxfail=1 so the first failure is
+# the last thing that happened, prints a window at each end of it, and keeps the full log
+# on disk.
+gate_pytest() {
+  local dir="$1" name="$2"; shift 2
+  local raw log status
+  raw="${TMPDIR:-/tmp}/firmbatch-foundation-suite.$$.raw"
+  log="${TMPDIR:-/tmp}/firmbatch-foundation-suite.$$.log"
+
+  # --- credentials must not survive into a retained file ---------------------------
+  #
+  # A failing PostgreSQL test carries two kinds of secret into its traceback without
+  # anybody choosing to put them there: the privileged admin URL (pytest renders every
+  # fixture value at the head of a long traceback, and `environment` holds
+  # FIRMBATCH_TEST_DATABASE_URL, which in CI has a real password), and the per-run role
+  # passwords psycopg echoes when a CREATE ROLE statement fails.
+  #
+  # Redacting only the printed excerpt is not enough, and was the earlier mistake: the
+  # full log stays on disk at a path the failure message helpfully names. So:
+  #
+  #   * both files are created 0600, before anything is written into them;
+  #   * the RETAINED file is the sanitized one and the raw capture is deleted;
+  #   * the two display windows read the sanitized file, so stdout is covered by the same
+  #     pass rather than by a second, separately-maintained one.
+  ( umask 077; : >"${raw}"; : >"${log}" )
+
+  set +e
+  ( cd -- "${dir}" && "$@" ) >"${raw}" 2>&1
+  status=$?
+  set -e
+
+  if [ "${status}" -eq 0 ]; then
+    pass "${name}"
+    rm -f "${raw}" "${log}"
+    return 0
+  fi
+
+  if python3 "${REPO_ROOT}/scripts/sanitize-secrets.py" --in "${raw}" --out "${log}"; then
+    rm -f "${raw}"
+  else
+    # Sanitizing failed, so nothing may be retained or shown: a log that might carry a
+    # live credential is worse than no log. Say so, and keep the gate failing.
+    rm -f "${raw}" "${log}"
+    fail "${name}" "output withheld: it could not be sanitized, and an unsanitized log may carry credentials"
+    return 0
+  fi
+
+  fail "${name}" "first failure below; sanitized output retained at ${log}"
+
+  # Two windows, because the useful information is at both ends of a pytest failure.
+  #
+  # The heading and the first frames say WHICH test and in what context. The exception
+  # that actually explains it -- `psycopg.errors.InsufficientPrivilege`, an
+  # `OperationalError` naming a refused connection -- is at the END of the traceback, after
+  # however many frames of SQLAlchemy and pytest wrapper the call took to get there. A
+  # window at the top alone routinely shows nothing but wrapper frames.
+  #
+  # No pipes anywhere. `awk ... | head -n 60` looks harmless and is not: head exits at line
+  # 60, awk gets SIGPIPE and dies with 141, `set -o pipefail` promotes that to the pipeline
+  # status, and `set -e` then aborts the whole script -- losing the retained-log path, the
+  # summary, this gate's result, and the final PASS/FAIL tally, and exiting 141 instead of
+  # 1. Reproduced with a 5,000-line failure log. Each awk below reads the log directly and
+  # consumes all of it, so there is no upstream process to signal.
+  printf '        ---- first failure (context) ----\n'
+  awk '/^={5,} (FAILURES|ERRORS) ={5,}/ { found = 1 }
+       found && shown < 25 { printf "        %s\n", $0; shown++ }' "${log}"
+
+  printf '        ---- terminal exception ----\n'
+  awk -v keep=45 '{ ring[NR % keep] = $0 }
+       END { for (i = NR - keep + 1; i <= NR; i++) if (i > 0) printf "        %s\n", ring[i % keep] }' "${log}"
+  return 0
+}
+
 printf 'firmbatch repository verification\n'
 printf '  repository  %s\n' "${REPO_ROOT}"
 printf '  python      %s\n' "$(python3 --version 2>&1)"
@@ -84,13 +169,15 @@ else
        "found '${REPO_NAME}'; 'from firmbatch.control import db' cannot resolve"
 fi
 
-# --- required R0 files -------------------------------------------------------------
+# --- required repository files -----------------------------------------------------
 REQUIRED_FILES=(
   AGENTS.md
   CLAUDE.md
   README.md
   pyproject.toml
   scripts/verify-repository.sh
+  scripts/check-runtime-imports.py
+  scripts/sanitize-secrets.py
   .agents/policy/guard.py
   .agents/policy/test_guard.py
   .agents/skills/verify/SKILL.md
@@ -109,16 +196,59 @@ REQUIRED_FILES=(
   docs/STATE.md
   docs/tasks/current.md
   docs/firmbatch-pilot-roadmap.md
+  docs/firmbatch-v1-roadmap.md
+  docs/architecture/v1-target-architecture.md
   docs/adr/0001-agentic-repository-operating-model.md
+  docs/adr/0004-postgresql-tenant-isolation-foundation.md
+  # --- v1 control-plane foundation (Milestone 2.1) --------------------------------
+  requirements-v1.txt
+  requirements-v1-dev.txt
+  # Fully resolved, hash-pinned graphs. CI installs from these, not from the direct pins.
+  requirements-v1-lock.txt
+  requirements-v1-dev-lock.txt
+  control_plane/__init__.py
+  control_plane/config.py
+  control_plane/migrate.py
+  control_plane/alembic.ini
+  control_plane/db/base.py
+  control_plane/db/models.py
+  control_plane/db/engine.py
+  control_plane/db/principal.py
+  control_plane/db/identity.py
+  control_plane/db/roles.py
+  control_plane/db/repositories.py
+  control_plane/db/migrations/env.py
+  control_plane/db/migrations/versions/0001_tenant_workspace_spine.py
+  control_plane/testing/attestation.py
+  control_plane/testing/bootstrap.py
+  control_plane/tests/conftest.py
+  control_plane/tests/test_configuration.py
+  control_plane/tests/test_migrations.py
+  control_plane/tests/test_tenant_isolation.py
+  control_plane/tests/test_isolation_hardening.py
+  control_plane/tests/test_bootstrap_safety.py
+  control_plane/tests/test_connection_identity.py
+  control_plane/tests/test_connection_specification.py
+  control_plane/tests/test_connection_environment.py
+  control_plane/tests/test_admin_escalation.py
+  control_plane/tests/test_settings_separation.py
+  control_plane/tests/test_version_preflight.py
+  control_plane/tests/test_bind_forms.py
+  control_plane/tests/test_migration_entry_points.py
+  control_plane/tests/test_ownership_boundary.py
+  control_plane/tests/test_bootstrap_lifecycle.py
+  control_plane/tests/test_destructive_safety.py
+  control_plane/tests/test_verification_reporting.py
+  control_plane/tests/test_role_privileges.py
 )
 missing=()
 for f in "${REQUIRED_FILES[@]}"; do
   [ -e "${REPO_ROOT}/${f}" ] || missing+=("${f}")
 done
 if [ ${#missing[@]} -eq 0 ]; then
-  pass "all ${#REQUIRED_FILES[@]} required R0 files exist"
+  pass "all ${#REQUIRED_FILES[@]} required repository files exist"
 else
-  fail "all ${#REQUIRED_FILES[@]} required R0 files exist" "missing: ${missing[*]}"
+  fail "all ${#REQUIRED_FILES[@]} required repository files exist" "missing: ${missing[*]}"
 fi
 
 # --- skill symlinks ----------------------------------------------------------------
@@ -314,6 +444,51 @@ else
 fi
 
 gate_in "${REPO_ROOT}" "agent policy tests" python3 .agents/policy/test_guard.py
+
+# Production code may only import what a PRODUCTION install has. The development lock is a
+# superset of the runtime lock, so an import satisfied only by pytest, ruff, or anything
+# they drag in would install, import and test cleanly here and fail on first use in
+# production. This is the static half; CI runs the same script with --dynamic inside a
+# clean virtual environment built from requirements-v1-lock.txt, which additionally catches
+# deferred and conditional imports that no parser can see.
+gate_in "${REPO_ROOT}" "runtime import closure (production code vs requirements-v1-lock.txt)" \
+  python3 scripts/check-runtime-imports.py --static
+
+# --- the v1 PostgreSQL foundation suite ---------------------------------------------
+# Milestone 2.1. Runs against a REAL PostgreSQL 16 server: the properties under test are
+# row-level security, forced policies, role attributes, referential integrity and
+# transaction-local settings, none of which has a faithful in-memory substitute.
+#
+# It must FAIL, never skip, when the server is absent. A skipped isolation suite reports
+# the same green as a passing one, and "cross-tenant access fails closed" is exactly the
+# claim this repository's evidence rules say may not rest on an unobserved run.
+#
+# The suite creates its own disposable `firmbatch_test_<random>` database and throwaway
+# roles from the maintenance URL below and drops them again; the helpers refuse any
+# database whose name does not match that pattern.
+if [ -z "${FIRMBATCH_TEST_DATABASE_URL:-}" ]; then
+  fail "PostgreSQL foundation suite (control_plane, real PostgreSQL 16)" \
+       "FIRMBATCH_TEST_DATABASE_URL is not set. This gate does not skip: set it to a maintenance
+        connection with EVERY field explicit -- user, host, port, database. For example
+        postgresql+psycopg://USER@/postgres?host=/var/run/postgresql&port=5432 (local native
+        PostgreSQL) or postgresql+psycopg://postgres:postgres@127.0.0.1:5432/postgres (CI
+        service container). An omitted field would be supplied by PGUSER/PGHOST/PGPORT.
+        The server must also be attested as disposable, once per cluster:
+          cd \"\$(git rev-parse --show-toplevel)/..\"
+          FIRMBATCH_ENV=test python3 -m firmbatch.control_plane.testing.attestation --mark
+        See .env.example and .agents/skills/verify/SKILL.md."
+else
+  # From the PARENT directory, like the property tests: control_plane is imported as
+  # firmbatch.control_plane. FIRMBATCH_ENV is passed explicitly -- the configuration
+  # boundary has no default environment, deliberately.
+  # --tb=short deliberately. The long traceback renders every fixture value at the head
+  # of a failure -- `environment = {'FIRMBATCH_TEST_DATABASE_URL': '...'}` -- which is how
+  # the privileged admin URL reaches a job log without anybody printing it. Short mode
+  # keeps the failing line and the terminal exception, which is the part that is
+  # actionable, and drops the argument rendering that is not.
+  gate_pytest "${PARENT_DIR}" "PostgreSQL foundation suite (control_plane, real PostgreSQL 16)" \
+    env FIRMBATCH_ENV=test python3 -m pytest -q --maxfail=1 --tb=short "${REPO_NAME}/control_plane/tests"
+fi
 
 # --- summary -----------------------------------------------------------------------
 printf '\n'

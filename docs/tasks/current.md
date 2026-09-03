@@ -2,25 +2,174 @@
 
 Active work and open questions. Updated at the end of each task, alongside `docs/STATE.md`.
 
-Last updated: 2026-09-02, `main` commit
-`547877382fd5eb080b20192eb68b750f5f8b2cca`, plus the Milestone 1 audit documentation diff.
+Last updated: 2026-09-03, `main` merge commit `6b4f341`, plus the uncommitted Milestone 2.1
+working tree on `feat/milestone-2-foundation` (implementation plus its review-hardening pass).
 
 ---
 
-## Immediate — review and complete Milestone 1
+## Active — Milestone 2, shared product foundation
 
-Milestone 0 is merged. Milestone 1 now supplies the code-cited audit and cutover decision without
-changing product behavior.
+Milestones 0 and 1 are complete; Milestone 1 merged at `6b4f341`. Milestone 2 is now the active
+milestone. It has four slices, and only the first is built.
 
-Order:
+### M2.1 — PostgreSQL and tenant-isolation spine — **current slice, awaiting review**
 
-1. Review `docs/architecture/v0-to-v1-migration-audit.md` against the audited commit.
-2. Review ADR 0003's no-data-migration, no-public-compatibility, and v0-deletion conditions.
-3. Run `./scripts/verify-repository.sh` and confirm the diff is documentation-only.
-4. Human reviews and commits the Milestone 1 audit diff.
+Delivered in the working tree: the configuration boundary, Alembic migrations into a dedicated
+`firmbatch` schema, the `tenants`/`workspaces` spine, forced row-level security with a
+transaction-local tenant context, three separated roles with a verified runtime principal,
+minimal typed repositories, a disposable-cluster attestation, and a **378-check** pytest suite
+against real PostgreSQL 16 wired into `scripts/verify-repository.sh` and CI. See
+`docs/STATE.md` for what it does, and `docs/adr/0004-postgresql-tenant-isolation-foundation.md`
+for why.
 
-After merge, begin Milestone 2 with the shared product foundation. Do not implement execution,
-customer billing, or the portal opportunistically inside that milestone.
+**Six review rounds found fifty-eight issues in total; fifty-two are corrected and one is a reported design blocker.** The first round found fifteen, the second ten, the third eight, the fourth ten, the fifth ten, the sixth five. The fifth-round blocker is PostgreSQL 16's creator-ADMIN membership row, which a non-superuser cannot revoke: see ADR 0004 section 8e and `control_plane/tests/test_admin_escalation.py`. Six were
+security or destructive-safety defects reproduced against a real server before being fixed:
+temporary-table shadowing, inherited tenant context, ORM identity-map leakage, an unverified
+runtime principal, a teardown that trusted its handle (which dropped a real database during
+testing), and a generated password reaching exception text. Each now has a regression test.
+The table in `docs/STATE.md` lists what was demonstrated and what closed it.
+
+Order for the human:
+
+1. Review `docs/adr/0004-postgresql-tenant-isolation-foundation.md`, in particular the
+   "What this does not claim" section — RLS bounds a query given a context; it does not yet
+   bind the context to an authenticated credential.
+2. Review the five protected-file changes: `AGENTS.md` (roadmap authority),
+   `.agents/skills/milestone/SKILL.md` (canonical milestone + §17 invariants),
+   `.agents/skills/verify/SKILL.md` (the pass is no longer side-effect free; attestation
+   prerequisite), `scripts/verify-repository.sh` (thirteenth and fourteenth gates, no existing gate weakened),
+   `.github/workflows/ci.yml` (PostgreSQL 16 service, hash-pinned lock, explicit attestation
+   step, one script call).
+3. Attest the local cluster once, if it is not already marked — and **only** if it holds
+   nothing you would miss:
+
+   ```bash
+   cd "$(git rev-parse --show-toplevel)/.."
+   FIRMBATCH_ENV=test python3 -m firmbatch.control_plane.testing.attestation --check
+   ```
+
+4. Run `./scripts/verify-repository.sh` with `FIRMBATCH_TEST_DATABASE_URL` set. Expect
+   **14 gates, 0 failed**.
+5. Capture the foundation-suite run with `/record-evidence` into `docs/evidence/m2/` — until
+   that exists, the isolation properties are asserted-and-tested, not VERIFIED LIVE.
+6. Human reviews and commits.
+
+### Blocking requirement carried out of M2.1 — `AUTH-BOUND-TENANT-CONTEXT`
+
+M2.1 gives **structural** isolation: forced RLS, fail-closed transactions, no leakage
+through pooled connections or ORM identity maps, separated application and migration
+credentials. The application service remains a *trusted setter* of tenant context.
+
+It does **not** protect against arbitrary SQL run with a compromised runtime credential:
+the runtime role can `set_config('app.tenant_id', <any uuid>, true)` and RLS will evaluate
+faithfully against whatever it was told. No partial mechanism was attempted here — a
+convention or a second GUC would look like the property without being it.
+
+**Customer-facing deployment is blocked** until tenant context is derived from an
+authenticated, unforgeable capability rather than a caller-supplied workspace UUID. Tracked
+as `AUTH-BOUND-TENANT-CONTEXT` in Milestone 3 of `docs/firmbatch-v1-roadmap.md`, with five
+adversarial completion tests. ADR 0004 §8g and `docs/STATE.md` carry the detail.
+
+Nothing in this repository asserts the limitation as a passing test; it is tracked in
+prose, deliberately, so that it is fixed rather than deleted.
+
+### M2.2 — idempotent mutations and the transactional outbox — PLANNED
+
+Idempotency records keyed per tenant; a duplicate identical mutation returns one effect and a
+conflicting reuse is rejected; state change and outbox event committed in one transaction.
+Migration audit section 10 lists the required tests. Not started.
+
+### M2.3 — audit events, tenant-scoped authorization, secrets model — PLANNED
+
+Includes the piece M2.1 deliberately left open: resolving tenant context from an authenticated
+credential rather than accepting a caller-set setting. Not started.
+
+### M2.4 — explicit lifecycle state machines — PLANNED
+
+Conditional, persisted transitions that invalid transitions cannot race through. Not started.
+
+**Milestone 2's completion gate is not satisfied by M2.1 alone.** The gate is cross-tenant
+reads and writes failing closed in automated tests **and** duplicate mutations producing one
+contractual effect; M2.1 delivers the first half.
+
+Do not implement execution, customer billing, or the portal opportunistically inside this
+milestone.
+
+---
+
+## Environment note — running the foundation suite
+
+The developer's WSL environment has no Docker, so the suite runs against **native**
+PostgreSQL 16 (16.15 observed). CI uses a `postgres:16` service container. Both reach the same
+`scripts/verify-repository.sh`.
+
+Environment facts worth writing down, because none is obvious and each cost a debugging
+round:
+
+- The admin role needs `CREATEDB` and `CREATEROLE`, and needs neither `SUPERUSER` nor
+  `BYPASSRLS`. A non-superuser admin is preferable: it cannot accidentally read through the
+  policies while investigating.
+- Roles created by the bootstrap **cannot** authenticate over the unix socket under the default
+  Debian/Ubuntu `local all all peer` line in `pg_hba.conf`. The bootstrap therefore builds the
+  application and provisioning URLs against the server's TCP endpoint (`SHOW port` on loopback)
+  even when the admin URL is a socket. Do not "simplify" that to reuse the admin URL host.
+- **`FIRMBATCH_TEST_DATABASE_URL` now needs an explicit port**, and an explicit user, host
+  and database. A URL that used to work without `&port=5432` is refused: the port it was
+  silently using came from `PGPORT` or a compiled-in default. Multi-host failover URLs are
+  refused for the same reason.
+- The server needs the disposable-cluster marker before anything can be created or dropped
+  (`attestation.py --mark`, once per cluster). The local WSL cluster was marked on 2026-09-03
+  after confirming it held only `postgres`, `template0`, `template1` and zero user tables.
+- `inet_server_port()` returns **NULL** over a unix socket, so it cannot be used to check that
+  two URLs point at the same server. The bootstrap records the endpoint at creation and compares
+  against that instead. This was a real defect that dropped a live test database.
+- **Teardown does not use `DROP DATABASE ... WITH (FORCE)`, and must not be changed to.**
+  This note previously said the opposite, and it was wrong in a way worth spelling out.
+  `FORCE` needs the privileges of the roles whose backends it terminates, so adopting it
+  means *broadening* the role that performs teardown rather than narrowing it — the exact
+  move ADR 0004 §8e argues against, and the exact move that would undo the per-run owner
+  being a restricted identity. The implementation carries no `FORCE` anywhere, and a test
+  asserts that on the source.
+- What happens instead, in this order: the per-run owner revalidates the target on its own
+  connection (attestation, cluster, endpoint, database name, OID, provenance, live owner),
+  then revokes `CONNECT`, then terminates the remaining backends, then drops. Every one of
+  those statements runs as the owner, so PostgreSQL's ownership check — evaluated against
+  whatever object exists at that instant — is what actually guards them. The owner can
+  terminate the runtime roles' backends because it is granted membership in them at
+  bootstrap, which is a narrower grant than `FORCE` would require.
+- If the connections cannot be disposed of, the database is **left in place and reported**
+  as a cleanup failure. That is the designed outcome, not a bug to route around: an
+  operator must not widen teardown authority to make cleanup pass. Dispose application
+  engines before teardown and the situation does not arise.
+- PostgreSQL 16 splits the `SET` option out of `ADMIN` on role membership. A `CREATEROLE`
+  creator gets `ADMIN` but not `SET`, so `CREATE DATABASE ... OWNER <role>` and
+  `ALTER TABLE ... OWNER TO <role>` both need an explicit
+  `GRANT <role> TO CURRENT_USER WITH SET TRUE` first. The bootstrap takes that grant for
+  exactly one statement and gives it back in a `finally`.
+- Give that grant `INHERIT FALSE, ADMIN FALSE` as well. Granted without them,
+  `REVOKE SET OPTION FOR ...` leaves an **inheriting** membership row behind, so the admin
+  holds the owner's privileges without being able to name the role. Verified both ways
+  round against a real server.
+- `pg_has_role(..., 'MEMBER')` is the wrong probe for "can this role become that one". In
+  PostgreSQL 16 it stays true for the implicit `ADMIN` grant a `CREATEROLE` creator
+  receives, even when `SET ROLE` is refused. Use `'SET'` (may become it) and `'USAGE'`
+  (inherits it); both must be false.
+- `ALTER DATABASE ... OWNER TO` requires the *current* owner to hold `CREATEDB`, and
+  `ALTER <object> OWNER TO` requires the *incoming* owner to hold `CREATE` on the schema.
+  Both are why the ownership tests are shaped the way they are.
+- After bootstrap the shared admin genuinely cannot drop the disposable database: it gets
+  "must be owner of database". Tests that deliberately break the normal teardown path use
+  `conftest.drop_disposable_objects`, which re-acquires `SET` through the `ADMIN` option it
+  still holds. That says something true about the threat model rather than working around
+  it — the per-run owner is protected from a concurrent process, not from the role
+  administrator that created it.
+- Releasing a savepoint does **not** undo a `SET LOCAL` made inside it; only rolling the
+  savepoint back does. That is why tenant switches inside a savepoint are refused outright
+  rather than unwound.
+- A non-superuser with `CREATEROLE` cannot set a custom GUC as a role or database default
+  (`ALTER ROLE ... SET app.tenant_id` is refused), so that particular poisoning route is not
+  reachable locally. It is reachable in CI, where the admin is a superuser, and is covered by
+  the connect-time clear plus the per-transaction baseline.
 
 ---
 
@@ -109,7 +258,8 @@ and the policy tests. **There is one state document. Do not create a second.**
 ### 5 · Verification — one entry point
 
 `scripts/verify-repository.sh` replaces three commands run across two working directories.
-Twelve gates. `AGENTS.md`, the `verify` skill, and `.github/workflows/ci.yml` all invoke it.
+Twelve gates at R0; **fourteen** since Milestone 2.1 added the runtime import closure check and the PostgreSQL foundation suite. That suite creates and drops one disposable database and three per-run roles, and leaves exactly one role behind on purpose: the persistent `firmbatch_disposable_test_cluster` attestation marker.
+`AGENTS.md`, the `verify` skill, and `.github/workflows/ci.yml` all invoke it.
 
 ### 6 · `.codex/hooks.json` resolves the guard from the repository root
 
@@ -226,10 +376,10 @@ longer produce that state on its own, but a missing `python3` or an unset
 
 ## Milestone 1 result and diagnostic backlog
 
-The canonical audit gate is ready for review in
-`docs/architecture/v0-to-v1-migration-audit.md`. The following experiments remain useful
-diagnostics, but are not permission to launch billable capacity and are not prerequisites for
-the canonical Milestone 1 completion gate.
+The canonical audit gate was satisfied by `docs/architecture/v0-to-v1-migration-audit.md` and
+merged at `6b4f341`. The following experiments remain useful diagnostics against frozen v0.
+They are not permission to launch billable capacity, they were not prerequisites for the
+Milestone 1 gate, and they are not prerequisites for Milestone 2.
 
 ### 11 · Reproduce the real preemption path locally
 
@@ -251,9 +401,18 @@ become a passing target-attempt test in Milestone 6.
 No script currently generates `local-demo-001-reconciliation.json`. Any new diagnostic run must
 commit or capture the exact read-only reconciliation query set without rewriting historical evidence.
 
-### 14 · Align protected agent instructions after explicit approval
+### 14 · Align protected agent instructions after explicit approval — **RESOLVED**
 
-`AGENTS.md` and `.agents/skills/milestone/SKILL.md` still directly name the superseded pilot
-roadmap. ADR 0002 and the warning banner establish the correct authority, but the protected files
-should point directly to the canonical target and roadmap. Editing them requires explicit human
-approval under `AGENTS.md`; this audit does not change them.
+`AGENTS.md` and `.agents/skills/milestone/SKILL.md` named the superseded pilot roadmap. With
+explicit human approval, both were narrowly corrected during Milestone 2.1:
+
+- `AGENTS.md` now states the authority order — `docs/firmbatch-v1-roadmap.md` canonical,
+  `docs/architecture/v1-target-architecture.md` the implementation specification with its §17
+  invariants, `docs/STATE.md` for what the code does now, and the pilot roadmap explicitly
+  superseded. The working contract's items 1 and 4 now cite the canonical roadmap and §17
+  rather than the pilot roadmap's §7 and §5.
+- `.agents/skills/milestone/SKILL.md` inspects the canonical milestone and §17 first, and names
+  the migration audit as a required input. Its inspect → gap → bounded plan → implementation →
+  verification → durable-state workflow and its approval requirement are unchanged.
+
+No guard, hook, reviewer, or other agent-configuration change was made.

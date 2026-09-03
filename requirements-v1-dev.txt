@@ -1,0 +1,12 @@
+# Firmbatch v1 test and lint dependencies.
+#
+# What scripts/verify-repository.sh and .github/workflows/ci.yml install. Includes the
+# runtime pins, because the foundation suite exercises the real modules against a real
+# PostgreSQL 16 server -- there is no fake and no in-memory substitute.
+#
+#   python3 -m pip install -r requirements-v1-dev.txt
+
+-r requirements-v1.txt
+
+pytest==8.4.2
+ruff==0.16.5   # same pin the R0 lint gate was verified against
