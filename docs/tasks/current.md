@@ -2,8 +2,9 @@
 
 Active work and open questions. Updated at the end of each task, alongside `docs/STATE.md`.
 
-Last updated: 2026-09-03, `main` merge commit `6b4f341`, plus the uncommitted Milestone 2.1
-working tree on `feat/milestone-2-foundation` (implementation plus its review-hardening pass).
+Last updated: 2026-09-03, `main` merge commit `6b4f341`, plus Milestone 2.1 on
+`feat/milestone-2-foundation` at `521870b` and the uncommitted CI correction to the
+bootstrap administrator's trust boundary (PR #4).
 
 ---
 
@@ -17,12 +18,12 @@ milestone. It has four slices, and only the first is built.
 Delivered in the working tree: the configuration boundary, Alembic migrations into a dedicated
 `firmbatch` schema, the `tenants`/`workspaces` spine, forced row-level security with a
 transaction-local tenant context, three separated roles with a verified runtime principal,
-minimal typed repositories, a disposable-cluster attestation, and a **378-check** pytest suite
+minimal typed repositories, a disposable-cluster attestation, and a **382-check** pytest suite
 against real PostgreSQL 16 wired into `scripts/verify-repository.sh` and CI. See
 `docs/STATE.md` for what it does, and `docs/adr/0004-postgresql-tenant-isolation-foundation.md`
 for why.
 
-**Six review rounds found fifty-eight issues in total; fifty-two are corrected and one is a reported design blocker.** The first round found fifteen, the second ten, the third eight, the fourth ten, the fifth ten, the sixth five. The fifth-round blocker is PostgreSQL 16's creator-ADMIN membership row, which a non-superuser cannot revoke: see ADR 0004 section 8e and `control_plane/tests/test_admin_escalation.py`. Six were
+**Six review rounds found fifty-eight issues in total; fifty-two are corrected and one has been reclassified.** The first round found fifteen, the second ten, the third eight, the fourth ten, the fifth ten, the sixth five. The fifth-round "blocker" was PostgreSQL 16's creator-ADMIN membership row, which a non-superuser cannot revoke; it is **not a defect** but the boundary the architecture draws, and the bootstrap assertion built on it had to be withdrawn after it made CI fail. See "M2.1 CI correction" below, ADR 0004 section 8f, and `control_plane/tests/test_admin_escalation.py`. Six were
 security or destructive-safety defects reproduced against a real server before being fixed:
 temporary-table shadowing, inherited tenant context, ORM identity-map leakage, an unverified
 runtime principal, a teardown that trusted its handle (which dropped a real database during
@@ -53,6 +54,53 @@ Order for the human:
 5. Capture the foundation-suite run with `/record-evidence` into `docs/evidence/m2/` — until
    that exists, the isolation properties are asserted-and-tested, not VERIFIED LIVE.
 6. Human reviews and commits.
+
+### M2.1 CI correction — the bootstrap administrator is trusted, not isolated
+
+PR #4 failed CI on the very first thing it did:
+
+```
+DisposableDatabaseError: the shared admin can still reach the per-run owner
+(pg_has_role reports SET and USAGE)
+```
+
+`bootstrap._require_no_set_reachability()` refused to return a handle unless
+`pg_has_role(admin, owner, 'SET')` and `(..., 'USAGE')` were both false. CI's bootstrap
+administrator is the `postgres` **superuser** of an ephemeral `postgres:16` service
+container, and a superuser satisfies `pg_has_role` for every role in the cluster by
+definition. The assertion was unsatisfiable there — and it was asserting a property the
+accepted test-infrastructure boundary never promised.
+
+The mismatch was in the assertion, not in the architecture. Stated consistently now in
+`bootstrap.py`, ADR 0004 §8f, `docs/STATE.md` and here:
+
+- the bootstrap administrator is **trusted**;
+- **CI** uses a superuser inside an ephemeral PostgreSQL service container;
+- **local verification** uses an explicitly attested disposable cluster;
+- PostgreSQL administrative reachability is **accepted only inside that boundary**;
+- **customer and runtime roles remain untrusted and separated**.
+
+`_require_no_set_reachability()` is replaced by `_require_temporary_membership_released()`:
+the same catalogue reads, with the `pg_has_role` questions removed. The one-statement `SET`
+grant is still taken and still given back in a `finally`, and an explicit `set_option` or
+`inherit_option` row left where PostgreSQL permits revoking it still fails bootstrap —
+which is a real property on either kind of admin.
+
+`control_plane/tests/test_admin_escalation.py` now tests **containment** rather than the
+escalation. The test that asserted the administrator could re-acquire the owner role and
+perform an owner-only operation is removed; a passing test whose subject is a working
+escalation proves nothing the product sells. In its place: bootstrap completes under either
+kind of administrator; no revocable membership row or path carries `SET` or `INHERIT`; the
+three per-run roles hold no administrative attribute, gain no route into the administrator,
+and (for the runtime pair) none into the migration owner; the administrator's credentials
+appear in no runtime URL. The PostgreSQL 16 `CREATEROLE` `ADMIN OPTION` limitation stays
+asserted for a non-superuser administrator, and the two owner-only-refusal assertions that
+are meaningless for a superuser now `skip` with a stated reason instead of silently
+`continue`ing.
+
+**Skip counts differ by cluster shape, and both are expected.** Locally: 1 skip (granting
+`REPLICATION` needs a superuser). On CI: that test runs, and the two non-superuser-only
+assertions skip instead.
 
 ### Blocking requirement carried out of M2.1 — `AUTH-BOUND-TENANT-CONTEXT`
 
@@ -106,9 +154,11 @@ PostgreSQL 16 (16.15 observed). CI uses a `postgres:16` service container. Both 
 Environment facts worth writing down, because none is obvious and each cost a debugging
 round:
 
-- The admin role needs `CREATEDB` and `CREATEROLE`, and needs neither `SUPERUSER` nor
-  `BYPASSRLS`. A non-superuser admin is preferable: it cannot accidentally read through the
-  policies while investigating.
+- The admin role needs `CREATEDB` and `CREATEROLE`. Locally a **non-superuser** admin is
+  preferable: it cannot accidentally read through the policies while investigating. CI's
+  admin is the `postgres` **superuser** of an ephemeral service container, and that is
+  accepted — the bootstrap administrator is trusted inside an attested disposable
+  cluster. Nothing may require the admin to be a non-superuser; see ADR 0004 section 8f.
 - Roles created by the bootstrap **cannot** authenticate over the unix socket under the default
   Debian/Ubuntu `local all all peer` line in `pg_hba.conf`. The bootstrap therefore builds the
   application and provisioning URLs against the server's TCP endpoint (`SHOW port` on loopback)
@@ -152,16 +202,23 @@ round:
   round against a real server.
 - `pg_has_role(..., 'MEMBER')` is the wrong probe for "can this role become that one". In
   PostgreSQL 16 it stays true for the implicit `ADMIN` grant a `CREATEROLE` creator
-  receives, even when `SET ROLE` is refused. Use `'SET'` (may become it) and `'USAGE'`
-  (inherits it); both must be false.
+  receives, even when `SET ROLE` is refused. `'SET'` (may become it) and `'USAGE'`
+  (inherits it) are the two that describe real reach.
+- **But `pg_has_role` is the wrong question to ask of the bootstrap administrator at all.**
+  It folds in superuser authority, which no revoke changes, so requiring it to be false
+  made bootstrap unsatisfiable on CI. Assert the **catalogue** instead —
+  `pg_auth_members.set_option` / `.inherit_option`, direct rows and a recursive walk —
+  which asks what grant was left behind rather than who could get in. That property is
+  true of a superuser and a non-superuser admin alike.
 - `ALTER DATABASE ... OWNER TO` requires the *current* owner to hold `CREATEDB`, and
   `ALTER <object> OWNER TO` requires the *incoming* owner to hold `CREATE` on the schema.
   Both are why the ownership tests are shaped the way they are.
-- After bootstrap the shared admin genuinely cannot drop the disposable database: it gets
-  "must be owner of database". Tests that deliberately break the normal teardown path use
-  `conftest.drop_disposable_objects`, which re-acquires `SET` through the `ADMIN` option it
-  still holds. That says something true about the threat model rather than working around
-  it — the per-run owner is protected from a concurrent process, not from the role
+- After bootstrap a **non-superuser** admin genuinely cannot drop the disposable database:
+  it gets "must be owner of database". A superuser admin can, and that is accepted. Tests
+  that deliberately break the normal teardown path use `conftest.drop_disposable_objects`,
+  which re-acquires `SET` through the `ADMIN` option a non-superuser still holds. That
+  says something true about the threat model rather than working around it
+  — the per-run owner is protected from a concurrent process, not from the
   administrator that created it.
 - Releasing a savepoint does **not** undo a `SET LOCAL` made inside it; only rolling the
   savepoint back does. That is why tenant switches inside a savepoint are refused outright

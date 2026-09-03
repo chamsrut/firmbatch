@@ -33,8 +33,8 @@ from firmbatch.control_plane.testing import bootstrap as bootstrap_version
 from firmbatch.control_plane.testing.bootstrap import create_disposable_database, drop_disposable_database
 
 #: The suite asserts PostgreSQL 16 behaviour -- FORCE ROW LEVEL SECURITY, the SET/ADMIN
-#: split on role membership, ``pg_has_role(..., 'SET')``, ``pg_control_system()`` readable
-#: by a non-superuser, the PG15+ public-schema defaults. Running it against another major
+#: split on role membership, the ``pg_auth_members`` option columns, ``pg_control_system()``
+#: readable by a non-superuser, the PG15+ public-schema defaults. Running it against another major
 #: version would report a green that says nothing about the server the product targets.
 #:
 #: **The authoritative check is the bootstrap preflight**
@@ -52,18 +52,19 @@ def drop_disposable_objects(
 
     Tests that deliberately break the bootstrap or the teardown still have to leave the
     cluster clean, and they can no longer do it the easy way: since the per-run owner
-    became the sole deletion authority, the shared admin gets "must be owner of database"
-    for the ``DROP``, and ``DROP DATABASE ... WITH (FORCE)`` is not available to it either.
-    That refusal is the property under test in half this suite, so it is not something to
-    work around -- this helper takes the same route the product code takes, by acting as
-    the owner.
+    became the sole deletion authority, a non-superuser admin gets "must be owner of
+    database" for the ``DROP``, and ``DROP DATABASE ... WITH (FORCE)`` is not available to
+    it either. That refusal is the property under test in half this suite, so it is not
+    something to work around -- this helper takes the same route the product code takes, by
+    acting as the owner.
 
-    It does need to re-acquire ``SET`` first, which the bootstrap deliberately gave up.
-    That is possible only because this admin holds ``ADMIN OPTION`` on the role it created,
-    and it is a *deliberate* re-grant by a role-administrator rather than the standing
-    reachability finding 5 was about. It says something true about the threat model: the
-    per-run owner is protected from a concurrent process, not from the cluster
-    administrator who created it. See ADR 0004 section 8e.
+    It re-acquires ``SET`` first, which the bootstrap deliberately gave up. That is a
+    *deliberate* re-grant by the trusted bootstrap administrator -- through the ``ADMIN
+    OPTION`` it holds on the role it created, or by superuser authority in CI -- and not the
+    accidental standing grant finding 5 was about. It says something true about the threat
+    model rather than working around it: the per-run owner is protected from a concurrent
+    process, not from the administrator that created it. That reach is accepted inside an
+    attested disposable cluster; see ADR 0004 section 8f.
     """
     engine = create_engine(
         config.load_test_admin_url(environment), isolation_level="AUTOCOMMIT", future=True

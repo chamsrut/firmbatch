@@ -42,6 +42,20 @@ path: attestation, cluster fingerprint, maintenance database, name, provenance a
 identity are re-checked either way. If that validation cannot be completed the object is
 **leaked deliberately** and reported, rather than dropped on a weaker check.
 
+**The bootstrap administrator is trusted; the roles it creates are not.** This admin is
+reachable only through :class:`config.TestBootstrapSettings`, and only against a cluster
+that has explicitly attested it is disposable. Inside that boundary its administrative
+reach over the per-run owner is **accepted rather than defended against**: CI runs as the
+``postgres`` superuser of an ephemeral service container, and a superuser satisfies
+``pg_has_role`` for every role in the cluster by definition. Nothing here claims the
+bootstrap administrator is isolated from the roles it creates.
+
+What *is* asserted is narrower, catalogue-level, and true of either kind of admin: the
+temporary ``SET`` membership taken for one statement is given back, so no explicit
+``set_option`` or ``inherit_option`` row survives where PostgreSQL permits revoking it.
+The untrusted side of the boundary -- the per-run owner, application and provisioning
+roles -- stays separated from the admin's credentials and from each other.
+
 **Generated passwords never reach a log.** They are composed with psycopg's literal
 quoting rather than f-string interpolation, and every exception raised out of role
 creation is scrubbed of them before it propagates.
@@ -75,8 +89,9 @@ DEFAULT_PORT = 5432
 #: The only PostgreSQL major version this foundation is verified against.
 #:
 #: Every property the suite asserts is a PostgreSQL property -- forced row-level security,
-#: the PG16 split of SET out of ADMIN on role membership, ``pg_has_role(..., 'SET')``,
-#: ``pg_control_system()`` readable by a non-superuser, the PG15+ public-schema defaults.
+#: the PG16 split of SET out of ADMIN on role membership, the ``pg_auth_members`` option
+#: columns, ``pg_control_system()`` readable by a non-superuser, the PG15+ public-schema
+#: defaults.
 #: Provisioning against another major version would produce a green that says nothing about
 #: the server the product targets, and on 15 or 17 several of them are simply different.
 REQUIRED_SERVER_VERSION_MAJOR = 16
@@ -470,13 +485,18 @@ def _create_login_role(engine, role: str, password: str, marker: str, record) ->
     return identity
 
 
-# ------------------------------------------------------ the admin's reach into the owner
+# ------------------------------------------- giving back the temporary owner membership
 
 
 #: Every membership row naming ``role``, whoever granted it. Read straight out of
 #: ``pg_auth_members`` rather than inferred, because the inference was wrong twice:
 #: ``pg_has_role(..., 'MEMBER')`` stays true for an ADMIN-only grant, and a plain
 #: ``REVOKE`` silently leaves rows it was not entitled to remove.
+#:
+#: The catalogue is also the *only* question worth asking here. ``pg_has_role`` answers
+#: "may this role reach that one", which for the trusted bootstrap administrator is a
+#: property of its cluster authority -- a superuser satisfies it unconditionally -- and not
+#: something this module grants, revokes or can assert anything about.
 _MEMBERSHIP_ROWS_SQL = """
 SELECT m.grantor::regrole::text, m.member::regrole::text,
        m.admin_option, m.inherit_option, m.set_option
@@ -487,8 +507,9 @@ ORDER BY 1, 2
 """
 
 #: Every role reachable from ``current_user`` by following membership grants, and whether
-#: the path carries SET or INHERIT. ``pg_has_role`` answers the same question, but a
-#: recursive walk can *name the path*, which is what an operator needs in order to fix it.
+#: the path carries SET or INHERIT. Deliberately a walk over stored grants rather than
+#: ``pg_has_role``: it names the path an operator would have to revoke, and it answers only
+#: about grants -- ``pg_has_role`` folds in superuser authority, which no revoke can change.
 _REACHABLE_PATH_SQL = """
 WITH RECURSIVE reachable(oid, path, can_set, inherits) AS (
     SELECT r.oid, ARRAY[r.rolname]::text[], true, true
@@ -521,27 +542,6 @@ def _reachable_paths(connection, role: str) -> list[tuple]:
     with connection.connection.driver_connection.cursor() as cursor:
         cursor.execute(_REACHABLE_PATH_SQL, {"role": role})
         return list(cursor.fetchall())
-
-
-def _reachability(connection, role: str) -> tuple[bool, bool]:
-    """``(can SET ROLE to it, inherits its privileges)``, asked of the server.
-
-    ``'MEMBER'`` is the wrong question and answering it was a real mistake here: in
-    PostgreSQL 16 it stays true for the implicit ``ADMIN`` grant a ``CREATEROLE`` creator
-    receives, even when ``SET ROLE`` is denied. The two privilege types that describe
-    actual reach are ``'SET'`` (may become the role) and ``'USAGE'`` (holds its privileges
-    without becoming it). Both must be false, and they fail in different ways: revoking
-    only the SET option leaves an inheriting grant behind, which is reachability by
-    another name.
-    """
-    can_set, inherits = connection.execute(
-        text(
-            "SELECT pg_catalog.pg_has_role(current_user, :r, 'SET'), "
-            "       pg_catalog.pg_has_role(current_user, :r, 'USAGE')"
-        ),
-        {"r": role},
-    ).one()
-    return bool(can_set), bool(inherits)
 
 
 def _grant_set_option(connection, role: str) -> None:
@@ -584,18 +584,19 @@ def _revoke_owner_membership(connection, role: str) -> None:
     ``REVOKE ... GRANTED BY postgres`` is refused outright with "Only roles with privileges
     of role postgres may revoke privileges granted by this role", and
     ``REVOKE ADMIN OPTION FOR`` hits the same warning. All three verified against a real
-    PostgreSQL 16 server.
+    PostgreSQL 16 server. (A superuser bootstrap administrator receives no creator row at
+    all, so for it the first two statements simply remove what this function granted.)
 
-    **The consequence, stated plainly: the shared admin can re-grant itself SET at any
-    time.** ``GRANT owner TO CURRENT_USER WITH SET TRUE`` succeeds, because it holds
-    ``ADMIN OPTION`` on a row nothing in this process may remove. That is a property of
-    PostgreSQL's role model, not of this code, and it is recorded as a residual in ADR 0004
-    section 8e rather than papered over -- and pinned by a live test in
-    ``tests/test_admin_escalation.py`` so a future PostgreSQL that closes it is noticed.
+    **What this is not.** Giving the temporary options back does not make the bootstrap
+    administrator unable to reach the owner, and nothing here pretends otherwise. A
+    non-superuser creator keeps ``ADMIN OPTION`` on a row nothing in this process may
+    remove, so it may re-grant itself ``SET`` whenever it likes; a superuser needs no row
+    at all. That reach is *accepted* -- the administrator is trusted, and is confined to an
+    attested disposable cluster and to ``TestBootstrapSettings``. See ADR 0004 section 8f.
 
-    It is also why the ADMIN row is not something to fight: it is what lets the admin
+    The ADMIN row is also not something to fight: it is what lets a non-superuser admin
     ``DROP ROLE`` the per-run roles at teardown. Removing it, if that were possible, would
-    trade a documented residual for a guaranteed leak.
+    trade an accepted property for a guaranteed leak.
     """
     quoted = roles.quote_identifier(role)
     connection.execute(text(f"REVOKE SET OPTION FOR {quoted} FROM CURRENT_USER"))
@@ -605,42 +606,41 @@ def _revoke_owner_membership(connection, role: str) -> None:
     connection.execute(text(f"REVOKE {quoted} FROM CURRENT_USER"))
 
 
-def _require_no_set_reachability(admin_url: str, role: str) -> None:
-    """Prove, on a **new** connection, that the shared admin cannot *currently* become ``role``.
+def _require_temporary_membership_released(admin_url: str, role: str) -> None:
+    """Prove, on a **new** connection, that the one-statement grant was actually given back.
 
     A new connection because role membership is resolved per session: checking on the
     session that just did the revoke could be answered from state that a fresh login would
     not have.
 
-    Three independent readings, because the first two were each wrong once:
+    Two readings, both straight out of the catalogue:
 
-    1. ``pg_has_role(..., 'SET')`` and ``(..., 'USAGE')`` -- the recursive answer to "may
-       this role become, or inherit, that one". ``'MEMBER'`` is *not* used: in PostgreSQL 16
-       it stays true for the ADMIN-only grant a ``CREATEROLE`` creator receives, even when
-       ``SET ROLE`` is refused.
-    2. Every direct ``pg_auth_members`` row, read from the catalogue. No row may carry
-       ``set_option`` or ``inherit_option``. A plain ``REVOKE`` looked like it worked and
-       left the row untouched, so the inferred answer and the stored one disagreed.
-    3. A recursive walk of membership paths, so an *indirect* route -- admin to some
+    1. Every direct ``pg_auth_members`` row naming ``role``. None may carry ``set_option``
+       or ``inherit_option``. A plain ``REVOKE`` once looked like it worked and left the row
+       untouched, so the inferred answer and the stored one disagreed -- the stored one is
+       the fact.
+    2. A recursive walk of membership paths, so an *indirect* route -- admin to some
        intermediate role to the owner -- is caught and named rather than missed.
 
-    **What this does not, and cannot, establish.** The creator's ``ADMIN OPTION`` row
-    survives all of this. See :func:`_revoke_owner_membership` for why PostgreSQL 16 does
-    not permit removing it, and ADR 0004 section 8e for the threat-model consequence. What is
-    asserted here is the absence of *standing* reachability, which is a real property and
-    the one that matters against a concurrent process; it is not a claim that a role
-    administrator cannot deliberately re-acquire the role.
+    **What this deliberately does not ask.** It does not call ``pg_has_role``, and it does
+    not require the bootstrap administrator to be unable to reach ``role``. That
+    administrator is trusted: CI runs as the ``postgres`` superuser of an ephemeral service
+    container, and a superuser satisfies ``pg_has_role(..., 'SET'/'USAGE')`` for every role
+    in the cluster no matter what this module revokes. Requiring the opposite made bootstrap
+    fail on exactly the cluster shape the accepted architecture describes.
+
+    So the property here is hygiene rather than isolation, and it is real on either kind of
+    admin: an explicit membership row carrying ``SET`` or ``INHERIT`` that PostgreSQL would
+    have let us revoke must not be left behind. A non-superuser creator's ``ADMIN OPTION``
+    row is not revocable (see :func:`_revoke_owner_membership`) and carries neither option,
+    so it passes and stays -- teardown needs it. Containment of the trusted administrator is
+    the attestation marker and ``TestBootstrapSettings``, not this check; ADR 0004 section
+    8f states that boundary.
     """
     engine = _admin_engine(admin_url)
     try:
         with engine.connect() as connection:
-            can_set, inherits = _reachability(connection, role)
             problems = []
-            if can_set:
-                problems.append("pg_has_role reports SET")
-            if inherits:
-                problems.append("pg_has_role reports USAGE (inheritance)")
-
             for grantor, member, admin_option, inherit_option, set_option in _membership_rows(
                 connection, role
             ):
@@ -656,14 +656,15 @@ def _require_no_set_reachability(admin_url: str, role: str) -> None:
 
             for path, path_set, path_inherits in _reachable_paths(connection, role):
                 if path_set or path_inherits:
-                    problems.append(f"an indirect membership path reaches it: {' -> '.join(path)}")
+                    problems.append(f"an indirect membership path carries it: {' -> '.join(path)}")
 
             if problems:
                 raise DisposableDatabaseError(
-                    f"the shared admin can still reach the per-run owner {role!r} after bootstrap "
-                    f"({'; '.join(problems)}). That would make owner-bound deletion authority "
-                    "indistinguishable from ambient admin authority, so bootstrap fails rather "
-                    "than claiming a separation it does not have."
+                    f"the temporary SET membership on the per-run owner {role!r} was not given "
+                    f"back ({'; '.join(problems)}). The bootstrap grants it for one statement "
+                    "and revokes it in a finally, so a surviving option means that revoke did "
+                    "not do what it claims -- bootstrap fails rather than leaving an explicit "
+                    "grant nobody asked for."
                 )
     finally:
         engine.dispose()
@@ -1093,9 +1094,10 @@ def create_disposable_database(env: Mapping[str, str] | None = None) -> Disposab
                 )
 
             # SET membership is granted for exactly one statement and revoked in a
-            # finally, including when that statement fails. A shared admin that keeps
-            # SET ROLE into the per-run owner would make the owner an alias for the admin
-            # rather than a separate authority.
+            # finally, including when that statement fails. Not because it would otherwise
+            # let the trusted admin reach the owner -- it can, and that is accepted -- but
+            # because an explicit standing grant nobody asked for is state this bootstrap
+            # would be leaving behind on somebody's cluster.
             _grant_set_option(connection, owner_role)
             try:
                 # OWNER matters: this is what makes the per-run role the deletion
@@ -1149,9 +1151,11 @@ def create_disposable_database(env: Mapping[str, str] | None = None) -> Disposab
             owner_admin.dispose()
 
         # The revoke above is verified from a NEW admin session, because membership is
-        # resolved per session. Bootstrap fails rather than returning a handle whose
-        # owner-bound authority is really the admin's authority wearing a different name.
-        _require_no_set_reachability(admin_url, owner_role)
+        # resolved per session. Catalogue rows only: whether the trusted bootstrap
+        # administrator can still *reach* the owner is a property of its cluster authority
+        # -- a superuser always can -- and is accepted by ADR 0004 section 8f rather than
+        # asserted against here.
+        _require_temporary_membership_released(admin_url, owner_role)
     except (config.ConfigurationError, DisposableDatabaseError):
         # A deliberate refusal -- a missing attestation, an unsafe target, a name
         # collision. It already says exactly what was wrong and callers match on its

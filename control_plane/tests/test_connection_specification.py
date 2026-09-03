@@ -290,4 +290,3 @@ def test_the_normalised_url_still_names_exactly_one_endpoint(url):
     for field in ("host", "dbname", "user"):
         assert "," not in str(arguments[field]), f"{field} reached psycopg as a list"
     assert "hostaddr" not in arguments
-

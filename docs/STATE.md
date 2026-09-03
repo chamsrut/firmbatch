@@ -14,9 +14,10 @@ Five labels, kept strictly apart:
 - **NOT VERIFIED** — asserted, expected, or reasoned about, with no captured run behind it.
   Documentation, comments, and passing-in-the-moment are not evidence.
 
-Last updated: 2026-09-03, at `main` merge commit `6b4f341` (Milestone 1), plus the
-uncommitted Milestone 2.1 working tree on `feat/milestone-2-foundation` (implementation
-plus its review-hardening pass).
+Last updated: 2026-09-03, at `main` merge commit `6b4f341` (Milestone 1), plus
+Milestone 2.1 on `feat/milestone-2-foundation` at `521870b` (implementation plus its
+review-hardening pass) and the uncommitted CI correction to the bootstrap
+administrator's trust boundary (PR #4; see the CI correction section below).
 
 ---
 
@@ -72,8 +73,8 @@ end of this section.
 | `control_plane/db/roles.py` | The grants that separate the owner, the restricted application role, and the narrow provisioning role. Revokes `TEMP` on the database, `CREATE` on schemas, and `EXECUTE` on the tenant-context helper from PUBLIC first — nothing is inherited from a PostgreSQL default. Deliberately outside the migration: role names are environment-specific. |
 | `control_plane/db/repositories.py` | `TenantRepository` (provisioning) and `WorkspaceRepository` (tenant-scoped). Neither writes a `WHERE tenant_id = ...` clause; RLS is the filter. |
 | `control_plane/testing/attestation.py` | The disposable-cluster marker (a `NOLOGIN` role with an exact comment) and the cluster fingerprint, plus a `--mark`/`--check`/`--unmark` CLI. No database or role is created or dropped on an unattested server. |
-| `control_plane/testing/bootstrap.py` | Creates a disposable `firmbatch_test_<random>` database plus **three** per-run `NOSUPERUSER NOBYPASSRLS NOREPLICATION` login roles -- a per-run owner (the migration principal and the deletion authority), an application role and a provisioning role -- migrates it, applies the grants, and drops all three afterwards. Cleans up after any failure, including during migration and grants. Teardown re-checks attestation, cluster identity, URL consistency, the recorded endpoint, and that the handle was produced by this process and is unaltered. |
-| `control_plane/tests/` | **378 pytest checks** against real PostgreSQL 16, in nineteen modules: configuration boundary, settings separation, connection specification, connection environment, migrations, migration entry points, version preflight, tenant isolation, isolation hardening, bind forms, ownership boundary, admin escalation, bootstrap safety, bootstrap lifecycle, connection identity, destructive safety, verification reporting, role privileges, plus the shared conftest. They **fail rather than skip** when the server, the attestation, or `FIRMBATCH_TEST_DATABASE_URL` is absent, and refuse any PostgreSQL major version other than 16. |
+| `control_plane/testing/bootstrap.py` | Creates a disposable `firmbatch_test_<random>` database plus **three** per-run `NOSUPERUSER NOBYPASSRLS NOREPLICATION` login roles -- a per-run owner (the migration principal and the deletion authority), an application role and a provisioning role -- migrates it, applies the grants, and drops all three afterwards. Cleans up after any failure, including during migration and grants. Teardown re-checks attestation, cluster identity, URL consistency, the recorded endpoint, and that the handle was produced by this process and is unaltered. The bootstrap administrator is **trusted** and confined to `TestBootstrapSettings` and an attested disposable cluster; the temporary `SET` membership taken for `CREATE DATABASE ... OWNER` is given back and that is verified from the catalogue, but nothing asserts the administrator cannot reach the roles it creates -- CI runs it as the `postgres` superuser, which reaches every role by fiat. See ADR 0004 section 8f. |
+| `control_plane/tests/` | **382 pytest checks** against real PostgreSQL 16, in nineteen modules: configuration boundary, settings separation, connection specification, connection environment, migrations, migration entry points, version preflight, tenant isolation, isolation hardening, bind forms, ownership boundary, admin escalation, bootstrap safety, bootstrap lifecycle, connection identity, destructive safety, verification reporting, role privileges, plus the shared conftest. They **fail rather than skip** when the server, the attestation, or `FIRMBATCH_TEST_DATABASE_URL` is absent, and refuse any PostgreSQL major version other than 16. |
 | `requirements-v1*-lock.txt` | Fully resolved, hash-pinned dependency graphs for CPython 3.11 on Linux, generated with `pip-compile --generate-hashes`. CI installs from these with `--require-hashes`. |
 
 Design decisions are recorded in `docs/adr/0004-postgresql-tenant-isolation-foundation.md`,
@@ -170,7 +171,7 @@ what the fix had to be.
 | Ambient libpq environment (P1) | An explicit URL does not neutralise the environment. `PGOPTIONS='-c search_path=pg_temp,public'` reached the server through a fully explicit socket URL; `PGHOSTADDR` overrides the host of a validated URL outright. | One central policy, checked from the `do_connect` dialect event and again on pool checkout, on **every** engine this package builds. Fail-closed and never mutating `os.environ`, because unsetting around a connect would race the very moment the connection is made. `PGPASSWORD`/`PGPASSFILE` are exempt and documented: they can decide whether authentication succeeds, never who or where |
 | Optional migration validation (P1) | `downgrade_to(url, rev)` took a bare URL and no validator, and `alembic upgrade head` opened its own connection with no validation at all. A downgrade drops tables and policies, so it was the more dangerous of the two. | Every online entry point now requires a live pre-validated `Connection` **and** a validator; `env.py` refuses a direct invocation before `SET`, `CREATE SCHEMA` or any DDL. Offline `--sql` rendering is untouched -- it executes nothing |
 | Ownership checked too narrowly (P1) | The check covered two tenant tables. The database, the `firmbatch` schema, every other relation, `app_current_tenant_id()` and every type were all unguarded -- and an owner does not have to defeat a policy, it can remove one. | One `UNION` over all five object kinds, direct and SET-ROLE-reachable, from both identities, with a precise rejection reason |
-| Persistent admin reachability (P1) | `CREATE DATABASE ... OWNER` needs `SET ROLE`, and the grant that provided it was never revoked. The shared admin kept standing reachability into every per-run owner, which made owner-bound deletion authority an alias for admin authority. | Granted for one statement, revoked in a `finally`, and verified on a **new** session. Verified live: afterwards the admin gets `must be owner of database` for `COMMENT`, `REVOKE CONNECT`, `ALTER ... CONNECTION LIMIT` and `DROP DATABASE` |
+| Persistent admin reachability (P1) | `CREATE DATABASE ... OWNER` needs `SET ROLE`, and the grant that provided it was never revoked, leaving an explicit standing membership row on every per-run owner. | Granted for one statement, revoked in a `finally`, and verified on a **new** session against `pg_auth_members`. Verified live on a non-superuser admin: afterwards it gets `must be owner of database` for `COMMENT`, `ALTER ... CONNECTION LIMIT`, `ALTER ... RENAME` and `DROP DATABASE`. **The isolation claim originally attached to this row was wrong and has been withdrawn** — see "CI correction" below and ADR 0004 section 8f |
 | Altering before identifying (P2) | `REVOKE CONNECT` and `pg_terminate_backend` ran by name, on the admin connection, **before** any OID or provenance check. Pointed at a same-name replacement they would have hit it. | Both now run as the owner, after the target's OID, marker and live `datdba` are re-read on that same connection. Tested with a live session on a replacement: grants, connection limit and session all untouched |
 | Non-transactional role creation (P2) | `CREATE ROLE`, `COMMENT` and the identity read were three autocommit statements. A failure at the second or third left a real role behind that no cleanup list knew about -- and this module refuses to drop what it cannot prove it created, so that role was permanent. | One transaction, with the identity recorded *before* the commit. Recording after leaves a window holding a real unrecorded object; recording before leaves one holding an identity for a role that never existed, which cleanup treats as a no-op |
 | Unproven states around `CREATE DATABASE` (P2) | The owner's maintenance URL was built *after* the admin block, so any failure between `CREATE DATABASE` and the end of that block cleaned up with no owner authority and left the database behind. | An explicit state machine. The owner's cleanup authority is proven before anything is created; the database OID is recorded the instant `CREATE DATABASE` returns, before the marker is written |
@@ -180,19 +181,22 @@ what the fix had to be.
 Two of my own errors surfaced while fixing these. `pg_has_role(..., 'MEMBER')` is the wrong
 probe for "can this role become that one" -- in PostgreSQL 16 it stays true for the implicit
 `ADMIN` grant a `CREATEROLE` creator receives, even when `SET ROLE` is refused; `'SET'` and
-`'USAGE'` are the right ones. And granting `WITH SET TRUE` without `INHERIT FALSE, ADMIN
+`'USAGE'` describe real reach. And granting `WITH SET TRUE` without `INHERIT FALSE, ADMIN
 FALSE` leaves an *inheriting* membership row behind after `REVOKE SET OPTION FOR`, which is
-reachability under another name. Both were caught by the new assertions rather than by
-reading.
+a standing grant under another name. Both were caught by the new assertions rather than by
+reading. A third error, larger than either, is recorded under "CI correction" below:
+`pg_has_role` was then used as a *bootstrap-success requirement*, which asked the wrong
+question entirely of a trusted administrator.
 
-### Fifth hardening pass — ten findings, nine closed and one reported as a blocker
+### Fifth hardening pass — ten findings, nine closed and one reclassified
 
-A fifth independent review found ten issues, five of them P1. Nine are corrected. **One is
-a design blocker and is reported rather than closed** — see below, and ADR 0004 section 8e.
+A fifth independent review found ten issues, five of them P1. Nine are corrected. **One was
+reported as a design blocker and has since been reclassified as an accepted boundary** —
+see below, and ADR 0004 section 8f.
 
 | Finding | What was demonstrated | Outcome |
 | --- | --- | --- |
-| Shared-admin access to the owner role (P1) | The request was to revoke the *entire* membership, ADMIN included. PostgreSQL 16 does not permit it. | **Blocked — reported, not weakened.** See the note below |
+| Shared-admin access to the owner role (P1) | The request was to revoke the *entire* membership, ADMIN included. PostgreSQL 16 does not permit it. | **Not a defect.** Reclassified: the bootstrap administrator is trusted and confined, not isolated. See the note below |
 | Bypassable migration validation (P1) | `upgrade_to_head(conn, validate=lambda c: None)` authorised DDL against anything at all, and read like a checked migration. A seam in a safety check is a bypass with extra steps. | The callback is gone. What travels is an immutable `ExpectedIdentity` (database, cluster system identifier, endpoint, principal); `env.py` calls the canonical validator itself and refuses anything that is not that type — a callable, a flag, or a look-alike object |
 | Unguarded attestation connections (P1) | `attestation._admin_engine` built a bare engine. Marking and unmarking decide whether anything else may create or drop, so a misdirected connection there is worse than an ordinary one. | The same `do_connect` guard as every other engine |
 | A race window before `engine.connect()` (P1) | The migration path checked the environment once, then connected. An engine can be built, the environment can change, and the connection opens under it. | The check moved onto the engine as a `do_connect` handler, so it runs immediately before *each* physical DBAPI connection. Every engine constructor in the package audited |
@@ -203,23 +207,77 @@ a design blocker and is reported rather than closed** — see below, and ADR 000
 | "Zero roles" was the wrong assertion (P2) | The cluster is supposed to keep exactly one role forever — the attestation marker. A count that ignored the distinction could pass while a per-run role survived. | Per-run objects are named by kind and asserted individually; the marker is asserted **present**. Two consecutive lifecycles compared against the starting state |
 | Stale documentation (P3) | Counts and descriptions had drifted. | Corrected here and in the roadmap task notes |
 
-**The blocker, stated precisely.** When a non-superuser `CREATEROLE` role creates a role,
-PostgreSQL 16 gives the creator a `pg_auth_members` row whose **grantor is the bootstrap
-superuser**, carrying `admin_option`. A non-superuser cannot remove that row: a plain
-`REVOKE` and `REVOKE ADMIN OPTION FOR` both warn and change nothing, and
-`REVOKE ... GRANTED BY postgres` is refused outright. Holding `ADMIN OPTION`, the shared
-admin can therefore `GRANT owner TO CURRENT_USER WITH SET TRUE` and become the owner at
-will. All three spellings were verified against a real server.
+**The PostgreSQL 16 mechanism, stated precisely.** When a non-superuser `CREATEROLE` role
+creates a role, PostgreSQL 16 gives the creator a `pg_auth_members` row whose **grantor is
+the bootstrap superuser**, carrying `admin_option`. A non-superuser cannot remove that row:
+a plain `REVOKE` and `REVOKE ADMIN OPTION FOR` both warn and change nothing, and
+`REVOKE ... GRANTED BY postgres` is refused outright. All three spellings were verified
+against a real server. Holding `ADMIN OPTION`, that administrator can re-grant itself `SET`
+and become the owner at will. A superuser administrator receives no such row and needs
+none.
 
-This cannot be closed from inside this repository, and removing the ADMIN row would not be
-desirable even if it were possible: it is what lets the admin `DROP ROLE` the per-run roles
-at teardown, so losing it would trade a documented residual for a guaranteed leak of three
-roles per run. What *is* established, and what the design leans on, is the absence of
-**standing** reachability — no `set_option`, no `inherit_option`, no direct or indirect
-membership path, and PostgreSQL refusing the admin every owner-only operation outright. A
-concurrent process holding the shared admin credentials cannot assume the owner's identity
-as it stands. `tests/test_admin_escalation.py` pins the residual so a future PostgreSQL that
-closes it is noticed rather than assumed.
+**This was reported as a blocker, and that classification was wrong.** It is not a defect
+to be closed; it is the boundary the architecture already draws. The bootstrap
+administrator is trusted, and the row is also what lets a non-superuser administrator
+`DROP ROLE` the per-run roles at teardown — removing it, were that possible, would trade an
+accepted property for a guaranteed leak of three roles per run. The correction is recorded
+in full below.
+
+### CI correction — the bootstrap administrator is trusted, not isolated
+
+The reclassification above was forced by a real failure rather than by an argument. The
+Milestone 2.1 foundation branch could not pass CI:
+
+```
+DisposableDatabaseError: the shared admin can still reach the per-run owner
+(pg_has_role reports SET and USAGE)
+```
+
+`bootstrap._require_no_set_reachability()` required
+`pg_has_role(admin, owner, 'SET'/'USAGE')` to be **false** before it would return a handle.
+CI's bootstrap administrator is the `postgres` **superuser** of an ephemeral `postgres:16`
+service container, and a superuser satisfies `pg_has_role` for every role in the cluster by
+definition. The assertion was unsatisfiable there, and it was asserting a property the
+accepted test-infrastructure boundary never promised.
+
+**What the code now states, consistently, in `bootstrap.py`, ADR 0004 section 8f and here:**
+
+- the bootstrap administrator is **trusted**;
+- **CI** runs it as the `postgres` superuser inside an ephemeral PostgreSQL service
+  container, created and destroyed by the job;
+- **local verification** runs it as a non-superuser `CREATEROLE` administrator on an
+  explicitly attested disposable cluster;
+- PostgreSQL administrative reachability into the per-run roles is **accepted inside that
+  boundary** and nowhere else — no isolation from it is claimed;
+- **customer and runtime roles remain untrusted and separated**, and that is asserted
+  identically in CI and locally.
+
+**What changed.** `_require_no_set_reachability()` is gone as a bootstrap-success
+requirement, replaced by `_require_temporary_membership_released()`: same catalogue reads —
+every direct `pg_auth_members` row plus a recursive walk for indirect paths — with the
+`pg_has_role` questions removed. The one-statement `SET` grant is still taken and still
+given back in a `finally`, and an explicit `set_option` or `inherit_option` row surviving
+where PostgreSQL permits revoking it still fails bootstrap. That property holds for a
+superuser and a non-superuser administrator alike.
+
+`tests/test_admin_escalation.py` was rewritten to match. The test that asserted the
+administrator could re-acquire the owner role and perform an owner-only operation is
+**removed**: a passing test whose subject is a working escalation is not evidence of
+anything the product sells. What replaces it tests containment — bootstrap completes under
+either kind of administrator; no revocable membership row or path carries `SET` or
+`INHERIT`; the three per-run roles hold no administrative attribute, gain no route into the
+administrator, and (for the runtime pair) none into the migration owner; the
+administrator's credentials appear in no runtime URL. The PostgreSQL 16 `CREATEROLE`
+limitation stays asserted for a non-superuser administrator and skips, with a stated
+reason, for a superuser. The two owner-only-refusal assertions that are meaningless for a
+superuser now `skip` with that reason rather than `continue` past a green they did not
+earn.
+
+Nothing else moved. Runtime-principal validation, application-versus-migration settings
+separation, forced RLS, the tenant transaction and identity-map guards, exact migration
+connection validation, disposable-cluster attestation, database and role identity checks,
+and the refusal to load bootstrap settings as application settings are all unchanged and
+still asserted.
 
 ### The tenant-context limitation, and what it blocks
 
@@ -258,7 +316,7 @@ No test asserts that the limitation exists. A passing test whose subject is a vu
 reads as a specification for it, and would have to be deleted rather than fixed when the
 capability lands.
 
-### What the 377 passing tests establish, and what they do not
+### What the 381 passing tests establish, and what they do not
 
 They establish **implemented and tested** behaviour on a locally provisioned PostgreSQL 16
 server, in a database created and destroyed by the run. They are **NOT VERIFIED LIVE** under
@@ -395,8 +453,8 @@ capture new artifacts with provenance matching the committed tree.
 
 | Claim | How to settle it |
 | --- | --- |
-| All **fourteen** gates in `scripts/verify-repository.sh` pass: layout (67 required files), agent configuration, hygiene, v0 property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 247/247, the runtime import closure check, and the PostgreSQL foundation suite 377/377 (1 skipped: granting REPLICATION needs a superuser admin, which CI has and the developer cluster does not). Observed locally on 2026-09-03 against PostgreSQL 16.15 on the developer's WSL machine. | `/record-evidence` → `docs/evidence/r0/gates.txt` (and a Milestone 2 artifact for the foundation suite), after the commit. |
-| The M2.1 tenant-isolation properties hold in PostgreSQL: absent context reads nothing and writes nothing; tenant A cannot read, insert, update or delete tenant B's rows; a fabricated cross-tenant or dangling foreign key is rejected; tenant context is not inherited from a session value, a pooled connection, or a URL option; a reused ORM `Session` cannot serve a previous tenant's object; a temporary relation cannot shadow a Firmbatch table; the application role is non-owner, `NOSUPERUSER`, `NOBYPASSRLS`, is refused at connect time if it were any of those, cannot disable a policy, cannot create tables or temporary tables, cannot read the schema history, and cannot create a tenant even with matching context; workspace uniqueness is tenant-local. 377/377 pytest checks pass, 1 skipped. | `/record-evidence` → `docs/evidence/m2/tenant-isolation-suite.txt`, after the Milestone 2.1 commit. Until then this is a re-runnable claim with no captured artifact. |
+| All **fourteen** gates in `scripts/verify-repository.sh` pass: layout (67 required files), agent configuration, hygiene, v0 property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 247/247, the runtime import closure check, and the PostgreSQL foundation suite 381/381 (1 skipped locally: granting REPLICATION needs a superuser admin, which CI has and the developer cluster does not. On CI that test runs and two others skip instead -- the owner-only-refusal assertions, which have no meaning for a superuser bootstrap administrator). Observed locally on 2026-09-03 against PostgreSQL 16.15 on the developer's WSL machine. | `/record-evidence` → `docs/evidence/r0/gates.txt` (and a Milestone 2 artifact for the foundation suite), after the commit. |
+| The M2.1 tenant-isolation properties hold in PostgreSQL: absent context reads nothing and writes nothing; tenant A cannot read, insert, update or delete tenant B's rows; a fabricated cross-tenant or dangling foreign key is rejected; tenant context is not inherited from a session value, a pooled connection, or a URL option; a reused ORM `Session` cannot serve a previous tenant's object; a temporary relation cannot shadow a Firmbatch table; the application role is non-owner, `NOSUPERUSER`, `NOBYPASSRLS`, is refused at connect time if it were any of those, cannot disable a policy, cannot create tables or temporary tables, cannot read the schema history, and cannot create a tenant even with matching context; workspace uniqueness is tenant-local. 381/381 pytest checks pass, 1 skipped. | `/record-evidence` → `docs/evidence/m2/tenant-isolation-suite.txt`, after the Milestone 2.1 commit. Until then this is a re-runnable claim with no captured artifact. |
 | The destructive-safety properties hold: a forged, altered, cross-server, or foreign-cluster teardown handle is refused and the database survives; an unattested server refuses both creation and teardown; a failure after creation removes the database and both roles; a generated password never reaches exception text, stdout, or stderr. Covered by `control_plane/tests/test_bootstrap_safety.py`. | Same artifact as the row above. |
 | The shared policy engine denies the R0 accident classes across both adapter protocols — multi-line blocks classified line by line, `git -C`/`git -c`, `gh` and `aws` global options, `env`/`timeout` prefixes, `cd`/`cd -`/`pushd`/`popd`/`||` sequences, subshell grouping, argparse-abbreviated provider selection, evidence-tree ancestors including glob and `mv` forms, source and destination operands, in-place archivers, `git restore`/`checkout` over a path, credential reads on every surface including the `.env.*` family, wrapper- and prefix-depth exhaustion, unparseable input, unknown tool names carrying a payload, and engine exceptions. 247 synthetic checks pass. | `/record-evidence` → `docs/evidence/r0/policy-tests.txt`, after the R0 commit. |
 

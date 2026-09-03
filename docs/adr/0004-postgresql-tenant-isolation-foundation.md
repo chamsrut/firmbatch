@@ -401,17 +401,23 @@ present at the instant the statement runs. So the deletion is bound to an identi
 * The final `DROP DATABASE` is issued **as that role**, over its own connection, not with
   the ambient cluster-admin authority that created it. A same-name replacement owned by
   anybody else fails the ownership check and survives — verified.
-* **The shared admin holds no standing route to that role.** `CREATE DATABASE ... OWNER`
-  needs the creator to be able to `SET ROLE` to the new owner, so the bootstrap takes that
-  membership for exactly one statement and gives it back in a `finally` — with
-  `INHERIT FALSE, ADMIN FALSE`, because a plain grant leaves an inheriting row behind after
-  `REVOKE SET OPTION FOR`. The revoke is verified on a **new** admin session and against
+* **The temporary owner membership is given back.** `CREATE DATABASE ... OWNER` needs the
+  creator to be able to `SET ROLE` to the new owner, so the bootstrap takes that membership
+  for exactly one statement and gives it back in a `finally` — with `INHERIT FALSE,
+  ADMIN FALSE`, because a plain grant leaves an inheriting row behind after
+  `REVOKE SET OPTION FOR`. The revoke is verified on a **new** admin session, against
   `pg_auth_members` directly, including a recursive walk for indirect paths; bootstrap fails
-  rather than return a handle whose owner-bound authority is really the admin's under
-  another name. Verified live: afterwards the admin gets `must be owner of database` for
-  `COMMENT`, `REVOKE CONNECT`, `ALTER ... CONNECTION LIMIT` and `DROP DATABASE`. What it
-  does **not** do is remove the creator's `ADMIN OPTION` row — PostgreSQL 16 does not allow
-  that, and §8f states the consequence.
+  rather than leave an explicit standing grant nobody asked for on somebody's cluster.
+
+  That check is deliberately **catalogue-only**. It does not ask `pg_has_role`, and it does
+  **not** require the bootstrap administrator to be unable to reach the owner. §8f states
+  why: the administrator is trusted, CI runs it as a superuser, and a superuser satisfies
+  `pg_has_role(..., 'SET'/'USAGE')` for every role in the cluster no matter what is
+  revoked. Requiring the opposite made bootstrap fail on exactly the cluster shape this ADR
+  describes. Verified live on a *non-superuser* administrator: afterwards it gets `must be
+  owner of database` for `COMMENT`, `ALTER ... CONNECTION LIMIT`, `ALTER ... RENAME` and
+  `DROP DATABASE`. Removing the creator's `ADMIN OPTION` row is not attempted —
+  PostgreSQL 16 does not allow it, and §8f states the consequence.
 * **Nothing is altered before it is identified.** Revoking `CONNECT` and terminating
   backends are destructive to a running system, and they used to run by name on the admin
   connection *before* any OID or provenance check. They now run as the owner, after the
@@ -434,29 +440,66 @@ present at the instant the statement runs. So the deletion is bound to an identi
 
 **The threat boundary, stated precisely.** These measures defeat: a concurrent test process
 in this or another checkout; a stale or edited handle; a database or role replaced under
-the same name by any non-superuser, *including the shared admin that created it*; a
-mistyped `FIRMBATCH_TEST_DATABASE_URL`; and an administrator without superuser rights.
+the same name by any non-superuser, *including a non-superuser shared admin that created
+it*; and a mistyped `FIRMBATCH_TEST_DATABASE_URL`.
 
-Only a genuinely **concurrent superuser** remains outside it. A superuser can drop the
-disposable database and recreate one with the same name owned by the per-run owner role,
-between the validation and the DROP, and the DROP would then remove it. PostgreSQL offers
-no lock or statement that closes this: `DROP DATABASE` cannot participate in a transaction,
-and there is no drop-by-OID. It is reported as a residual rather than described as
-eliminated. It is not a practical concern for the intended use — a disposable, explicitly
-attested test cluster — but a shared cluster with untrusted superusers is not a place to
-run this suite, and the attestation marker is the control that says so.
+A **superuser** remains outside it, and that is accepted rather than eliminated. A
+superuser can drop the disposable database and recreate one with the same name owned by the
+per-run owner role, between the validation and the DROP, and the DROP would then remove it.
+PostgreSQL offers no lock or statement that closes this: `DROP DATABASE` cannot participate
+in a transaction, and there is no drop-by-OID. This is not hypothetical — **CI's bootstrap
+administrator is the `postgres` superuser** of an ephemeral `postgres:16` service container
+— and it is exactly why the boundary is drawn where §8f draws it: the administrator is
+trusted, and it is confined to `TestBootstrapSettings` and to a cluster that has explicitly
+attested it is disposable. A shared cluster with untrusted superusers is not a place to run
+this suite, and the attestation marker is the control that says so.
 
-### 8f. The shared admin can regain the owner role — a reported blocker
+### 8f. The bootstrap administrator is trusted, and confined rather than constrained
 
-A review asked for the *entire* owner-role membership to be revoked from the shared admin,
-ADMIN included, and for a live test proving that `GRANT owner TO admin WITH SET TRUE`,
-`SET ROLE owner` and an owner-only operation all fail. **PostgreSQL 16 does not permit
-this, and it is recorded here rather than worked around.**
+An earlier revision of this section treated the shared admin's reach into the per-run owner
+as a **blocker**: it asked for the *entire* owner-role membership to be revoked, ADMIN
+included, and bootstrap refused to return a handle unless
+`pg_has_role(admin, owner, 'SET')` and `(..., 'USAGE')` were both false. That was the wrong
+boundary, and it was wrong in a way that showed up as a CI failure rather than as an
+argument:
 
-When a non-superuser `CREATEROLE` role creates a role, the creator receives a
-`pg_auth_members` row whose **grantor is the bootstrap superuser**, carrying
-`admin_option`. A non-superuser cannot remove that row. All three spellings were tried
-against a real server:
+> `DisposableDatabaseError: the shared admin can still reach the per-run owner (pg_has_role
+> reports SET and USAGE)`
+
+CI's bootstrap administrator is the `postgres` **superuser** of an ephemeral `postgres:16`
+service container. A superuser satisfies `pg_has_role` for every role in the cluster by
+definition, so the assertion was unsatisfiable on the very cluster shape this ADR
+prescribes — and it was asserting a property the architecture never promised.
+
+**The boundary this design actually draws.**
+
+* The bootstrap administrator is **trusted**. It is reachable only through
+  `TestBootstrapSettings`, and only against a cluster carrying the
+  `firmbatch_disposable_test_cluster` attestation (§8a).
+* **CI** runs it as the `postgres` superuser inside an ephemeral service container created
+  and destroyed by the job. **Local verification** runs it as a non-superuser `CREATEROLE`
+  administrator on an explicitly attested disposable cluster. Both are inside the boundary.
+* PostgreSQL administrative reachability into the per-run roles is **accepted inside that
+  boundary**, and nowhere else. Nothing here claims the administrator is isolated from the
+  roles it creates.
+* **Customer and runtime roles remain untrusted and separated.** The per-run owner,
+  application and provisioning roles hold no `SUPERUSER`, `CREATEDB`, `CREATEROLE`,
+  `BYPASSRLS` or `REPLICATION`; none of them can reach the administrator; and the
+  application and provisioning pair cannot reach the migration owner. That separation is
+  what forced RLS rests on, and it is asserted identically in CI and locally.
+
+**What is asserted at bootstrap, and what is not.** Asserted, catalogue-only: the `SET`
+membership taken for one statement is given back, so no explicit `set_option` or
+`inherit_option` row survives on any direct or indirect membership path where PostgreSQL
+permits revoking it. That is hygiene — an explicit standing grant nobody asked for is state
+this bootstrap would be leaving behind — and it is true of a superuser and a non-superuser
+administrator alike. Not asserted: anything from `pg_has_role`, which answers about
+effective authority and cannot be revoked away from a superuser.
+
+**PostgreSQL 16's own limitation, for a non-superuser administrator.** When a non-superuser
+`CREATEROLE` role creates a role, the creator receives a `pg_auth_members` row whose
+**grantor is the bootstrap superuser**, carrying `admin_option`, and cannot remove it. All
+three spellings were tried against a real server:
 
 | Attempt | Result |
 | --- | --- |
@@ -464,26 +507,22 @@ against a real server:
 | `REVOKE ADMIN OPTION FOR owner FROM CURRENT_USER` | the same warning, the same outcome |
 | `REVOKE owner FROM CURRENT_USER GRANTED BY postgres` | `ERROR: permission denied to revoke privileges granted by role "postgres"` |
 
-Holding `ADMIN OPTION`, the admin may re-grant itself `SET` at any time and become the
-owner. The escalation cannot be closed from inside this repository.
+That row carries `ADMIN` and neither `SET` nor `INHERIT`, so it passes the catalogue check
+and stays — which is what it must do: it is what lets a non-superuser administrator
+`DROP ROLE` the three per-run roles at teardown. Removing it, if that were possible, would
+trade an accepted property for a guaranteed leak of three roles per run. A superuser
+administrator receives no such row at all; PostgreSQL 16 grants the creator `ADMIN` only
+when the creator is not a superuser.
 
-It is also not desirable to close it if one could. That same `ADMIN OPTION` is what lets
-the admin `DROP ROLE` the three per-run roles at teardown; losing it would trade a
-documented residual for a guaranteed leak of three roles per run.
+`control_plane/tests/test_admin_escalation.py` pins all of this: bootstrap completes under
+either kind of administrator; no revocable membership row carries `SET` or `INHERIT`; the
+per-run roles gain no administrative attribute and no route into the administrator or into
+the owner; the administrator's credentials appear in no runtime URL; and the PostgreSQL 16
+limitation above is asserted for a non-superuser administrator and skipped, with a stated
+reason, for a superuser. It contains no test asserting that the escalation works.
 
-**What is therefore claimed, and what is not.** Claimed: no *standing* reachability. After
-bootstrap there is no `set_option` and no `inherit_option` on any membership row, no direct
-or indirect membership path carrying either, and PostgreSQL refuses the shared admin every
-owner-only operation — `COMMENT`, `REVOKE CONNECT`, `ALTER ... CONNECTION LIMIT` and
-`DROP DATABASE` all return `must be owner of database`. A concurrent process holding the
-shared admin credentials cannot assume the owner's identity as it stands, and that is the
-threat this design is actually about. Not claimed: that a role administrator who
-deliberately re-grants cannot get back in. `control_plane/tests/test_admin_escalation.py`
-asserts the residual is still real, so a future PostgreSQL that closes it fails the test
-and this section can be narrowed.
-
-The suite's own cleanup helper re-acquires `SET` by exactly this route, which is the honest
-demonstration that the limit is understood rather than hidden.
+The suite's own cleanup helper re-acquires `SET` by re-granting it, which is the honest
+demonstration that this reach is understood and accepted rather than hidden.
 
 ### 8g. What this isolation does and does not protect against
 

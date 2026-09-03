@@ -15,10 +15,13 @@ reports -- and it never deletes something it cannot prove it created.
 
 Two properties are load-bearing and both are asserted below rather than described:
 
-* **The shared admin is not the owner** (finding 5). After bootstrap it cannot ``SET ROLE``
-  to the per-run owner, cannot inherit from it, and -- demonstrably -- cannot comment on,
-  re-grant, or drop the database. Without that, "the DROP runs as the owner" would be true
-  and meaningless.
+* **The temporary owner membership is given back** (finding 5). ``CREATE DATABASE ...
+  OWNER`` needs the creator to be able to ``SET ROLE`` to the new owner, so the bootstrap
+  takes that grant for one statement and revokes it in a ``finally``. Afterwards no
+  ``pg_auth_members`` row carries ``SET`` or ``INHERIT``. This is a catalogue property, and
+  it is deliberately *not* a claim that the bootstrap administrator cannot reach the owner:
+  that administrator is trusted, CI runs it as a superuser, and a superuser reaches every
+  role by fiat. See ADR 0004 section 8f and ``test_admin_escalation.py``.
 * **Nothing is altered before it is identified** (finding 6). Revoking ``CONNECT`` and
   terminating backends are destructive to a running system, and they used to happen by
   name, on the admin connection, before any OID or provenance check had run.
@@ -44,20 +47,41 @@ def _admin(environment):
     )
 
 
-def _reach(environment, role: str) -> tuple[bool, bool]:
-    """``(can SET ROLE, inherits)`` for the shared admin, on a brand new connection."""
+def _membership_options(environment, role: str) -> list[tuple]:
+    """``(grantor, member, set_option, inherit_option)`` rows naming ``role``.
+
+    A brand new connection, because membership is resolved per session: asking on the
+    session that did the revoke could be answered from state a fresh login would not have.
+    Stored grants only -- effective reach folds in the administrator's cluster authority,
+    which no revoke changes and which this design accepts.
+    """
     engine = _admin(environment)
     try:
         with engine.connect() as connection:
-            return tuple(
-                bool(v)
-                for v in connection.execute(
+            return [
+                tuple(row)
+                for row in connection.execute(
                     text(
-                        "SELECT pg_has_role(current_user, :r, 'SET'), "
-                        "       pg_has_role(current_user, :r, 'USAGE')"
+                        "SELECT m.grantor::regrole::text, m.member::regrole::text, "
+                        "       m.set_option, m.inherit_option "
+                        "FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid "
+                        "WHERE r.rolname = :r"
                     ),
                     {"r": role},
-                ).one()
+                )
+            ]
+    finally:
+        engine.dispose()
+
+
+def _is_superuser(environment) -> bool:
+    engine = _admin(environment)
+    try:
+        with engine.connect() as connection:
+            return bool(
+                connection.execute(
+                    text("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
+                ).scalar()
             )
     finally:
         engine.dispose()
@@ -92,22 +116,41 @@ def _pin_suffix(monkeypatch, suffix: str) -> None:
     monkeypatch.setattr(bootstrap.secrets, "token_hex", fixed)
 
 
-# ------------------------------------------------------- finding 5: no standing reachability
+# ------------------------------------------- finding 5: the temporary grant is given back
 
 
-def test_the_admin_cannot_reach_the_per_run_owner_after_bootstrap(disposable_database, environment):
-    """A *new* admin session, because membership is resolved per session."""
-    can_set, inherits = _reach(environment, disposable_database.owner_role)
-    assert can_set is False, "the shared admin can still SET ROLE to the per-run owner"
-    assert inherits is False, "the shared admin still inherits the per-run owner"
+def test_the_temporary_owner_membership_is_given_back_after_bootstrap(
+    disposable_database, environment
+):
+    """A *new* admin session, and the catalogue rather than ``pg_has_role``.
+
+    The grant the bootstrap takes for ``CREATE DATABASE ... OWNER`` is explicit and
+    revocable, so its absence afterwards is a real, checkable property on any cluster. What
+    the administrator can reach by virtue of *being* the administrator is a different
+    question, accepted rather than asserted -- see the module docstring.
+    """
+    for grantor, member, set_option, inherit_option in _membership_options(
+        environment, disposable_database.owner_role
+    ):
+        assert not set_option, f"{member} still holds SET on the owner, granted by {grantor}"
+        assert not inherit_option, f"{member} still inherits the owner, granted by {grantor}"
 
 
 def test_the_admin_cannot_act_on_the_database_it_created(disposable_database, environment):
-    """The separation is not bookkeeping: PostgreSQL refuses the admin outright.
+    """The separation is not bookkeeping: PostgreSQL refuses a non-superuser admin outright.
 
-    All three are owner operations, and the admin is no longer the owner. This is the
-    assertion that makes owner-bound deletion authority mean something.
+    All three are owner operations, and a non-superuser admin is no longer the owner. This
+    is the assertion that makes owner-bound deletion authority mean something *for that
+    administrator*. A superuser administrator owns everything by fiat -- accepted by ADR
+    0004 section 8f -- so this skips rather than reporting a green it did not earn; the
+    per-run-role containment assertions in ``test_admin_escalation.py`` run either way.
     """
+    if _is_superuser(environment):
+        pytest.skip(
+            "the bootstrap administrator is a superuser (CI's ephemeral service container); "
+            "owner-only refusal has no meaning for it"
+        )
+
     engine = _admin(environment)
     try:
         for statement in (
@@ -124,7 +167,7 @@ def test_the_admin_cannot_act_on_the_database_it_created(disposable_database, en
         engine.dispose()
 
 
-def test_a_partially_failed_bootstrap_leaves_no_reachability(environment, monkeypatch):
+def test_a_partially_failed_bootstrap_leaves_no_object_or_grant(environment, monkeypatch):
     """The revoke is in a ``finally``, so a failure after the grant still gives it up.
 
     The failure is injected into the owner's own configuration step, which is after
@@ -147,8 +190,8 @@ def test_a_partially_failed_bootstrap_leaves_no_reachability(environment, monkey
     with pytest.raises(bootstrap.DisposableDatabaseError):
         bootstrap.create_disposable_database(environment)
 
-    # The role is gone with the rest of the cleanup, so reachability is vacuous -- assert
-    # the stronger thing: no object and no grant survived.
+    # The role is gone with the rest of the cleanup, so a membership assertion would be
+    # vacuous -- assert the stronger thing: no object and no grant survived at all.
     assert not _exists(environment, database=f"firmbatch_test_{suffix}")
     assert not _exists(environment, role=owner_role)
     assert not _exists(environment, role=f"firmbatch_test_app_{suffix}")
