@@ -14,10 +14,10 @@ Five labels, kept strictly apart:
 - **NOT VERIFIED** — asserted, expected, or reasoned about, with no captured run behind it.
   Documentation, comments, and passing-in-the-moment are not evidence.
 
-Last updated: 2026-09-03, at `main` merge commit `6b4f341` (Milestone 1), plus
-Milestone 2.1 on `feat/milestone-2-foundation`, delivered by PR #4: implementation
-commit `521870b` (with its review-hardening pass) and the bootstrap trust-boundary
-correction introduced in `78eae1d` (see the CI correction section below).
+Last updated: 2026-09-03, at `main` merge commit `712b51a` (Milestone 2.1, PR #4), plus
+**uncommitted** Milestone 2.2 work on `feat/milestone-2-2-idempotency-outbox`. Milestone 1
+merged at `6b4f341`; M2.1 was implementation commit `521870b` with the bootstrap
+trust-boundary correction `78eae1d` (see the CI correction section below).
 
 ---
 
@@ -74,7 +74,7 @@ end of this section.
 | `control_plane/db/repositories.py` | `TenantRepository` (provisioning) and `WorkspaceRepository` (tenant-scoped). Neither writes a `WHERE tenant_id = ...` clause; RLS is the filter. |
 | `control_plane/testing/attestation.py` | The disposable-cluster marker (a `NOLOGIN` role with an exact comment) and the cluster fingerprint, plus a `--mark`/`--check`/`--unmark` CLI. No database or role is created or dropped on an unattested server. |
 | `control_plane/testing/bootstrap.py` | Creates a disposable `firmbatch_test_<random>` database plus **three** per-run `NOSUPERUSER NOBYPASSRLS NOREPLICATION` login roles -- a per-run owner (the migration principal and the deletion authority), an application role and a provisioning role -- migrates it, applies the grants, and drops all three afterwards. Cleans up after any failure, including during migration and grants. Teardown re-checks attestation, cluster identity, URL consistency, the recorded endpoint, and that the handle was produced by this process and is unaltered. The bootstrap administrator is **trusted** and confined to `TestBootstrapSettings` and an attested disposable cluster; the temporary `SET` membership taken for `CREATE DATABASE ... OWNER` is given back and that is verified from the catalogue, but nothing asserts the administrator cannot reach the roles it creates -- CI runs it as the `postgres` superuser, which reaches every role by fiat. See ADR 0004 section 8f. |
-| `control_plane/tests/` | **382 pytest checks** against real PostgreSQL 16, in nineteen modules: configuration boundary, settings separation, connection specification, connection environment, migrations, migration entry points, version preflight, tenant isolation, isolation hardening, bind forms, ownership boundary, admin escalation, bootstrap safety, bootstrap lifecycle, connection identity, destructive safety, verification reporting, role privileges, plus the shared conftest. They **fail rather than skip** when the server, the attestation, or `FIRMBATCH_TEST_DATABASE_URL` is absent, and refuse any PostgreSQL major version other than 16. |
+| `control_plane/tests/` | **382 pytest checks at M2.1** (the suite is larger now — see the Milestone 2.2 section below) against real PostgreSQL 16, in nineteen modules: configuration boundary, settings separation, connection specification, connection environment, migrations, migration entry points, version preflight, tenant isolation, isolation hardening, bind forms, ownership boundary, admin escalation, bootstrap safety, bootstrap lifecycle, connection identity, destructive safety, verification reporting, role privileges, plus the shared conftest. They **fail rather than skip** when the server, the attestation, or `FIRMBATCH_TEST_DATABASE_URL` is absent, and refuse any PostgreSQL major version other than 16. |
 | `requirements-v1*-lock.txt` | Fully resolved, hash-pinned dependency graphs for CPython 3.11 on Linux, generated with `pip-compile --generate-hashes`. CI installs from these with `--require-hashes`. |
 
 Design decisions are recorded in `docs/adr/0004-postgresql-tenant-isolation-foundation.md`,
@@ -88,7 +88,8 @@ No HTTP endpoints, customer accounts, memberships, sessions, or API credentials.
 idempotency records, transactional outbox, audit events, or lifecycle state machines. No job
 tables, quotes, billing, payload plane, providers, or workers. Those are M2.2, M2.3, M2.4 and
 later milestones; building them here would be the opportunistic later-milestone work the
-working contract forbids.
+working contract forbids. (M2.2 has since added the first two of those; the rest are still
+not built.)
 
 ### Hardening pass — nine defects found by review, all reproduced and closed
 
@@ -316,12 +317,123 @@ No test asserts that the limitation exists. A passing test whose subject is a vu
 reads as a specification for it, and would have to be deleted rather than fixed when the
 capability lands.
 
-### What the 381 passing tests establish, and what they do not
+### What the passing tests establish, and what they do not
 
 They establish **implemented and tested** behaviour on a locally provisioned PostgreSQL 16
 server, in a database created and destroyed by the run. They are **NOT VERIFIED LIVE** under
 this document's taxonomy: no artifact under `docs/evidence/` captures the run, no RDS instance
 exists, and nothing is deployed. Do not cite the test count as deployment proof.
+
+---
+
+## CURRENT — Milestone 2.2 idempotent mutations and the transactional outbox
+
+The second slice of Milestone 2, on `feat/milestone-2-2-idempotency-outbox` and
+**uncommitted**. It preserves everything M2.1 established — PostgreSQL isolation,
+credential separation, migration validation, connection hardening, disposable-database
+safety, and the frozen-v0 boundary — and adds two tenant-scoped tables behind the same
+forced row-level security, plus one typed primitive that writes them.
+
+**Implemented and tested.** Not deployed, and **not VERIFIED LIVE**: no evidence artifact
+was captured for this slice.
+
+| Component | Behaviour |
+| --- | --- |
+| `control_plane/db/models.py` | Two new tenant-owned tables. `idempotency_records` — UUID key, `tenant_id`, `operation`, `idempotency_key`, `request_fingerprint` (hex SHA-256), a `status` column constrained to the single value `completed`, and a bounded `jsonb` `result`. Unique on `(tenant_id, operation, idempotency_key)`; composite `(id, tenant_id)` key. `outbox_events` — `tenant_id`, a **nullable** `idempotency_record_id` causation link, `event_type`, `aggregate_type`, `aggregate_id`, bounded `jsonb` `attributes`, `occurred_at`. Composite foreign key to `(id, tenant_id)` of the claim when the link is present, unique on `(tenant_id, idempotency_record_id)` (**at most one** linked event per claim), index on `(tenant_id, occurred_at)`. Neither table has a binary column. |
+| `control_plane/db/migrations/versions/0002_idempotency_and_outbox.py` | Hand-written, `down_revision = 0001`, reversible (downgrade to `base` and back up is tested). Row security **enabled and forced** on both tables, `REVOKE ALL ... FROM PUBLIC`, and a **`FOR SELECT` policy plus a `FOR INSERT` policy and nothing else** — with no `UPDATE` or `DELETE` policy, those commands reach no row for any role, the owner included. Role-agnostic (`TO PUBLIC`); grants stay in `db/roles.py`. |
+| `control_plane/db/idempotency.py` | The primitive. In one transaction: validate the operation, the key and the `request_identity` **before anything runs**, refuse a session carrying unflushed ORM state, require a tenant context, refuse a non-`READ COMMITTED` transaction, fingerprint the identity, replay a matching claim, reject a conflicting one, otherwise run the mutation inside a `SAVEPOINT`, write the completed claim and exactly one linked outbox event, and return a typed `IdempotentResult`. A caller that loses a race rolls its savepoint back — undoing its own business write — re-reads the winner's row and replays it. Metadata policy: flat objects, no binary values, ≤ 32 keys, ≤ 256-character strings, ≤ 2 KiB documents, lowercase identifier keys matched with `fullmatch`, and a **whole-name** denylist of key names meaning content or a credential. |
+| `MutationUnitOfWork` (`db/idempotency.py`) | What the mutation callback is given **instead of the caller's `Session`**. Forwards `add`, `flush`, `execute`, `get`, `scalars`, `delete`, `merge`; refuses `commit`, `rollback`, `close`, `begin`, `begin_nested`, `connection`, `get_bind`, `expunge_all` and the legacy bulk API with an explanatory error. |
+| The scoped commit guard (`db/idempotency.py`) | `Session.commit()` in SQLAlchemy 2.x commits the **outermost** transaction from inside a `begin_nested()` SAVEPOINT, and the real session is one `object_session(row)` away from any callback. So for the duration of the callback — and only that — a `before_commit` listener is attached to the real session and **refuses the commit before it happens**, ahead of the flush a commit performs, so nothing is written. It is removed in a `finally` before the primitive releases its own SAVEPOINT and before the caller commits, so nothing stays attached to a session that outlives the call. `_require_intact_boundary` remains as **secondary detection** of a boundary destroyed another way (a rollback through the real session); it is not a preservation of atomicity, because nothing in Python can un-commit. |
+| `append_outbox_event` (`db/idempotency.py`) | The one outbox writer, usable by **any** authoritative state transition. `idempotency_record_id` is an optional causation link, so an internal transition — controller, reconciler, validator, lifecycle — can commit its event with its state change without manufacturing an API idempotency record. |
+| `control_plane/db/roles.py` | The application role gains `SELECT, INSERT` on both new tables and nothing else. The provisioning role gains **nothing**. No role attribute changed. |
+| RLS and grants together | Append-only is enforced twice, in two directions: no `UPDATE`/`DELETE` privilege for the application role (an error it can see), and no `UPDATE`/`DELETE` policy at all (zero rows for anyone who holds the privilege, including the owner under `FORCE`). |
+| `control_plane/tests/` | **512 pytest checks** (511 passed, 1 skipped locally), up from 382: three new modules — `test_idempotency.py`, `test_idempotency_concurrency.py`, `test_outbox_isolation.py` — plus new schema and policy assertions in `test_migrations.py`. |
+
+Design decisions are recorded in
+`docs/adr/0005-idempotent-mutations-and-transactional-outbox.md`.
+
+### What M2.2 proves
+
+| Property | Where |
+| --- | --- |
+| An identical retry returns the stored result and runs the mutation zero times. | `test_idempotency.py::test_an_identical_retry_returns_the_stored_result`, `::test_the_second_call_never_runs_the_mutation` |
+| Four identical calls leave one workspace, one claim, one event, and invoke the mutation once. | `::test_an_identical_retry_makes_exactly_one_contractual_effect` |
+| The primitive writes **exactly one** linked event, atomically with the claim — counted after a real commit, because the uniqueness constraint can only bound duplicates and cannot require existence. | `::test_the_primitive_writes_exactly_one_linked_event` |
+| Reuse of a key with a different request is rejected, and changes nothing. | `::test_reusing_a_key_with_a_different_request_is_rejected` |
+| Two **concurrently contending** callers commit one effect and one event; the loser executes, is rolled back, and replays. Contention is verified by watching `pg_stat_activity` for a blocked backend, and the test fails if the block is never observed. | `test_idempotency_concurrency.py::test_two_concurrent_callers_produce_one_effect_and_one_event` |
+| A concurrent *conflicting* reuse is still rejected rather than handed the winner's result. | `::test_a_concurrent_conflicting_reuse_is_rejected` |
+| A failure inside the mutation, a failure after the primitive returns, and a refused result each leave no workspace, no claim and no event — and do not block the retry. | `test_idempotency.py::test_a_failure_inside_the_mutation_leaves_nothing_behind`, `::test_a_failure_after_the_primitive_returns_rolls_the_whole_thing_back`, `::test_a_rolled_back_claim_does_not_block_the_retry`, `::test_a_refused_result_leaves_nothing_behind` |
+| The same key is independent between tenants, sequentially and concurrently. | `::test_a_key_is_independent_between_tenants`, `test_idempotency_concurrency.py::test_concurrent_callers_in_different_tenants_do_not_collide` |
+| Cross-tenant reads and writes on **both** new tables fail closed, and an event cannot be attached to another tenant's claim. | `test_outbox_isolation.py::test_tenant_a_cannot_read_tenant_b_claims_or_events`, `::test_tenant_a_cannot_append_into_tenant_b`, `::test_an_event_cannot_be_attached_to_another_tenants_claim` |
+| Missing tenant context fails closed, in the primitive and again in PostgreSQL. | `test_idempotency.py::test_without_tenant_context_an_idempotent_mutation_is_refused`, `::test_the_database_also_refuses_a_claim_written_without_context`, `test_outbox_isolation.py::test_without_tenant_context_an_append_is_rejected` |
+| A committed event is immutable: the application role is refused, and even the owner's `UPDATE`/`DELETE` matches zero rows. | `test_outbox_isolation.py::test_a_committed_event_cannot_be_rewritten_through_the_orm`, `::test_even_a_privileged_role_reaches_no_row_to_update_or_delete` |
+| A mutation callback cannot commit or roll back the primitive's transaction: the unit of work refuses both, and a commit reached through `object_session()` is refused **before** it happens, leaving no workspace, no claim and no event. | `test_idempotency.py::test_a_mutation_cannot_commit_the_outer_transaction`, `::test_a_mutation_that_rolls_back_fails_cleanly_and_leaves_nothing`, `::test_the_unit_of_work_refuses_every_transaction_control_operation`, `::test_an_escape_around_the_unit_of_work_is_detected_and_refused`, `::test_the_transaction_boundary_survives_the_callback` |
+| The commit guard is scoped to the callback and removed afterwards: the SAVEPOINT release and the caller's own commit both go through, and the workspace, the claim and the linked event persist. | `::test_the_commit_guard_is_removed_before_the_caller_commits` |
+| Unflushed ORM state at entry is rejected before the mutation runs, so nothing pending is flushed outside the protected SAVEPOINT. | `::test_pending_orm_state_at_entry_is_rejected` |
+| A write the caller flushed *before* calling the primitive is outside its SAVEPOINT and cannot be detected — recorded as a limit, with the contract that closes it. | `::test_a_write_flushed_before_the_primitive_is_outside_its_savepoint` |
+| A malformed operation or idempotency key — including a trailing newline, which `$` would have accepted — is refused **before** the mutation is invoked, and the check constraints still refuse a writer that bypasses Python. | `::test_a_malformed_operation_is_refused_before_the_mutation`, `::test_a_malformed_idempotency_key_is_refused_before_the_mutation`, `::test_the_database_still_refuses_a_malformed_operation` |
+| The primitive persists only a fingerprint and bounded metadata: no value of the request identity reaches a row. Payload- and credential-shaped fields are refused **before** the mutation runs, and reference-shaped names (`input_manifest_id`, `output_object_key`, `artifact_digest`) are accepted. | `::test_only_a_digest_of_the_request_identity_is_persisted`, `::test_payload_shaped_material_is_rejected_before_the_mutation_runs`, `::test_keys_that_name_content_or_a_credential_are_refused`, `::test_reference_shaped_keys_are_accepted` |
+| An internal tenant-scoped state change appends an outbox event atomically **without** an idempotency record, two such events do not collide, and a rollback removes the state change and the event together. | `test_outbox_isolation.py::test_an_internal_state_change_can_append_an_event_without_an_idempotency_record`, `::test_two_internal_events_do_not_collide_on_the_null_link`, `::test_a_rolled_back_internal_change_takes_its_event_with_it`, `::test_an_internal_event_is_still_tenant_scoped` |
+| Every tenant-scoped table scopes reads **and** writes, asserted on `USING` and `WITH CHECK` independently rather than on whichever one happened to be set. | `test_migrations.py::test_every_tenant_scoped_table_has_an_isolation_policy` |
+| The application role holds exactly `SELECT, INSERT`; provisioning holds nothing; neither gained ownership or a privileged attribute. | `test_outbox_isolation.py::test_the_application_role_holds_exactly_select_and_insert`, `::test_the_provisioning_role_gained_nothing`, `::test_neither_runtime_role_gained_a_privileged_attribute` |
+
+### Not implemented in M2.2 — deliberately
+
+No HTTP endpoints and no `Idempotency-Key` header handling; no SQS publishing and **no
+outbox dispatcher**, so events accumulate and nothing reads them; no idempotency-record
+expiry or retention (pruning needs a `DELETE` policy these tables deliberately do not
+have); no audit events, no tenant-scoped authorization, no secrets model, no lifecycle
+state machines, no job/quote/billing tables, no payload plane, no AWS deployment, no Rust
+or C++. Those are M2.3, M2.4 and later milestones. v0 is untouched.
+
+### What M2.2 does not claim
+
+**It does not claim exactly-once external message delivery, and nothing in the repository
+should be read as claiming it.** The outbox records durable intent. No dispatcher exists;
+when one does it will deliver **at least once**, and consumers must be idempotent. What is
+proved is one committed database effect and one linked outbox event per
+`(tenant, operation, key)`.
+
+**It does not claim that the database guarantees every claim has an event.** The unique
+constraint on `(tenant_id, idempotency_record_id)` enforces **at most one** linked event; a
+uniqueness constraint bounds duplicates and cannot require existence. The primitive writes
+exactly one, atomically with the claim, and that is established by the PostgreSQL tests
+rather than by the schema. A deferred constraint trigger could make it a database fact and
+was deliberately not built: it would be machinery added to preserve a sentence.
+
+**It does not prove the payload-plane invariant.** M2.2 establishes that *the primitive
+persists only a fingerprint and bounded metadata*, and that payload- and credential-shaped
+fields are refused before a mutation runs. It does **not** establish that customer payload
+bytes never enter the API process or PostgreSQL — target invariant 3 — and three earlier
+claims to that effect have been removed as false: the absence of a `bytea` column makes
+storing bytes inconvenient rather than impossible, a 256-character string can be content,
+and a bounded `jsonb` document is a size limit rather than a semantic filter. `TEXT` and
+`JSONB` hold text. The bounds and the denylist are defense in depth. **The data-flow proof
+belongs to Milestone 5** and its presigned S3 path.
+
+**It does not sandbox the mutation callback.** The `MutationUnitOfWork` removes the reflex
+route out of the transaction, and the scoped `before_commit` guard closes the known escape
+through `object_session()` — refusing the commit before it can flush, so no partial state
+is created. Neither bounds arbitrary Python: a callback that opens its own engine or
+connection, drops to the DBAPI, or issues `COMMIT` as raw SQL is outside this transaction
+and outside anything the module can observe. This is the same guardrail-not-boundary
+position `AGENTS.md` takes about the policy engine.
+
+**It does not cover business writes made before it is called.** A write the caller already
+flushed is not in `session.new`/`dirty`/`deleted`, so the entry check cannot see it, and it
+sits outside the primitive's SAVEPOINT — a lost race that discards the mutation would leave
+it. The rule is a contract: every business write for the operation goes inside `mutate`,
+and the primitive is called before any DML for that operation.
+
+**It does not weaken or replace the M2.1 limitation.** Everything here sits inside the
+boundary ADR 0004 §8g describes: an attacker who can set `app.tenant_id` can claim keys in
+any tenant they can name. `AUTH-BOUND-TENANT-CONTEXT` still blocks customer-facing
+deployment.
+
+**It holds only under `READ COMMITTED`, and says so rather than assuming it.** The
+primitive refuses anything stricter, because its recovery path re-reads
+a row another transaction has just committed. Under `REPEATABLE READ` that read would
+return nothing and the caller would be told a taken key is free.
 
 ---
 
@@ -453,8 +565,9 @@ capture new artifacts with provenance matching the committed tree.
 
 | Claim | How to settle it |
 | --- | --- |
-| All **fourteen** gates in `scripts/verify-repository.sh` pass: layout (67 required files), agent configuration, hygiene, v0 property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 247/247, the runtime import closure check, and the PostgreSQL foundation suite 381/381 (1 skipped locally: granting REPLICATION needs a superuser admin, which CI has and the developer cluster does not. On CI that test runs and two others skip instead -- the owner-only-refusal assertions, which have no meaning for a superuser bootstrap administrator). Observed locally on 2026-09-03 against PostgreSQL 16.15 on the developer's WSL machine. | `/record-evidence` → `docs/evidence/r0/gates.txt` (and a Milestone 2 artifact for the foundation suite), after the commit. |
-| The M2.1 tenant-isolation properties hold in PostgreSQL: absent context reads nothing and writes nothing; tenant A cannot read, insert, update or delete tenant B's rows; a fabricated cross-tenant or dangling foreign key is rejected; tenant context is not inherited from a session value, a pooled connection, or a URL option; a reused ORM `Session` cannot serve a previous tenant's object; a temporary relation cannot shadow a Firmbatch table; the application role is non-owner, `NOSUPERUSER`, `NOBYPASSRLS`, is refused at connect time if it were any of those, cannot disable a policy, cannot create tables or temporary tables, cannot read the schema history, and cannot create a tenant even with matching context; workspace uniqueness is tenant-local. 381/381 pytest checks pass, 1 skipped. | `/record-evidence` → `docs/evidence/m2/tenant-isolation-suite.txt`, after the Milestone 2.1 commit. Until then this is a re-runnable claim with no captured artifact. |
+| All **fourteen** gates in `scripts/verify-repository.sh` pass: layout (**73** required files since Milestone 2.2 registered six), agent configuration, hygiene, v0 property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 247/247, the runtime import closure check, and the PostgreSQL foundation suite **511 passed, 1 skipped** locally (granting REPLICATION needs a superuser admin, which CI has and the developer cluster does not. On CI that test runs and two others skip instead -- the owner-only-refusal assertions, which have no meaning for a superuser bootstrap administrator). Observed locally on 2026-09-03 against PostgreSQL 16.15 on the developer's WSL machine, before and after the Milestone 2.2 change. **Milestone 2.2 added no gate**; the foundation-suite gate already runs the whole `control_plane/tests` directory, so the new modules run inside it. | `/record-evidence` → `docs/evidence/r0/gates.txt` (and a Milestone 2 artifact for the foundation suite), after the commit. |
+| The M2.1 tenant-isolation properties hold in PostgreSQL: absent context reads nothing and writes nothing; tenant A cannot read, insert, update or delete tenant B's rows; a fabricated cross-tenant or dangling foreign key is rejected; tenant context is not inherited from a session value, a pooled connection, or a URL option; a reused ORM `Session` cannot serve a previous tenant's object; a temporary relation cannot shadow a Firmbatch table; the application role is non-owner, `NOSUPERUSER`, `NOBYPASSRLS`, is refused at connect time if it were any of those, cannot disable a policy, cannot create tables or temporary tables, cannot read the schema history, and cannot create a tenant even with matching context; workspace uniqueness is tenant-local. | `/record-evidence` → `docs/evidence/m2/tenant-isolation-suite.txt`, after the Milestone 2.1 commit. Until then this is a re-runnable claim with no captured artifact. |
+| The M2.2 idempotency and outbox properties hold in PostgreSQL: an identical retry returns the stored result and invokes the mutation once; four identical calls leave one workspace, one claim and one linked event; a conflicting reuse is rejected; two callers observed contending on a real lock commit one effect and one event, and the loser replays; a failure before commit leaves nothing and does not block the retry; a mutation callback cannot commit or roll back the primitive's transaction and an escape by any other route is detected; unflushed ORM state at entry is rejected; malformed operations and keys are refused before the mutation runs; the same key is independent between tenants; cross-tenant reads and writes on both new tables fail closed; missing context fails closed; a committed event is immutable to the application role and matches zero rows even for the owner; an internal state change appends an event with no idempotency record and a rollback removes both; and no value of the request identity reaches a row. **511 pytest checks pass, 1 skipped**, of which 130 are new. | `/record-evidence` → `docs/evidence/m2/idempotency-outbox-suite.txt`, after the Milestone 2.2 commit. Until then this is a re-runnable claim with no captured artifact, and M2.2 is **not** VERIFIED LIVE. |
 | The destructive-safety properties hold: a forged, altered, cross-server, or foreign-cluster teardown handle is refused and the database survives; an unattested server refuses both creation and teardown; a failure after creation removes the database and both roles; a generated password never reaches exception text, stdout, or stderr. Covered by `control_plane/tests/test_bootstrap_safety.py`. | Same artifact as the row above. |
 | The shared policy engine denies the R0 accident classes across both adapter protocols — multi-line blocks classified line by line, `git -C`/`git -c`, `gh` and `aws` global options, `env`/`timeout` prefixes, `cd`/`cd -`/`pushd`/`popd`/`||` sequences, subshell grouping, argparse-abbreviated provider selection, evidence-tree ancestors including glob and `mv` forms, source and destination operands, in-place archivers, `git restore`/`checkout` over a path, credential reads on every surface including the `.env.*` family, wrapper- and prefix-depth exhaustion, unparseable input, unknown tool names carrying a payload, and engine exceptions. 247 synthetic checks pass. | `/record-evidence` → `docs/evidence/r0/policy-tests.txt`, after the R0 commit. |
 
@@ -517,22 +630,24 @@ The Claude `PreToolUse` hook is confirmed loaded and blocking, observed denying 
 The canonical roadmap is `docs/firmbatch-v1-roadmap.md`; the pilot roadmap is superseded context.
 
 Milestone 0 and Milestone 1 are complete (Milestone 1 merged at `6b4f341`). Milestone 2 is
-active; its first slice, M2.1, is implemented and tested above and awaits human review and
-commit.
+active. Its first slice, M2.1, is merged at `712b51a`; its second, M2.2, is implemented and
+tested above and awaits human review and commit.
 
 The remaining Milestone 2 slices are PLANNED and not started:
 
-- **M2.2** — idempotent API mutation framework and the transactional outbox: idempotency
-  records keyed per tenant, duplicate mutations producing one contractual effect, conflicting
-  reuse rejected, and state change plus outbox event committed in one transaction.
 - **M2.3** — audit events, tenant-scoped authorization, and the secrets/encryption model,
   including binding tenant context to an authenticated credential rather than to a caller-set
   setting. Until that exists, the isolation boundary is bounded as described in ADR 0004.
 - **M2.4** — explicit lifecycle state machines with conditional transitions that cannot race.
 
-Milestone 2's completion gate — cross-tenant reads and writes fail closed in automated tests,
-**and** duplicate mutations produce one contractual effect — is **not** satisfied: M2.1
-delivers the first half only.
+**Milestone 2's completion gate is now satisfied on its own terms and the milestone is
+still open.** The gate — cross-tenant reads and writes fail closed in automated tests,
+**and** duplicate mutations produce one contractual effect — is met by M2.1 and M2.2
+together. The milestone's declared scope is wider than its gate: audit events,
+tenant-scoped authorization, the secrets and encryption model, and explicit lifecycle
+state machines are all listed under Milestone 2 in the canonical roadmap and none of them
+is built. Milestone 2 is complete when its scope is, not when the gate sentence is
+quotable.
 
 Then, following the canonical sequence:
 

@@ -200,6 +200,7 @@ REQUIRED_FILES=(
   docs/architecture/v1-target-architecture.md
   docs/adr/0001-agentic-repository-operating-model.md
   docs/adr/0004-postgresql-tenant-isolation-foundation.md
+  docs/adr/0005-idempotent-mutations-and-transactional-outbox.md
   # --- v1 control-plane foundation (Milestone 2.1) --------------------------------
   requirements-v1.txt
   requirements-v1-dev.txt
@@ -240,6 +241,16 @@ REQUIRED_FILES=(
   control_plane/tests/test_destructive_safety.py
   control_plane/tests/test_verification_reporting.py
   control_plane/tests/test_role_privileges.py
+  # --- idempotent mutations and the transactional outbox (Milestone 2.2) ----------
+  # No new gate: the foundation-suite gate below already runs the whole
+  # control_plane/tests directory, so these run with everything else. What is
+  # registered here is their existence, so that deleting one fails the layout gate
+  # instead of quietly shrinking the suite.
+  control_plane/db/idempotency.py
+  control_plane/db/migrations/versions/0002_idempotency_and_outbox.py
+  control_plane/tests/test_idempotency.py
+  control_plane/tests/test_idempotency_concurrency.py
+  control_plane/tests/test_outbox_isolation.py
 )
 missing=()
 for f in "${REQUIRED_FILES[@]}"; do

@@ -15,7 +15,8 @@ Three roles, three jobs:
     What the API, controller and validator connect as. Non-owner, ``NOSUPERUSER``,
     ``NOBYPASSRLS``, no DDL, **no TEMP**. It gets DML on tenant-scoped tables and is fully
     subject to the isolation policies -- including on ``tenants``, where it may read only
-    its own row and may not INSERT at all.
+    its own row and may not INSERT at all, and on ``idempotency_records`` and
+    ``outbox_events``, where it may read and append but never update or delete.
 
 ``provisioning``
     Creates tenants. Also non-owner, non-superuser and non-``BYPASSRLS``: it is
@@ -105,6 +106,15 @@ def grant_application_role(connection: Connection, role: str) -> None:
     # Read-only on tenants: an application resolves its own tenant, it never creates one.
     connection.execute(text(f"GRANT SELECT ON TABLE {schema}.tenants TO {quoted}"))
     connection.execute(text(f"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE {schema}.workspaces TO {quoted}"))
+    # Append-only, and narrower than the tables above on purpose (Milestone 2.2). The
+    # application claims idempotency keys and appends outbox events; it never revises a
+    # committed claim or edits an event it has already published. UPDATE and DELETE are
+    # not granted, so the attempt is an error rather than a silent no-op -- migration
+    # 0002 additionally gives these tables no UPDATE or DELETE policy at all, which binds
+    # every other role including the owner. Two independent measures, because a grant
+    # that is only correct for today's roles is only correct today.
+    for table in ("idempotency_records", "outbox_events"):
+        connection.execute(text(f"GRANT SELECT, INSERT ON TABLE {schema}.{quote_identifier(table)} TO {quoted}"))
     # No privilege on alembic_version: the schema history is not application data.
 
 
@@ -114,5 +124,6 @@ def grant_provisioning_role(connection: Connection, role: str) -> None:
     _grant_common(connection, quoted)
     schema = quote_identifier(SCHEMA)
     connection.execute(text(f"GRANT SELECT, INSERT, UPDATE ON TABLE {schema}.tenants TO {quoted}"))
-    # Intentionally no grant on workspaces. Provisioning creates the scope; it does not
-    # get to look inside it.
+    # Intentionally no grant on workspaces, on idempotency_records, or on outbox_events.
+    # Provisioning creates the scope; it does not get to look inside it, and it has no
+    # business reading another role's idempotency keys or the events they produced.
