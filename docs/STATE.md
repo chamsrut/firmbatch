@@ -14,10 +14,11 @@ Five labels, kept strictly apart:
 - **NOT VERIFIED** — asserted, expected, or reasoned about, with no captured run behind it.
   Documentation, comments, and passing-in-the-moment are not evidence.
 
-Last updated: 2026-09-03, at `main` merge commit `712b51a` (Milestone 2.1, PR #4), plus
-**uncommitted** Milestone 2.2 work on `feat/milestone-2-2-idempotency-outbox`. Milestone 1
-merged at `6b4f341`; M2.1 was implementation commit `521870b` with the bootstrap
-trust-boundary correction `78eae1d` (see the CI correction section below).
+Last updated: 2026-09-04, at `main` merge commit `712b51a` (Milestone 2.1, PR #4), plus
+Milestone 2.2 on `feat/milestone-2-2-idempotency-outbox` at implementation commit
+`d362717`, **reviewed and awaiting merge**. Milestone 1 merged at `6b4f341`; M2.1 was
+implementation commit `521870b` with the bootstrap trust-boundary correction `78eae1d`
+(see the CI correction section below).
 
 ---
 
@@ -328,11 +329,12 @@ exists, and nothing is deployed. Do not cite the test count as deployment proof.
 
 ## CURRENT — Milestone 2.2 idempotent mutations and the transactional outbox
 
-The second slice of Milestone 2, on `feat/milestone-2-2-idempotency-outbox` and
-**uncommitted**. It preserves everything M2.1 established — PostgreSQL isolation,
-credential separation, migration validation, connection hardening, disposable-database
-safety, and the frozen-v0 boundary — and adds two tenant-scoped tables behind the same
-forced row-level security, plus one typed primitive that writes them.
+The second slice of Milestone 2, delivered on `feat/milestone-2-2-idempotency-outbox` by
+implementation commit `d362717` and **reviewed, awaiting merge**. It preserves everything
+M2.1 established — PostgreSQL isolation, credential separation, migration validation,
+connection hardening, disposable-database safety, and the frozen-v0 boundary — and adds
+two tenant-scoped tables behind the same forced row-level security, plus one typed
+primitive that writes them.
 
 **Implemented and tested.** Not deployed, and **not VERIFIED LIVE**: no evidence artifact
 was captured for this slice.
@@ -565,9 +567,9 @@ capture new artifacts with provenance matching the committed tree.
 
 | Claim | How to settle it |
 | --- | --- |
-| All **fourteen** gates in `scripts/verify-repository.sh` pass: layout (**73** required files since Milestone 2.2 registered six), agent configuration, hygiene, v0 property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 247/247, the runtime import closure check, and the PostgreSQL foundation suite **511 passed, 1 skipped** locally (granting REPLICATION needs a superuser admin, which CI has and the developer cluster does not. On CI that test runs and two others skip instead -- the owner-only-refusal assertions, which have no meaning for a superuser bootstrap administrator). Observed locally on 2026-09-03 against PostgreSQL 16.15 on the developer's WSL machine, before and after the Milestone 2.2 change. **Milestone 2.2 added no gate**; the foundation-suite gate already runs the whole `control_plane/tests` directory, so the new modules run inside it. | `/record-evidence` → `docs/evidence/r0/gates.txt` (and a Milestone 2 artifact for the foundation suite), after the commit. |
+| All **fourteen** gates in `scripts/verify-repository.sh` pass: layout (**73** required files since Milestone 2.2 registered six), agent configuration, hygiene, v0 property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 247/247, the runtime import closure check, and the PostgreSQL foundation suite **511 passed, 1 skipped** locally (granting REPLICATION needs a superuser admin, which CI has and the developer cluster does not. On CI that test runs and two others skip instead -- the owner-only-refusal assertions, which have no meaning for a superuser bootstrap administrator). Observed locally on 2026-09-04 against PostgreSQL 16.15 on the developer's WSL machine, at Milestone 2.2 implementation commit `d362717`. **Milestone 2.2 added no gate**; the foundation-suite gate already runs the whole `control_plane/tests` directory, so the new modules run inside it. | `/record-evidence` → `docs/evidence/r0/gates.txt` (and a Milestone 2 artifact for the foundation suite), after the commit. |
 | The M2.1 tenant-isolation properties hold in PostgreSQL: absent context reads nothing and writes nothing; tenant A cannot read, insert, update or delete tenant B's rows; a fabricated cross-tenant or dangling foreign key is rejected; tenant context is not inherited from a session value, a pooled connection, or a URL option; a reused ORM `Session` cannot serve a previous tenant's object; a temporary relation cannot shadow a Firmbatch table; the application role is non-owner, `NOSUPERUSER`, `NOBYPASSRLS`, is refused at connect time if it were any of those, cannot disable a policy, cannot create tables or temporary tables, cannot read the schema history, and cannot create a tenant even with matching context; workspace uniqueness is tenant-local. | `/record-evidence` → `docs/evidence/m2/tenant-isolation-suite.txt`, after the Milestone 2.1 commit. Until then this is a re-runnable claim with no captured artifact. |
-| The M2.2 idempotency and outbox properties hold in PostgreSQL: an identical retry returns the stored result and invokes the mutation once; four identical calls leave one workspace, one claim and one linked event; a conflicting reuse is rejected; two callers observed contending on a real lock commit one effect and one event, and the loser replays; a failure before commit leaves nothing and does not block the retry; a mutation callback cannot commit or roll back the primitive's transaction and an escape by any other route is detected; unflushed ORM state at entry is rejected; malformed operations and keys are refused before the mutation runs; the same key is independent between tenants; cross-tenant reads and writes on both new tables fail closed; missing context fails closed; a committed event is immutable to the application role and matches zero rows even for the owner; an internal state change appends an event with no idempotency record and a rollback removes both; and no value of the request identity reaches a row. **511 pytest checks pass, 1 skipped**, of which 130 are new. | `/record-evidence` → `docs/evidence/m2/idempotency-outbox-suite.txt`, after the Milestone 2.2 commit. Until then this is a re-runnable claim with no captured artifact, and M2.2 is **not** VERIFIED LIVE. |
+| The M2.2 idempotency and outbox properties hold in PostgreSQL: an identical retry returns the stored result and invokes the mutation once; four identical calls leave one workspace, one claim and one linked event; a conflicting reuse is rejected; two callers observed contending on a real lock commit one effect and one event, and the loser replays; a failure before commit leaves nothing and does not block the retry; a mutation callback cannot commit or roll back the primitive's transaction and an escape by any other route is detected; unflushed ORM state at entry is rejected; malformed operations and keys are refused before the mutation runs; the same key is independent between tenants; cross-tenant reads and writes on both new tables fail closed; missing context fails closed; a committed event is immutable to the application role and matches zero rows even for the owner; an internal state change appends an event with no idempotency record and a rollback removes both; and no value of the request identity reaches a row. **511 pytest checks pass, 1 skipped**, of which 130 are new. | `/record-evidence` → `docs/evidence/m2/idempotency-outbox-suite.txt`, at or after Milestone 2.2 implementation commit `d362717`. Until then this is a re-runnable claim with no captured artifact, and M2.2 is **not** VERIFIED LIVE. |
 | The destructive-safety properties hold: a forged, altered, cross-server, or foreign-cluster teardown handle is refused and the database survives; an unattested server refuses both creation and teardown; a failure after creation removes the database and both roles; a generated password never reaches exception text, stdout, or stderr. Covered by `control_plane/tests/test_bootstrap_safety.py`. | Same artifact as the row above. |
 | The shared policy engine denies the R0 accident classes across both adapter protocols — multi-line blocks classified line by line, `git -C`/`git -c`, `gh` and `aws` global options, `env`/`timeout` prefixes, `cd`/`cd -`/`pushd`/`popd`/`||` sequences, subshell grouping, argparse-abbreviated provider selection, evidence-tree ancestors including glob and `mv` forms, source and destination operands, in-place archivers, `git restore`/`checkout` over a path, credential reads on every surface including the `.env.*` family, wrapper- and prefix-depth exhaustion, unparseable input, unknown tool names carrying a payload, and engine exceptions. 247 synthetic checks pass. | `/record-evidence` → `docs/evidence/r0/policy-tests.txt`, after the R0 commit. |
 
@@ -631,7 +633,7 @@ The canonical roadmap is `docs/firmbatch-v1-roadmap.md`; the pilot roadmap is su
 
 Milestone 0 and Milestone 1 are complete (Milestone 1 merged at `6b4f341`). Milestone 2 is
 active. Its first slice, M2.1, is merged at `712b51a`; its second, M2.2, is implemented and
-tested above and awaits human review and commit.
+tested above at commit `d362717`, reviewed, and awaiting merge.
 
 The remaining Milestone 2 slices are PLANNED and not started:
 

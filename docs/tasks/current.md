@@ -2,17 +2,17 @@
 
 Active work and open questions. Updated at the end of each task, alongside `docs/STATE.md`.
 
-Last updated: 2026-09-03, `main` merge commit `712b51a` (Milestone 2.1, PR #4), plus
-**uncommitted** Milestone 2.2 work on `feat/milestone-2-2-idempotency-outbox`.
-Milestone 1 merged at `6b4f341`; M2.1 was implementation commit `521870b` and the
-bootstrap trust-boundary correction `78eae1d`.
+Last updated: 2026-09-04, `main` merge commit `712b51a` (Milestone 2.1, PR #4), plus
+Milestone 2.2 on `feat/milestone-2-2-idempotency-outbox` at implementation commit
+`d362717`, **reviewed and awaiting merge**. Milestone 1 merged at `6b4f341`; M2.1 was
+implementation commit `521870b` and the bootstrap trust-boundary correction `78eae1d`.
 
 ---
 
 ## Active — Milestone 2, shared product foundation
 
 Milestones 0 and 1 are complete; Milestone 1 merged at `6b4f341`. Milestone 2 is now the active
-milestone. It has four slices; the first is merged and the second is built and uncommitted.
+milestone. It has four slices; the first is merged and the second is reviewed and awaiting merge.
 
 ### M2.1 — PostgreSQL and tenant-isolation spine — **merged at `712b51a` (PR #4)**
 
@@ -123,18 +123,18 @@ adversarial completion tests. ADR 0004 §8g and `docs/STATE.md` carry the detail
 Nothing in this repository asserts the limitation as a passing test; it is tracked in
 prose, deliberately, so that it is fixed rather than deleted.
 
-### M2.2 — idempotent mutations and the transactional outbox — **implemented, uncommitted**
+### M2.2 — idempotent mutations and the transactional outbox — **reviewed, awaiting merge**
 
-On `feat/milestone-2-2-idempotency-outbox`, and **not committed**. Migration `0002` adds
-two tenant-scoped, append-only tables — `idempotency_records` and `outbox_events` — behind
-the same forced row-level security as the spine. `control_plane/db/idempotency.py` is the
-typed primitive that claims a key scoped by tenant and operation, fingerprints the request
-identity, replays an identical retry, rejects a conflicting reuse, runs the mutation once,
-and commits the business state, the completed claim and exactly one linked outbox event
-together.
+On `feat/milestone-2-2-idempotency-outbox`, at implementation commit `d362717`. Migration
+`0002` adds two tenant-scoped, append-only tables — `idempotency_records` and
+`outbox_events` — behind the same forced row-level security as the spine.
+`control_plane/db/idempotency.py` is the typed primitive that claims a key scoped by
+tenant and operation, fingerprints the request identity, replays an identical retry,
+rejects a conflicting reuse, runs the mutation once, and commits the business state, the
+completed claim and exactly one linked outbox event together.
 
-**A review correction pass has since been applied to this branch, and it changed the
-design in three places.** Read this list before the code:
+**Two review correction passes were applied before that commit, and they changed the
+design in the places below.** Read this list before the code:
 
 - **The mutation callback no longer receives the caller's `Session`, and a commit reached
   around it is refused before it happens** (merge blocker, corrected twice).
@@ -223,20 +223,27 @@ Three existing tests were changed rather than added to, and all three were stren
 rather than what it does not (a payload-plane proof). No gate was removed, weakened,
 renamed or duplicated.
 
-Order for the human:
+Review is complete and the implementation is committed at `d362717`. What was reviewed,
+for the record: `docs/adr/0005-idempotent-mutations-and-transactional-outbox.md` — in
+particular "What this does not claim" — and the one protected-file change,
+`scripts/verify-repository.sh`, which gains six entries in `REQUIRED_FILES` (73 now, from
+67) and **no new gate**, because the foundation-suite gate already runs the whole
+`control_plane/tests` directory. Nothing else under `AGENTS.md`'s ask-first list was
+touched.
 
-1. Review `docs/adr/0005-idempotent-mutations-and-transactional-outbox.md`, especially
-   "What this does not claim".
-2. Review the one protected-file change: `scripts/verify-repository.sh`, which gains six
-   entries in `REQUIRED_FILES` (73 now, from 67) and **no new gate** — the foundation-suite
-   gate already runs the whole `control_plane/tests` directory. Nothing else under
-   `AGENTS.md`'s ask-first list was touched.
-3. Run `./scripts/verify-repository.sh` with `FIRMBATCH_TEST_DATABASE_URL` set. Expect
-   **14 gates, 0 failed**.
+Order for the human, from here:
+
+1. Commit this documentation status change. `d362717` carries the implementation; this
+   commit carries only `docs/STATE.md` and `docs/tasks/current.md`.
+2. Push `feat/milestone-2-2-idempotency-outbox`, open the pull request, and let CI run
+   `./scripts/verify-repository.sh` against its PostgreSQL 16 service container. Expect
+   **14 gates, 0 failed**. Skip counts differ by cluster shape and both are expected; see
+   the M2.1 CI correction above.
+3. Merge after all required checks pass.
 4. If promoting M2.2 to **VERIFIED LIVE**, capture the foundation-suite run with
    `/record-evidence` under `docs/evidence/m2/`. Otherwise retain the current
-   **implemented and tested** classification.
-5. Human commits the reviewed branch.
+   **implemented and tested** classification — no evidence artifact has been captured, so
+   M2.2 is not VERIFIED LIVE today.
 
 Deliberately deferred out of M2.2, and each one is somebody's later milestone: the outbox
 **dispatcher** and SQS publishing (M6), delivery state, global (non-tenant) events and
