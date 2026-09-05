@@ -3,21 +3,23 @@
 Active work and open questions. Updated at the end of each task, alongside `docs/STATE.md`.
 
 Last updated: 2026-09-05, `main` merge commit `b028f21` (Milestone 2.2, PR #5), plus
-Milestone 2.3 on `feat/milestone-2-3-auth-audit-secrets`, **implemented, tested, and
-uncommitted**, after a fourth security correction pass. Milestone 1 merged at `6b4f341`;
-M2.1 merged at `712b51a` (implementation
+Milestone 2.3 on `feat/milestone-2-3-auth-audit-secrets`, **implemented, tested, reviewed
+and awaiting merge**, after a fourth security correction pass. Milestone 1 merged at
+`6b4f341`; M2.1 merged at `712b51a` (implementation
 commit `521870b`, plus the bootstrap trust-boundary correction `78eae1d`); M2.2 merged at
 `b028f21` (implementation commit `d362717`).
 
-**M2.3 has no commit hash.** Nothing has been committed or pushed; the human commits.
+**M2.3 is at implementation commit `89fbdd9`.** Nothing has been pushed or merged; the
+human pushes and merges.
 
 ---
 
 ## Active — Milestone 2, shared product foundation
 
 Milestones 0 and 1 are complete; Milestone 1 merged at `6b4f341`. Milestone 2 is now the active
-milestone. It has four slices; the first two are merged, the third is implemented and
-tested in the working tree, and the fourth is not started.
+milestone. It has four slices; the first two are merged, the third is implemented, tested
+and reviewed at commit `89fbdd9` and awaiting merge, and the fourth is not started.
+Milestone 2 remains active until M2.4 is completed.
 
 ### M2.1 — PostgreSQL and tenant-isolation spine — **merged at `712b51a` (PR #4)**
 
@@ -128,7 +130,7 @@ adversarial completion tests. ADR 0004 §8g and `docs/STATE.md` carry the detail
 Nothing in this repository asserts the limitation as a passing test; it is tracked in
 prose, deliberately, so that it is fixed rather than deleted.
 
-**Status at M2.3.** The database and runtime half is done: the limitation above no longer
+**Status at M2.3.** The database/GUC portion is closed: the limitation above no longer
 holds, and completion cases 1 to 4 -- arbitrary context, a leaked runtime credential, SQL
 injection, and replay or forgery -- are met and tested adversarially. Case 5, an
 authenticated user with no membership in a workspace, needs memberships and is Milestone
@@ -266,11 +268,11 @@ Known limits carried out of this slice, in prose rather than as passing tests:
 - the contention test depends on `pg_stat_activity` showing a blocked backend, so on a
   server where that view is restricted it fails rather than silently degrading.
 
-### M2.3 — authenticated context, authorization, audit, secrets — **implemented and tested, uncommitted**
+### M2.3 — authenticated context, authorization, audit, secrets — **implemented and tested at `89fbdd9`, reviewed, awaiting merge**
 
-On `feat/milestone-2-3-auth-audit-secrets`. It closes the piece M2.1 deliberately left
-open: tenant context is now resolved from an authenticated credential rather than accepted
-from a caller-set setting. `docs/STATE.md` has what it does and the property-to-test map;
+On `feat/milestone-2-3-auth-audit-secrets`, at implementation commit `89fbdd9`. It closes
+the piece M2.1 deliberately left open: tenant context is now resolved from an authenticated
+credential rather than accepted from a caller-set setting. `docs/STATE.md` has what it does and the property-to-test map;
 `docs/adr/0006-authenticated-authorization-audit-and-secrets.md` has why.
 
 **The one sentence that matters.** A transaction no longer chooses its tenant. It presents
@@ -393,12 +395,13 @@ Order for the human, from here:
 1. Review `docs/adr/0006-authenticated-authorization-audit-and-secrets.md`, in particular
    "What this does not claim" and the rejected alternatives.
 2. Review the one protected-file change and the `RUNTIME_MODULES` manifest entry above.
-3. Run `./scripts/verify-repository.sh` with `FIRMBATCH_TEST_DATABASE_URL` set. Expect
-   **14 gates, 0 failed** and **1314 passed, 1 skipped** locally. Skip counts differ by
-   cluster shape; see the M2.1 CI correction above.
-4. Commit the branch, push, open the pull request, and merge after all required checks pass.
+3. `./scripts/verify-repository.sh` was run with `FIRMBATCH_TEST_DATABASE_URL` set at
+   `89fbdd9`: **14 gates passed, 0 failed**, and the PostgreSQL foundation suite **1,314
+   passed, 1 skipped** — the one skip is the pre-existing REPLICATION skip. Skip counts
+   differ by cluster shape; see the M2.1 CI correction above.
+4. Push the branch, open the pull request, and merge after all required checks pass.
 5. If promoting M2.3 to **VERIFIED LIVE**, capture the foundation-suite run with
-   `/record-evidence` under `docs/evidence/m2/`. Otherwise retain the current
+   `/record-evidence` under `docs/evidence/m2/`. Otherwise retain the
    **implemented and tested** classification — no evidence artifact has been captured, so
    M2.3 is not VERIFIED LIVE today.
 
@@ -488,7 +491,7 @@ From the third review, three more:
     **Authenticated reads remain primary-only; read-replica routing is Milestone 8**, and no
     live standby has been tested or claimed.
 
-The suite is **1315 checks (1314 passed, 1 skipped locally)**: 805 after the first
+The suite is **1315 checks (1,314 passed, 1 skipped locally)**: 805 after the first
 correction pass, 934 after the second, 1122 after the third, and 1314 after the fourth,
 which added 192. Nothing was weakened to make any of them pass — the four tests whose subject was a mechanism that no
 longer exists were rewritten to assert the property that replaced it, and each says so in
@@ -572,7 +575,8 @@ membership and credential lifecycle together.
 
 ### M2.4 — explicit lifecycle state machines — PLANNED
 
-Conditional, persisted transitions that invalid transitions cannot race through. Not started.
+The next planned Milestone 2 slice. Conditional, persisted transitions that invalid
+transitions cannot race through. Not started.
 
 **Milestone 2's completion gate is met and Milestone 2 is still open.** The gate is
 cross-tenant reads and writes failing closed in automated tests **and** duplicate mutations

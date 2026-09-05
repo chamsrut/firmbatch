@@ -15,16 +15,16 @@ Five labels, kept strictly apart:
   Documentation, comments, and passing-in-the-moment are not evidence.
 
 Last updated: 2026-09-05, at `main` merge commit `b028f21` (Milestone 2.2, PR #5), plus
-Milestone 2.3 on `feat/milestone-2-3-auth-audit-secrets`, **implemented, tested, and
-uncommitted**, after four independent security reviews whose twenty-three findings are
-all corrected (see the four correction-pass sections below). Milestone 1 merged at
+Milestone 2.3 on `feat/milestone-2-3-auth-audit-secrets`, **implemented, tested, reviewed
+and awaiting merge**, after four independent security reviews whose twenty-three findings
+are all corrected (see the four correction-pass sections below). Milestone 1 merged at
 `6b4f341`; M2.1 merged at `712b51a` (implementation
 commit `521870b`, with the bootstrap trust-boundary correction `78eae1d` — see the CI
 correction section below); M2.2 merged at `b028f21` (implementation commit `d362717`).
 
-**M2.3 has no commit hash yet.** The working tree carries it and nothing has been
-committed or pushed; the human commits. Wherever this document says "at M2.3", it means
-the state of that working tree and not a recorded revision.
+**M2.3 is at implementation commit `89fbdd9`.** The branch carries it and nothing has been
+pushed or merged; the human pushes and merges. Wherever this document says "at M2.3", it
+means the state of that commit.
 
 ---
 
@@ -367,7 +367,7 @@ exists, and nothing is deployed. Do not cite the test count as deployment proof.
 ## CURRENT — Milestone 2.2 idempotent mutations and the transactional outbox
 
 The second slice of Milestone 2, delivered on `feat/milestone-2-2-idempotency-outbox` by
-implementation commit `d362717` and **reviewed, awaiting merge**. It preserves everything
+implementation commit `d362717` and **merged at `b028f21` (PR #5)**. It preserves everything
 M2.1 established — PostgreSQL isolation, credential separation, migration validation,
 connection hardening, disposable-database safety, and the frozen-v0 boundary — and adds
 two tenant-scoped tables behind the same forced row-level security, plus one typed
@@ -483,10 +483,10 @@ return nothing and the caller would be told a taken key is free.
 
 ## CURRENT — Milestone 2.3 authenticated context, authorization, audit, and secrets
 
-The third slice of Milestone 2, on `feat/milestone-2-3-auth-audit-secrets`,
-**implemented and tested and not committed**. It closes the gap M2.1 named and M2.2 left
-standing: a transaction no longer chooses its tenant, it presents a credential and is told
-which tenant it got.
+The third slice of Milestone 2, on `feat/milestone-2-3-auth-audit-secrets`, delivered by
+implementation commit `89fbdd9` and **reviewed, awaiting merge**. It closes the gap M2.1
+named and M2.2 left standing: a transaction no longer chooses its tenant, it presents a
+credential and is told which tenant it got.
 
 **Implemented and tested.** Not deployed, and **not VERIFIED LIVE**: no evidence artifact
 has been captured for this slice.
@@ -520,7 +520,7 @@ M2.2 test now runs against the new mechanism.
 | `control_plane/db/metadata.py` | The bounded-metadata policy, extracted from `db/idempotency.py` so the audit trail holds itself to the same rule; every public name is re-exported from where it was. Two rules added: **keys as well as values** are refused for carrying a recognisable secret shape, checked *before* the format test; and **no refusal quotes what it refused** — an error names the rule and the position (`entry 3`, `entry 3, item 5`) and never the key, the value, or its length. |
 | `control_plane/db/repositories.py` | Neither repository takes a `tenant_id` any more. `TenantRepository.create` uses the id the provisioning context generated; `WorkspaceRepository.create` uses the authenticated one. |
 | `control_plane/db/roles.py` | **Revision-aware.** Each supported schema revision has an explicit `RevisionPlan` naming its tables, its functions and its per-role grant set; an unknown, mixed or unsupported revision is refused rather than guessed at, and at head every declared object is required to exist. The application role gains `EXECUTE` on the twelve runtime auth functions and `SELECT` — **not `INSERT`** — on `audit_events`; provisioning gains those plus `begin_tenant_provisioning`, and nothing at all on the trail. Neither gains anything on `auth_bindings` or `auth_transaction_context`, and neither may execute any internal function. |
-| `control_plane/tests/` | **1315 pytest checks (1314 passed, 1 skipped locally)**, up from 512: five new modules — `test_authenticated_context.py`, `test_authorization.py`, `test_protected_auth_state.py`, `test_audit_events.py`, `test_secrets_model.py` — plus every existing module moved onto the authenticated mechanism. The last 380 of those come from the third and fourth correction passes below. |
+| `control_plane/tests/` | **1315 pytest checks (1,314 passed, 1 skipped locally)**, up from 512: five new modules — `test_authenticated_context.py`, `test_authorization.py`, `test_protected_auth_state.py`, `test_audit_events.py`, `test_secrets_model.py` — plus every existing module moved onto the authenticated mechanism. The last 380 of those come from the third and fourth correction passes below. |
 
 Design decisions are recorded in
 `docs/adr/0006-authenticated-authorization-audit-and-secrets.md`.
@@ -926,10 +926,10 @@ capture new artifacts with provenance matching the committed tree.
 
 | Claim | How to settle it |
 | --- | --- |
-| All **fourteen** gates in `scripts/verify-repository.sh` pass: layout (**86** required files since Milestone 2.3 registered thirteen), agent configuration, hygiene, v0 property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 247/247, the runtime import closure check, and the PostgreSQL foundation suite **1314 passed, 1 skipped** locally (granting REPLICATION needs a superuser admin, which CI has and the developer cluster does not. On CI that test runs and two others skip instead -- the owner-only-refusal assertions, which have no meaning for a superuser bootstrap administrator). Observed locally on 2026-09-05 against PostgreSQL 16.15 on the developer's WSL machine, on the uncommitted Milestone 2.3 working tree after the fourth security correction pass. **Neither M2.2 nor M2.3 added a gate**; the foundation-suite gate already runs the whole `control_plane/tests` directory, so the new modules run inside it. | `/record-evidence` → `docs/evidence/r0/gates.txt` (and a Milestone 2 artifact for the foundation suite), after the commit. |
+| All **fourteen** gates in `scripts/verify-repository.sh` pass — **14 passed, 0 failed**: layout (**86** required files since Milestone 2.3 registered thirteen), agent configuration, hygiene, v0 property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 247/247, the runtime import closure check, and the PostgreSQL foundation suite **1,314 passed, 1 skipped** locally — the one skip is the pre-existing REPLICATION skip (granting REPLICATION needs a superuser admin, which CI has and the developer cluster does not. On CI that test runs and two others skip instead -- the owner-only-refusal assertions, which have no meaning for a superuser bootstrap administrator). Observed locally on 2026-09-05 against PostgreSQL 16.15 on the developer's WSL machine, at Milestone 2.3 implementation commit `89fbdd9`. **Neither M2.2 nor M2.3 added a gate**; the foundation-suite gate already runs the whole `control_plane/tests` directory, so the new modules run inside it. | `/record-evidence` → `docs/evidence/r0/gates.txt` (and a Milestone 2 artifact for the foundation suite). Not yet captured. |
 | The M2.1 tenant-isolation properties hold in PostgreSQL: absent context reads nothing and writes nothing; tenant A cannot read, insert, update or delete tenant B's rows; a fabricated cross-tenant or dangling foreign key is rejected; tenant context is not inherited from a session value, a pooled connection, or a URL option; a reused ORM `Session` cannot serve a previous tenant's object; a temporary relation cannot shadow a Firmbatch table; the application role is non-owner, `NOSUPERUSER`, `NOBYPASSRLS`, is refused at connect time if it were any of those, cannot disable a policy, cannot create tables or temporary tables, cannot read the schema history, and cannot create a tenant even with matching context; workspace uniqueness is tenant-local. | `/record-evidence` → `docs/evidence/m2/tenant-isolation-suite.txt`, after the Milestone 2.1 commit. Until then this is a re-runnable claim with no captured artifact. |
 | The M2.2 idempotency and outbox properties hold in PostgreSQL: an identical retry returns the stored result and invokes the mutation once; four identical calls leave one workspace, one claim and one linked event; a conflicting reuse is rejected; two callers observed contending on a real lock commit one effect and one event, and the loser replays; a failure before commit leaves nothing and does not block the retry; a mutation callback cannot commit or roll back the primitive's transaction and an escape by any other route is detected; unflushed ORM state at entry is rejected; malformed operations and keys are refused before the mutation runs; the same key is independent between tenants; cross-tenant reads and writes on both new tables fail closed; missing context fails closed; a committed event is immutable to the application role and matches zero rows even for the owner; an internal state change appends an event with no idempotency record and a rollback removes both; and no value of the request identity reaches a row. **At M2.2 this was 511 passing checks with 1 skipped, of which 130 were new; the same properties are asserted at M2.3 inside a suite of 806.** | `/record-evidence` → `docs/evidence/m2/idempotency-outbox-suite.txt`, at or after Milestone 2.2 implementation commit `d362717`. Until then this is a re-runnable claim with no captured artifact, and M2.2 is **not** VERIFIED LIVE. |
-| The M2.3 authenticated-context, authorization, audit and secrets properties hold in PostgreSQL: a forged `app.tenant_id` or any fabricated setting grants nothing; a fabricated tenant, binding id, fingerprint, actor or scope grants nothing; the function that writes a context is executable by nobody; a relation forged where the context lives is ignored because it is not owned by the schema owner; unknown, malformed, revoked and expired credentials fail closed with one indistinguishable message; binding twice or switching identity is refused; context survives no commit, rollback, failed statement, pool reuse or `Session` reuse, and a Connection-bound `Session` is refused; a valid credential reaches its own tenant and no other; the credential is never stored; authorization is deny-by-default with read/write scope distinctions, minimal framework capabilities and no non-customer scope; every `SECURITY DEFINER` function is owned, path-pinned, `PUBLIC`-revoked, minimally granted and free of dynamic SQL; the registry has no grants and no policy; audit events derive tenant and actor, refuse a supplied alternative, cannot be backdated, are immutable, roll back with their action and reject secret-shaped metadata; secrets never render themselves and production fails closed; and the migration reverses to the M2.2 shape and back. **805 pytest checks pass, 1 skipped**, a net increase of 294 collected checks over M2.2's 512 -- five new modules, plus every existing module moved onto the authenticated mechanism, plus a handful of M2.1 tests replaced by the stronger property that superseded them. | `/record-evidence` → `docs/evidence/m2/authenticated-context-suite.txt`, at or after the Milestone 2.3 commit. Until then this is a re-runnable claim with no captured artifact, and M2.3 is **not** VERIFIED LIVE. |
+| The M2.3 authenticated-context, authorization, audit and secrets properties hold in PostgreSQL: a forged `app.tenant_id` or any fabricated setting grants nothing; a fabricated tenant, binding id, fingerprint, actor or scope grants nothing; the function that writes a context is executable by nobody; a relation forged where the context lives is ignored because it is not owned by the schema owner; unknown, malformed, revoked and expired credentials fail closed with one indistinguishable message; binding twice or switching identity is refused; context survives no commit, rollback, failed statement, pool reuse or `Session` reuse, and a Connection-bound `Session` is refused; a valid credential reaches its own tenant and no other; the credential is never stored; authorization is deny-by-default with read/write scope distinctions, minimal framework capabilities and no non-customer scope; every `SECURITY DEFINER` function is owned, path-pinned, `PUBLIC`-revoked, minimally granted and free of dynamic SQL; the registry has no grants and no policy; audit events derive tenant and actor, refuse a supplied alternative, cannot be backdated, are immutable, roll back with their action and reject secret-shaped metadata; secrets never render themselves and production fails closed; and the migration reverses to the M2.2 shape and back. **1,314 pytest checks pass, 1 skipped**, a net increase of 803 collected checks over M2.2's 512 -- five new modules, plus every existing module moved onto the authenticated mechanism, plus a handful of M2.1 tests replaced by the stronger property that superseded them. | `/record-evidence` → `docs/evidence/m2/authenticated-context-suite.txt`, at or after Milestone 2.3 implementation commit `89fbdd9`. No evidence artifact has been captured, so this remains a re-runnable claim and M2.3 is **implemented and tested**, **not** VERIFIED LIVE. |
 | The destructive-safety properties hold: a forged, altered, cross-server, or foreign-cluster teardown handle is refused and the database survives; an unattested server refuses both creation and teardown; a failure after creation removes the database and both roles; a generated password never reaches exception text, stdout, or stderr. Covered by `control_plane/tests/test_bootstrap_safety.py`. | Same artifact as the row above. |
 | The shared policy engine denies the R0 accident classes across both adapter protocols — multi-line blocks classified line by line, `git -C`/`git -c`, `gh` and `aws` global options, `env`/`timeout` prefixes, `cd`/`cd -`/`pushd`/`popd`/`||` sequences, subshell grouping, argparse-abbreviated provider selection, evidence-tree ancestors including glob and `mv` forms, source and destination operands, in-place archivers, `git restore`/`checkout` over a path, credential reads on every surface including the `.env.*` family, wrapper- and prefix-depth exhaustion, unparseable input, unknown tool names carrying a payload, and engine exceptions. 247 synthetic checks pass. | `/record-evidence` → `docs/evidence/r0/policy-tests.txt`, after the R0 commit. |
 
@@ -993,11 +993,14 @@ The canonical roadmap is `docs/firmbatch-v1-roadmap.md`; the pilot roadmap is su
 
 Milestone 0 and Milestone 1 are complete (Milestone 1 merged at `6b4f341`). Milestone 2 is
 active. Its first slice, M2.1, is merged at `712b51a`; its second, M2.2, at `b028f21`; its
-third, M2.3, is implemented and tested above and **is not committed**.
+third, M2.3, is implemented and tested above at commit `89fbdd9` and **reviewed, awaiting
+merge**.
 
-The remaining Milestone 2 slice is PLANNED and not started:
+The remaining Milestone 2 slice is PLANNED and not started, and is the next planned slice:
 
 - **M2.4** — explicit lifecycle state machines with conditional transitions that cannot race.
+
+Milestone 2 remains active until M2.4 is completed.
 
 ### PLANNED — `AUTH-MEMBERSHIP-BOUND-IDENTITY` (Milestone 3), and it blocks launch
 
