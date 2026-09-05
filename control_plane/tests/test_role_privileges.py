@@ -23,6 +23,7 @@ from sqlalchemy.exc import ProgrammingError
 
 from firmbatch.control_plane import config, migrate
 from firmbatch.control_plane.config import PrivilegedPrincipalError
+from firmbatch.control_plane.db import auth
 from firmbatch.control_plane.db import engine as db_engine
 from firmbatch.control_plane.db.base import SCHEMA
 from firmbatch.control_plane.db.principal import inspect_principal, require_unprivileged_principal
@@ -191,7 +192,7 @@ def test_application_role_cannot_disable_row_level_security(raw_application_conn
     for statement in (
         f"ALTER TABLE {SCHEMA}.workspaces DISABLE ROW LEVEL SECURITY",
         f"ALTER TABLE {SCHEMA}.workspaces NO FORCE ROW LEVEL SECURITY",
-        f"DROP POLICY workspaces_tenant_isolation ON {SCHEMA}.workspaces",
+        f"DROP POLICY workspaces_authenticated_read ON {SCHEMA}.workspaces",
     ):
         with pytest.raises(ProgrammingError) as exc:
             raw_application_connection.execute(text(statement))
@@ -239,65 +240,106 @@ def test_application_role_cannot_read_the_schema_history(raw_application_connect
     assert "permission denied" in str(exc.value).lower()
 
 
-def test_application_role_cannot_create_a_tenant_even_with_matching_context(application_engine):
-    """Provisioning is a separate privilege, not a matter of setting the right context."""
-    tenant_id = uuid.uuid4()
+def test_application_role_cannot_create_a_tenant_even_in_its_own_context(application_engine, principal_a):
+    """Provisioning is a separate privilege, not a matter of holding the right context.
+
+    Its own tenant, its own authenticated context, and still refused: the application role
+    holds ``SELECT`` on ``tenants`` and nothing else. The credential also does not carry
+    ``tenant:provision``, so the policy would refuse it even if the privilege did not --
+    two independent measures, which is the standard this schema holds itself to.
+    """
     with pytest.raises(ProgrammingError) as exc:
-        with db_engine.tenant_transaction(application_engine, tenant_id) as session:
+        with auth.authenticated_transaction(application_engine, principal_a.credential) as session:
             session.execute(
                 text(f"INSERT INTO {SCHEMA}.tenants (id, slug, name) VALUES (:id, 'self-made', 'Self Made')"),
-                {"id": tenant_id},
+                {"id": principal_a.id},
             )
+    assert "permission denied" in str(exc.value).lower()
+
+
+def test_the_application_role_cannot_begin_tenant_provisioning(application_engine):
+    """The other half: the function that establishes a credential-free context.
+
+    ``begin_tenant_provisioning()`` is granted to the provisioning role alone. If the
+    application role could call it, it could obtain a context for a brand-new tenant --
+    which is not a way into anybody else's data, but is a way to create tenants nobody
+    asked for, and that is provisioning's job and not the runtime's.
+    """
+    with pytest.raises(ProgrammingError) as exc:
+        with db_engine.transaction(application_engine) as session:
+            session.execute(text(f"SELECT {SCHEMA}.begin_tenant_provisioning()"))
     assert "permission denied" in str(exc.value).lower()
 
 
 def test_provisioning_role_can_create_a_tenant(provisioning_engine):
     slug = f"provisioned-{uuid.uuid4().hex[:10]}"
-    with db_engine.transaction(provisioning_engine) as session:
+    with auth.provisioning_transaction(provisioning_engine) as session:
         tenant = TenantRepository(session).create(slug=slug, name="Provisioned")
-        tenant_id = tenant.id
-    with db_engine.tenant_transaction(provisioning_engine, tenant_id) as session:
-        assert TenantRepository(session).get(tenant_id) is not None
+        # Readable inside the same provisioning context, and only there: the provisioning
+        # context exists for the tenant it just generated and cannot be pointed at another.
+        assert TenantRepository(session).get(tenant.id) is not None
 
 
-def test_provisioning_role_cannot_read_tenant_data(provisioning_engine, tenant_a):
+def test_provisioning_cannot_be_pointed_at_an_existing_tenant(provisioning_engine, tenant_a):
+    """The property that keeps provisioning from being "may select any tenant".
+
+    ``firmbatch.begin_tenant_provisioning()`` takes no arguments and generates the tenant
+    id itself, so two provisioning transactions never land on the same tenant and neither
+    can land on one that already exists. There is no call that would even express the
+    attempt -- which is the point, and is why this asserts the shape of the function
+    rather than watching a refusal.
+    """
+    seen = set()
+    for _ in range(3):
+        with auth.provisioning_transaction(provisioning_engine) as session:
+            context = auth.current_authenticated_context(session)
+            assert context.actor_kind == "provisioning"
+            assert context.tenant_id != tenant_a
+            seen.add(context.tenant_id)
+    assert len(seen) == 3, "each provisioning transaction must get its own fresh tenant id"
+
+
+def test_provisioning_role_cannot_read_tenant_data(provisioning_engine, principal_a):
     """It creates the scope; it does not get to look inside it."""
     with pytest.raises(ProgrammingError) as exc:
-        with db_engine.tenant_transaction(provisioning_engine, tenant_a) as session:
+        with auth.authenticated_transaction(provisioning_engine, principal_a.credential) as session:
             session.execute(text(f"SELECT * FROM {SCHEMA}.workspaces"))
     assert "permission denied" in str(exc.value).lower()
 
 
-def test_provisioning_role_cannot_modify_another_tenants_row(provisioning_engine, tenant_a, tenant_b):
-    """Finding 11: prove the intended operation, not an incidental exception.
+def test_provisioning_cannot_reach_an_existing_tenants_row(provisioning_engine, principal_a, principal_b):
+    """Finding 11, restated on the mechanism that replaced the one it was written for.
 
-    The previous version of this test wrapped the whole block in ``pytest.raises(Exception)``
-    and passed because a later ``assert`` raised ``AssertionError`` -- which is an
-    ``Exception``. It never demonstrated that the UPDATE was refused. This version runs the
-    UPDATE, asserts the row count, and then reads the row back from tenant B's own valid
-    context to prove the stored value is unchanged.
+    The original test set the provisioning connection's context to tenant A and watched an
+    UPDATE against tenant B match zero rows. That test could be written because
+    provisioning could *name* a tenant. It no longer can: every provisioning context is a
+    tenant id PostgreSQL generated inside the transaction, so neither A's row nor B's is
+    addressable from one, and the ``UPDATE`` matches nothing wherever it is aimed.
+
+    What is asserted is the same property one layer earlier -- no provisioning transaction
+    can see or change a tenant that already existed -- plus the original's most important
+    detail: the row is read back from a context that legitimately can see it, so a passing
+    assertion is not just an empty result set.
     """
-    with db_engine.tenant_transaction(provisioning_engine, tenant_b) as session:
+    with auth.authenticated_transaction(provisioning_engine, principal_b.credential) as session:
         original = session.execute(
-            text(f"SELECT name FROM {SCHEMA}.tenants WHERE id = :id"), {"id": tenant_b}
+            text(f"SELECT name FROM {SCHEMA}.tenants WHERE id = :id"), {"id": principal_b.id}
         ).scalar()
-    assert original is not None, "tenant B must be readable from its own context for this test to mean anything"
+    assert original is not None, "tenant B must be readable from its own context for this to mean anything"
 
-    # Tenant A's context cannot see tenant B's row, so the UPDATE matches nothing.
-    with db_engine.tenant_transaction(provisioning_engine, tenant_a) as session:
-        result = session.execute(
-            text(f"UPDATE {SCHEMA}.tenants SET name = 'seized' WHERE id = :id"), {"id": tenant_b}
-        )
-        assert result.rowcount == 0, "tenant A must not be able to update tenant B's row"
-        # And from A's context the row is simply absent.
-        assert session.execute(
-            text(f"SELECT name FROM {SCHEMA}.tenants WHERE id = :id"), {"id": tenant_b}
-        ).scalar() is None
+    with auth.provisioning_transaction(provisioning_engine) as session:
+        for target in (principal_a.id, principal_b.id):
+            result = session.execute(
+                text(f"UPDATE {SCHEMA}.tenants SET name = 'seized' WHERE id = :id"), {"id": target}
+            )
+            assert result.rowcount == 0, f"a provisioning context reached tenant {target}"
+            assert session.execute(
+                text(f"SELECT name FROM {SCHEMA}.tenants WHERE id = :id"), {"id": target}
+            ).scalar() is None
 
-    # The authoritative check: read it back from tenant B's valid context.
-    with db_engine.tenant_transaction(provisioning_engine, tenant_b) as session:
+    with auth.authenticated_transaction(provisioning_engine, principal_b.credential) as session:
         after = session.execute(
-            text(f"SELECT name FROM {SCHEMA}.tenants WHERE id = :id"), {"id": tenant_b}
+            text(f"SELECT name FROM {SCHEMA}.tenants WHERE id = :id"), {"id": principal_b.id}
         ).scalar()
     assert after == original
     assert after != "seized"

@@ -65,13 +65,20 @@ RUNTIME_MODULES = (
     "__init__.py",
     "config.py",
     "db/__init__.py",
+    "db/audit.py",
+    "db/auth.py",
     "db/base.py",
     "db/engine.py",
     "db/identity.py",
+    "db/idempotency.py",
+    "db/metadata.py",
     "db/models.py",
     "db/principal.py",
     "db/repositories.py",
     "db/roles.py",
+    "security/__init__.py",
+    "security/authorization.py",
+    "security/secrets.py",
 )
 
 #: What a runtime module may not import. ``migrate`` holds the owner credential path and

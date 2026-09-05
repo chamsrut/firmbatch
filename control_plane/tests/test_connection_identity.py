@@ -26,6 +26,7 @@ from sqlalchemy import create_engine, make_url, text
 
 from firmbatch.control_plane import config
 from firmbatch.control_plane.config import PrivilegedPrincipalError
+from firmbatch.control_plane.db import auth
 from firmbatch.control_plane.db import engine as db_engine
 from firmbatch.control_plane.db.base import SCHEMA
 from firmbatch.control_plane.db.principal import inspect_principal, require_unprivileged_principal
@@ -202,8 +203,12 @@ def test_a_pooled_connection_is_revalidated_on_checkout(environment, admin_engin
             connection.execute(text(f'DROP ROLE IF EXISTS "{probe_role}"'))
 
 
-def test_a_healthy_pooled_connection_survives_repeated_checkouts(application_engine, tenant_a):
-    """Revalidation must not break the ordinary path, only the compromised one."""
+def test_a_healthy_pooled_connection_survives_repeated_checkouts(application_engine, principal_a):
+    """Revalidation must not break the ordinary path, only the compromised one.
+
+    Three checkouts, each of which re-verifies the principal, re-pins ``search_path`` and
+    empties the authentication context before the transaction acquires its own.
+    """
     for _ in range(3):
-        with db_engine.tenant_transaction(application_engine, tenant_a) as session:
-            assert db_engine.current_tenant_context(session) == tenant_a
+        with auth.authenticated_transaction(application_engine, principal_a.credential) as session:
+            assert db_engine.current_tenant_context(session) == principal_a.id

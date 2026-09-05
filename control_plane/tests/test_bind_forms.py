@@ -24,7 +24,8 @@ And one **rejected** form: ``Session(bind=engine.connect())``.
 
 That rejection replaced an earlier attempt to support it. Every protection here is
 anchored to a pool *checkout* -- the principal is re-verified there, ``search_path`` is
-re-pinned there, and the session-level ``app.tenant_id`` is cleared there. A Connection
+re-pinned there, and whatever session state the previous holder left is what the next one
+inherits. A Connection
 handed to a ``Session`` was checked out earlier by somebody else and may have been used in
 between, so the Session inherits whatever session state that caller left behind and none of
 the checkout hardening re-runs. Teaching the identity-map guard to recognise the form
@@ -35,9 +36,9 @@ form that looks supported and is not. Nothing in this package needs it.
   not by the behavioural matrix, and that is a property of SQLAlchemy rather than an
   omission: ``session.execute(text(...))`` on such a session raises
   ``UnboundExecutionError`` because a raw statement has no mapper to resolve a bind from.
-  Tenant context is set with ``set_config(...)``, which is raw SQL -- so a session with no
-  default bind cannot carry tenant context at all, and there is no cached-object scenario
-  to test. The recognition test still covers the ``get_bind()`` resolution path, which is
+  A context is acquired by calling ``firmbatch.bind_authenticated_context(...)``, which is
+  a raw statement -- so a session with no default bind cannot carry a context at all, and
+  there is no cached-object scenario to test. The recognition test still covers the ``get_bind()`` resolution path, which is
   the part of the guard that mapper binds actually exercise.
 
 Eight outcomes each: outer commit, outer rollback, outer exception, nested commit, nested
@@ -55,6 +56,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
+from firmbatch.control_plane.db import auth
 from firmbatch.control_plane.db import engine as db_engine
 from firmbatch.control_plane.db.models import Workspace
 from firmbatch.control_plane.db.repositories import WorkspaceRepository
@@ -120,20 +122,20 @@ def make_session(isolated_engine, request):
             item.close()
 
 
-def _seed(engine, tenant, slug):
-    """One workspace for ``tenant``, returning its id."""
-    with db_engine.tenant_transaction(engine, tenant) as session:
+def _seed(engine, principal, slug):
+    """One workspace for ``principal``'s tenant, returning its id."""
+    with auth.authenticated_transaction(engine, principal.credential) as session:
         return WorkspaceRepository(session).create(slug=slug, name=f"W {slug}").id
 
 
 @pytest.fixture()
-def workspaces(isolated_engine, tenant_a, tenant_b):
+def workspaces(isolated_engine, principal_a, principal_b):
     import uuid
 
     suffix = uuid.uuid4().hex[:8]
     return {
-        tenant_a: _seed(isolated_engine, tenant_a, f"bind-a-{suffix}"),
-        tenant_b: _seed(isolated_engine, tenant_b, f"bind-b-{suffix}"),
+        principal_a.id: _seed(isolated_engine, principal_a, f"bind-a-{suffix}"),
+        principal_b.id: _seed(isolated_engine, principal_b, f"bind-b-{suffix}"),
     }
 
 
@@ -203,12 +205,13 @@ def test_a_session_joining_an_active_external_transaction_is_refused(isolated_en
         connection.close()
 
 
-def test_the_session_factories_refuse_a_checked_out_connection(isolated_engine, tenant_a):
+def test_the_session_factories_refuse_a_checked_out_connection(isolated_engine, principal_a):
     """The official factories take an Engine and say so at the door."""
     connection = isolated_engine.connect()
     try:
         for factory, args in (
-            (db_engine.tenant_transaction, (connection, tenant_a)),
+            (auth.authenticated_transaction, (connection, principal_a.credential)),
+            (auth.provisioning_transaction, (connection,)),
             (db_engine.transaction, (connection,)),
         ):
             with pytest.raises(db_engine.UnsupportedSessionBindError) as exc:
@@ -219,7 +222,7 @@ def test_the_session_factories_refuse_a_checked_out_connection(isolated_engine, 
         connection.close()
 
 
-def test_an_unrelated_connection_bound_session_still_works(disposable_database, tenant_a):
+def test_an_unrelated_connection_bound_session_still_works(disposable_database):
     """The rejection is about *our* pool, not about the bind form in general.
 
     An ordinary SQLAlchemy application binding a Session to a Connection is none of this
@@ -242,7 +245,9 @@ def test_an_unrelated_connection_bound_session_still_works(disposable_database, 
 
 @pytest.mark.parametrize("form", BIND_FORMS)
 @pytest.mark.parametrize("outcome", ["commit", "rollback", "exception"])
-def test_no_object_survives_an_outer_transaction(make_session, workspaces, tenant_a, form, outcome):
+def test_no_object_survives_an_outer_transaction(
+    make_session, workspaces, principal_a, form, outcome
+):
     """After the outermost transaction ends, the map must be empty however it ended.
 
     Reproduced before the fix, for ``commit``: with ``expire_on_commit=False`` the Session
@@ -250,18 +255,18 @@ def test_no_object_survives_an_outer_transaction(make_session, workspaces, tenan
     memory while the same row read through SQL returned ``[]``.
     """
     session = make_session(form)
-    workspace_id = workspaces[tenant_a]
+    workspace_id = workspaces[principal_a.id]
 
     if outcome == "exception":
         with pytest.raises(RuntimeError):
             with session.begin():
-                db_engine.set_tenant_context(session, tenant_a)
+                auth.bind_authenticated_context(session, principal_a.credential)
                 held = session.get(Workspace, workspace_id)
                 assert held is not None
                 raise RuntimeError("unwinding on purpose")
     else:
         with session.begin():
-            db_engine.set_tenant_context(session, tenant_a)
+            auth.bind_authenticated_context(session, principal_a.credential)
             held = session.get(Workspace, workspace_id)
             assert held is not None
             if outcome == "rollback":
@@ -284,31 +289,40 @@ def test_no_object_survives_an_outer_transaction(make_session, workspaces, tenan
 
 @pytest.mark.parametrize("form", BIND_FORMS)
 @pytest.mark.parametrize("outcome", ["commit", "rollback", "exception"])
-def test_no_cross_tenant_object_survives_a_savepoint(
-    make_session, workspaces, tenant_a, tenant_b, form, outcome
+def test_the_map_is_emptied_however_a_savepoint_ends(
+    make_session, workspaces, principal_a, principal_b, form, outcome
 ):
-    """A raw context switch inside a savepoint, unwound every way a savepoint can end.
+    """Every savepoint outcome empties the identity map, in every bind form.
 
-    PostgreSQL restores the outer ``SET LOCAL`` on a savepoint rollback, so the *database*
-    was always correct here. Python was not: the identity map still held the other tenant's
-    object and ``session.get()`` returned it without the policy being evaluated again.
+    This cell of the grid used to test something stronger and sadder: a **raw** context
+    switch inside a savepoint, because at Milestone 2.1 one worked. ``set_config`` could
+    change the effective tenant, so the guard was what stood between a savepoint rollback
+    and tenant B's object being served under tenant A.
+
+    Milestone 2.3 removed the switch rather than defending against it -- no policy reads a
+    setting, and the function that writes a context is executable by no runtime role -- so
+    the first thing asserted here is that the raw route now changes nothing. The guard
+    itself remains, and is asserted directly: after a savepoint ends by any route, nothing
+    is served from memory. It is defence in depth now rather than the primary fix, which
+    is exactly the kind of guard that gets refactored away when nothing pins it.
     """
     session = make_session(form)
-    a_id, b_id = workspaces[tenant_a], workspaces[tenant_b]
+    a_id, b_id = workspaces[principal_a.id], workspaces[principal_b.id]
 
     with session.begin():
-        db_engine.set_tenant_context(session, tenant_a)
+        auth.bind_authenticated_context(session, principal_a.credential)
         mine = session.get(Workspace, a_id)
         assert mine is not None
 
         nested = session.begin_nested()
-        # Deliberately raw: set_tenant_context refuses a switch inside a savepoint, and
-        # this test is about what happens when the refusal is bypassed.
+        # Deliberately raw, and deliberately futile.
         session.execute(
-            text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(tenant_b)}
+            text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(principal_b.id)}
         )
-        theirs = session.get(Workspace, b_id)
-        assert theirs is not None, "the savepoint could not read tenant B, so nothing is proven"
+        assert db_engine.current_tenant_context(session) == principal_a.id
+        assert session.get(Workspace, b_id) is None, (
+            f"{form}/{outcome}: a raw setting change reached tenant B's row"
+        )
 
         if outcome == "commit":
             nested.commit()
@@ -322,26 +336,16 @@ def test_no_cross_tenant_object_survives_a_savepoint(
                 pass
             nested.rollback()
 
-        assert theirs is not None  # strong reference retained on purpose
-        after = session.get(Workspace, b_id)
-
-        if outcome == "commit":
-            # RELEASING a savepoint does not undo a SET LOCAL made inside it -- only
-            # rolling it back does. So the context legitimately stands at tenant B and B's
-            # row is legitimately visible. What must still be true is that the answer came
-            # from PostgreSQL: the map was cleared, so this is a fresh instance rather than
-            # the cached one.
-            assert after is not None
-            assert after is not theirs, (
-                f"{form}/commit: the identity map was not cleared, so the object was served "
-                "from memory rather than re-read under the standing context"
-            )
-        else:
-            # The savepoint rollback restored tenant A, so B's row must be unreachable.
-            assert after is None, (
-                f"{form}/{outcome}: tenant B's object was served from the identity map after "
-                "the savepoint ended, without PostgreSQL re-evaluating the policy"
-            )
+        assert mine is not None  # strong reference retained on purpose
+        assert session.identity_map.keys() == set(), (
+            f"{form}/{outcome}: the identity map survived the end of a savepoint"
+        )
+        # And the outer context is untouched, so legitimate work continues.
+        assert db_engine.current_tenant_context(session) == principal_a.id
+        reread = session.get(Workspace, a_id)
+        assert reread is not None and reread is not mine, (
+            f"{form}/{outcome}: the object was served from memory rather than re-read"
+        )
     session.close()
 
 
@@ -349,38 +353,48 @@ def test_no_cross_tenant_object_survives_a_savepoint(
 
 
 @pytest.mark.parametrize("form", BIND_FORMS)
-def test_clearing_the_context_drops_the_map(make_session, workspaces, tenant_a, form):
-    """An explicit clear is a context change like any other."""
+def test_the_map_is_dropped_when_a_transaction_starts_unauthenticated(
+    make_session, workspaces, principal_a, form
+):
+    """A new transaction is a context change like any other, in every bind form.
+
+    This cell used to clear the context part-way through a transaction and check the map
+    emptied. That operation no longer exists -- it was a route to binding a second identity
+    -- so the unauthenticated state is reached the way a request reaches it, and what is
+    asserted is unchanged: nothing is served from memory once the context that loaded it
+    is gone.
+    """
     session = make_session(form)
-    workspace_id = workspaces[tenant_a]
+    workspace_id = workspaces[principal_a.id]
     with session.begin():
-        db_engine.set_tenant_context(session, tenant_a)
+        auth.bind_authenticated_context(session, principal_a.credential)
         held = session.get(Workspace, workspace_id)
         assert held is not None
 
-        db_engine.reset_tenant_context(session)
-        assert held is not None
+    with session.begin():
+        db_engine.require_no_inherited_context(session)
+        assert held is not None  # strong reference retained on purpose
         assert session.get(Workspace, workspace_id) is None, (
-            f"{form}: the object survived an explicit context clear"
+            f"{form}: the object survived into an unauthenticated transaction"
         )
     session.close()
 
 
 @pytest.mark.parametrize("form", BIND_FORMS)
 def test_a_tenant_transition_re_evaluates_in_postgresql(
-    make_session, workspaces, tenant_a, tenant_b, form
+    make_session, workspaces, principal_a, principal_b, form
 ):
     """A -> B: B must not see A's object, and must see its own."""
     session = make_session(form)
-    a_id, b_id = workspaces[tenant_a], workspaces[tenant_b]
+    a_id, b_id = workspaces[principal_a.id], workspaces[principal_b.id]
 
     with session.begin():
-        db_engine.set_tenant_context(session, tenant_a)
+        auth.bind_authenticated_context(session, principal_a.credential)
         a_object = session.get(Workspace, a_id)
         assert a_object is not None
 
     with session.begin():
-        db_engine.set_tenant_context(session, tenant_b)
+        auth.bind_authenticated_context(session, principal_b.credential)
         assert a_object is not None  # still strongly referenced
         assert session.get(Workspace, a_id) is None, (
             f"{form}: tenant B was served tenant A's object out of the identity map"

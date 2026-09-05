@@ -2,17 +2,24 @@
 
 Active work and open questions. Updated at the end of each task, alongside `docs/STATE.md`.
 
-Last updated: 2026-09-04, `main` merge commit `712b51a` (Milestone 2.1, PR #4), plus
-Milestone 2.2 on `feat/milestone-2-2-idempotency-outbox` at implementation commit
-`d362717`, **reviewed and awaiting merge**. Milestone 1 merged at `6b4f341`; M2.1 was
-implementation commit `521870b` and the bootstrap trust-boundary correction `78eae1d`.
+Last updated: 2026-09-05, `main` merge commit `b028f21` (Milestone 2.2, PR #5), plus
+Milestone 2.3 on `feat/milestone-2-3-auth-audit-secrets`, **implemented, tested, reviewed
+and awaiting merge**, after a fourth security correction pass. Milestone 1 merged at
+`6b4f341`; M2.1 merged at `712b51a` (implementation
+commit `521870b`, plus the bootstrap trust-boundary correction `78eae1d`); M2.2 merged at
+`b028f21` (implementation commit `d362717`).
+
+**M2.3 is at implementation commit `89fbdd9`.** Nothing has been pushed or merged; the
+human pushes and merges.
 
 ---
 
 ## Active — Milestone 2, shared product foundation
 
 Milestones 0 and 1 are complete; Milestone 1 merged at `6b4f341`. Milestone 2 is now the active
-milestone. It has four slices; the first is merged and the second is reviewed and awaiting merge.
+milestone. It has four slices; the first two are merged, the third is implemented, tested
+and reviewed at commit `89fbdd9` and awaiting merge, and the fourth is not started.
+Milestone 2 remains active until M2.4 is completed.
 
 ### M2.1 — PostgreSQL and tenant-isolation spine — **merged at `712b51a` (PR #4)**
 
@@ -123,9 +130,17 @@ adversarial completion tests. ADR 0004 §8g and `docs/STATE.md` carry the detail
 Nothing in this repository asserts the limitation as a passing test; it is tracked in
 prose, deliberately, so that it is fixed rather than deleted.
 
-### M2.2 — idempotent mutations and the transactional outbox — **reviewed, awaiting merge**
+**Status at M2.3.** The database/GUC portion is closed: the limitation above no longer
+holds, and completion cases 1 to 4 -- arbitrary context, a leaked runtime credential, SQL
+injection, and replay or forgery -- are met and tested adversarially. Case 5, an
+authenticated user with no membership in a workspace, needs memberships and is Milestone
+3's. **The task stays open until both halves do, and customer-facing deployment stays
+blocked.** The prose above was the tracking and is left standing; nothing had to be deleted
+when the capability landed, which is what that paragraph was for.
 
-On `feat/milestone-2-2-idempotency-outbox`, at implementation commit `d362717`. Migration
+### M2.2 — idempotent mutations and the transactional outbox — **merged at `b028f21` (PR #5)**
+
+Delivered by PR #5, implementation commit `d362717`. Migration
 `0002` adds two tenant-scoped, append-only tables — `idempotency_records` and
 `outbox_events` — behind the same forced row-level security as the spine.
 `control_plane/db/idempotency.py` is the typed primitive that claims a key scoped by
@@ -223,27 +238,15 @@ Three existing tests were changed rather than added to, and all three were stren
 rather than what it does not (a payload-plane proof). No gate was removed, weakened,
 renamed or duplicated.
 
-Review is complete and the implementation is committed at `d362717`. What was reviewed,
-for the record: `docs/adr/0005-idempotent-mutations-and-transactional-outbox.md` — in
+Review is complete and the work merged at `b028f21`. What was reviewed, for the record: `docs/adr/0005-idempotent-mutations-and-transactional-outbox.md` — in
 particular "What this does not claim" — and the one protected-file change,
 `scripts/verify-repository.sh`, which gains six entries in `REQUIRED_FILES` (73 now, from
 67) and **no new gate**, because the foundation-suite gate already runs the whole
 `control_plane/tests` directory. Nothing else under `AGENTS.md`'s ask-first list was
 touched.
 
-Order for the human, from here:
-
-1. Commit this documentation status change. `d362717` carries the implementation; this
-   commit carries only `docs/STATE.md` and `docs/tasks/current.md`.
-2. Push `feat/milestone-2-2-idempotency-outbox`, open the pull request, and let CI run
-   `./scripts/verify-repository.sh` against its PostgreSQL 16 service container. Expect
-   **14 gates, 0 failed**. Skip counts differ by cluster shape and both are expected; see
-   the M2.1 CI correction above.
-3. Merge after all required checks pass.
-4. If promoting M2.2 to **VERIFIED LIVE**, capture the foundation-suite run with
-   `/record-evidence` under `docs/evidence/m2/`. Otherwise retain the current
-   **implemented and tested** classification — no evidence artifact has been captured, so
-   M2.2 is not VERIFIED LIVE today.
+All of that is now done and merged. M2.2 remains **implemented and tested** rather than
+VERIFIED LIVE: no evidence artifact was captured for it, and merging is not evidence.
 
 Deliberately deferred out of M2.2, and each one is somebody's later milestone: the outbox
 **dispatcher** and SQS publishing (M6), delivery state, global (non-tenant) events and
@@ -265,22 +268,324 @@ Known limits carried out of this slice, in prose rather than as passing tests:
 - the contention test depends on `pg_stat_activity` showing a blocked backend, so on a
   server where that view is restricted it fails rather than silently degrading.
 
-### M2.3 — audit events, tenant-scoped authorization, secrets model — PLANNED
+### M2.3 — authenticated context, authorization, audit, secrets — **implemented and tested at `89fbdd9`, reviewed, awaiting merge**
 
-Includes the piece M2.1 deliberately left open: resolving tenant context from an authenticated
-credential rather than accepting a caller-set setting. Not started.
+On `feat/milestone-2-3-auth-audit-secrets`, at implementation commit `89fbdd9`. It closes
+the piece M2.1 deliberately left open: tenant context is now resolved from an authenticated
+credential rather than accepted from a caller-set setting. `docs/STATE.md` has what it does and the property-to-test map;
+`docs/adr/0006-authenticated-authorization-audit-and-secrets.md` has why.
+
+**The one sentence that matters.** A transaction no longer chooses its tenant. It presents
+a 244-bit credential to a hardened `SECURITY DEFINER` function, which hashes it, looks the
+digest up in a table no runtime role can read or write, and — if the binding is known,
+unrevoked and unexpired — writes one row into a protected relation no runtime role can
+read, write, delete from or clear. Every policy reads that. `app.tenant_id` is read by
+nothing, and `firmbatch.app_current_tenant_id()` is dropped.
+
+(244 bits and not 256: PostgreSQL generates the value from two `gen_random_uuid()` values,
+122 random bits each. The standalone Python generator uses 32 random bytes and is 256 bits.
+Both share one 43-character format, and the 43 is a rendering rather than a measurement.)
+
+Eight things worth a reviewer's attention, in descending order of consequence:
+
+1. **The transaction context is a protected permanent relation, not a setting and not a
+   temporary table, and the reason is worth reading before the code.** Any custom GUC is
+   writable by the role holding the connection, so a settings-based scheme is either
+   forgeable or circular. `firmbatch.auth_transaction_context` is an unlogged table in the
+   pinned schema, keyed by the backend pid and carrying the `xid8` of the transaction that
+   wrote it; it is read back only when that id equals `pg_current_xact_id_if_assigned()`.
+   No runtime role holds any privilege on it, so nothing but the `SECURITY DEFINER` writer
+   can touch it, and there is no clearing operation anywhere — none is needed, because an
+   uncommitted row is invisible to every other transaction and a committed one can never
+   match a future transaction's id. ADR 0006 decision 2.
+2. **The first version put this in `pg_temp` and that was wrong**, which is recorded here
+   rather than quietly replaced. `DISCARD TEMP` is legal for any role, needs no privilege,
+   and drops every temporary table in the session including one owned by somebody else — so
+   the context vanished and a *second* credential could be bound in the same transaction.
+   Measured against a real server. There was no privilege to revoke and no check to add,
+   which is why the design changed rather than being hardened. ADR 0006 decision 2 records
+   the measurement; the rejected alternative is kept at the end of that ADR.
+3. **ADR 0004's position on `SECURITY DEFINER` in a policy predicate is deliberately
+   reversed**, and the reasoning is in ADR 0006 decision 3a. The 2.1 helper read a value
+   the caller could write; the 2.3 reader reads a relation the caller cannot read, which is
+   the entire point. Every definer function is owned by the schema owner, pins
+   `search_path`, revokes `PUBLIC`, is granted minimally, contains no dynamic SQL and
+   resolves no object by name at runtime — five properties, five separate tests.
+3a. **Revoking from `PUBLIC` is not stating the access control**, and the review was right
+   that it was all the first version did. `ALTER DEFAULT PRIVILEGES FOR ROLE <owner>` grants
+   at object-creation time, so the grant is on `auth_bindings` before the migration's next
+   statement runs. The migration now sanitises every relation, function and type in the
+   schema; `db/roles.py` runs the identical block before its grants; and `db/principal.py`
+   refuses a connection that holds any privilege on protected state. Three measures, because
+   a default-privilege rule outlives a migration and a database can be migrated without
+   being wired. ADR 0006 decision 3b.
+3b. **The bind refuses any isolation level but `READ COMMITTED`, in the database.** Under a
+   stricter level the registry lookup reads a snapshot older than the statement, so a
+   revocation committed in between is invisible. Expiry is compared against
+   `clock_timestamp()` rather than `now()` for the same family of reason, and the
+   linearisation point is stated and tested. ADR 0006 decision 3c.
+4. **Provisioning can no longer name a tenant, including an existing one.**
+   `begin_tenant_provisioning()` takes no arguments and generates the id itself. This is
+   strictly narrower than M2.1, where the provisioning role could set context to any tenant
+   and read or amend that row. **Registration takes no credential either**, for the same
+   family of reason: a caller that could submit a candidate could learn from the outcome
+   whether it already existed in another tenant. The database generates it and returns it
+   once. ADR 0006 decision 7b.
+5. **Appending an audit event requires no scope, and the cost is named rather than
+   hidden.** An `audit:append` capability would make it possible to issue a credential that
+   acts without leaving a trail. The price is that a credential with no scopes can write
+   bounded, tenant-scoped, immutable audit rows. ADR 0006 decision 6a. **`occurred_at` is
+   written by a trigger from `clock_timestamp()`**, not defaulted from `now()`: a caller
+   backdates an event by opening its transaction early, without supplying anything, and a
+   policy comparing against `now()` would have agreed with it.
+6. **Authentication itself is not audited, and cannot be.** A failed bind has no tenant to
+   scope a row to and aborts the transaction that would have written one; a successful bind
+   happens per request. Credential registration and revocation are audited. Failure belongs
+   in the application log, which is Milestone 8's. ADR 0006 decision 6d.
+7. **`INSERT ... RETURNING` applies `SELECT` policies**, so a write-only credential cannot
+   insert through the ORM. That is PostgreSQL behaving correctly; it is why the `tenants`
+   read rule includes the provisioning scope, why the audit insert carries no `RETURNING`,
+   and it is asserted as documented behaviour rather than left to be discovered.
+8. **Four of the five `AUTH-BOUND-TENANT-CONTEXT` completion cases are met.** The fifth —
+   an authenticated user with no membership in a workspace — needs memberships, which are
+   Milestone 3's. The task is not closed here and this branch does not close it.
+
+Deliberately deferred, and each is somebody's later milestone: signup, login, accounts,
+memberships, invitations and portal UI (M3); product API credential CRUD and browser
+sessions (M3); HTTP endpoints and an API framework (M3); jobs, quotes, billing and
+lifecycle state machines (M2.4, M4, M5); S3 and the payload plane (M5); the outbox
+dispatcher and SQS (M6); Secrets Manager and KMS adapters (M8); provider credentials and
+execution (M6); the operator agent (M6, separate software).
+
+Known limits carried out of this slice, in prose rather than as passing tests:
+
+- a compromised **migration owner** credential defeats all of it, because that role owns
+  the functions and the policies. `db/principal.py` refuses to let a runtime connection be
+  or reach that role, and `test_ownership_boundary.py` asserts it — that is the boundary,
+  not an absence of one;
+- on authentication the raw credential travels to PostgreSQL once as a bound parameter, and
+  on registration it comes back once in a result row. psycopg sends parameters out of line,
+  so neither is in the query text or in `pg_stat_activity`, but a server configured to log
+  parameters — or a client that logged result sets — would capture one exactly as it would
+  a password. Deployment property, Milestone 8;
+- the context costs **one upsert per authenticated transaction** and a primary-key lookup
+  per policy evaluation. That is the cost the temporary-table design was avoiding, and the
+  property it bought instead was not real. If the read ever matters the fix is a
+  per-transaction cache, not a weaker check;
+- `clock_timestamp()` is the *server's* clock. A wrong server clock produces wrongly dated
+  audit events and nothing here detects that; what is excluded is a caller choosing the
+  time;
+- the secret-shape rules and the metadata bounds are defense in depth and prove nothing
+  semantic, exactly as ADR 0005 decision 9 says of the denylist they extend. `hunter2` is a
+  valid reference name and a valid metadata key, and there is a passing test whose subject
+  is that limit.
+
+One protected-file change, and only one: `scripts/verify-repository.sh` gains **thirteen**
+entries in `REQUIRED_FILES` (86 now, from 73) and **no new gate**, because the
+foundation-suite gate already runs the whole `control_plane/tests` directory. Nothing else
+under `AGENTS.md`'s ask-first list was touched, and **none of the three security correction
+passes changed either file again** — they added no files, so the manifest is unchanged
+from the first pass. `scripts/check-runtime-imports.py` — which
+is not on that list — gains seven entries in its `RUNTIME_MODULES` manifest so the new
+runtime modules are covered by the import-boundary check; no gate logic changed, and the
+change strengthens the check rather than relaxing it.
+
+Order for the human, from here:
+
+1. Review `docs/adr/0006-authenticated-authorization-audit-and-secrets.md`, in particular
+   "What this does not claim" and the rejected alternatives.
+2. Review the one protected-file change and the `RUNTIME_MODULES` manifest entry above.
+3. `./scripts/verify-repository.sh` was run with `FIRMBATCH_TEST_DATABASE_URL` set at
+   `89fbdd9`: **14 gates passed, 0 failed**, and the PostgreSQL foundation suite **1,314
+   passed, 1 skipped** — the one skip is the pre-existing REPLICATION skip. Skip counts
+   differ by cluster shape; see the M2.1 CI correction above.
+4. Push the branch, open the pull request, and merge after all required checks pass.
+5. If promoting M2.3 to **VERIFIED LIVE**, capture the foundation-suite run with
+   `/record-evidence` under `docs/evidence/m2/`. Otherwise retain the
+   **implemented and tested** classification — no evidence artifact has been captured, so
+   M2.3 is not VERIFIED LIVE today.
+
+### The M2.3 security correction passes — twenty-three findings, all closed
+
+Four independent reviews of the M2.3 implementation found twenty-three issues between
+them, ten of them P1. Every one was confirmed against a real server before being fixed.
+`docs/STATE.md` has the four tables of what was demonstrated and what closed it; the ones
+worth a reviewer's attention here are the ones that changed the design rather than hardening
+it.
+
+1. **`DISCARD TEMP` defeated the temporary-table context** (P1). One statement, legal for
+   any role, no privilege required: it drops every temporary table in the session including
+   one owned by somebody else. The context vanished and a **second** credential could then
+   be bound in the same transaction. The temporary table is gone; the context is an
+   unlogged protected table keyed by the transaction's `xid8`, and there is no clearing
+   operation anywhere. This is the architecture change, and ADR 0006 decision 2 records it
+   as one.
+2. **Default privileges could grant the credential registry to the runtime role** (P1).
+   `REVOKE ... FROM PUBLIC` never touched a grant `ALTER DEFAULT PRIVILEGES` applied at
+   object-creation time. Three measures now: the migration sanitises the whole schema, the
+   role wiring sanitises again before granting, and the runtime principal check refuses a
+   connection holding protected privileges.
+3. **Registration took the credential as an argument** (P2), which made success-versus-
+   failure a cross-tenant existence oracle. The database generates it now and returns it
+   once.
+
+From the second review:
+
+4. **The principal check followed inheritance, and `SET ROLE` does not** (P1).
+   `has_table_privilege` and `has_function_privilege` answer about *effective* privilege, so
+   `GRANT other TO firmbatch_app WITH INHERIT FALSE, SET TRUE` left both saying "no" while
+   one `SET ROLE` reached everything `other` held. Measured: the connection was certified
+   safe and read the credential registry a statement later. Every reachable role is now
+   enumerated with `pg_has_role(..., 'MEMBER')` and every object test runs against that set
+   — and a runtime principal may hold **no membership at all**.
+5. **`credential:manage` decided what the credentials it minted could do** (P1). A leaked
+   credential holding nothing else could mint itself a successor holding `workspace:write`.
+   Delegation is now bounded in the database: delegable scopes only, and never more than the
+   issuer holds. There is no wildcard, and `tenant:provision` is delegable by nobody.
+6. **Role wiring assumed the head schema** (P1/P2). After a controlled rollback to `0002`,
+   provisioning failed with `UndefinedTable` on its first statement. `db/roles.py` is now
+   revision-aware, with an explicit plan per supported revision and a refusal for anything
+   else. Application code at head supports schema `0002` **only** for controlled rollback
+   and provisioning — never for runtime operation.
+7. **The audit metadata policy was bypassable** (P2). The application role held `INSERT` on
+   the trail, and the table's constraints bound a document's size and shape and nothing
+   about its content. The privilege is gone; `firmbatch.append_audit_event()` is the only
+   way in and applies the whole policy inside the database.
+8. **Authenticated work needs a writable primary** (P2), because acquiring a context writes
+   a row. That is now a deliberate, named refusal rather than an unexplained write error,
+   and it is a stated limitation: **read-replica routing is Milestone 8**.
+
+The other four -- stale-snapshot revocation and `now()`-based expiry, echoed reference
+identifiers, transaction-start audit timestamps, and echoed metadata keys -- are corrected
+in the same pass and are covered in `docs/STATE.md`.
+
+From the third review, three more:
+
+9. **Column-level ACLs bypassed the protected-state boundary entirely** (P1). As the
+   migration owner, `GRANT SELECT (backend_pid), UPDATE (tenant_id) ON
+   firmbatch.auth_transaction_context TO <application role>` — and the hardened checkout
+   accepted the connection. The application could then authenticate as tenant A, rewrite
+   its own context row's `tenant_id` to tenant B, and read tenant B's rows. Column grants
+   live in `pg_attribute.attacl`; the principal check asked `has_table_privilege` and both
+   ACL sanitisers took their grantee list from `pg_class.relacl`, where a column-only
+   grantee never appears. Both are corrected, and the column check is **independent** of
+   the table check rather than folded into `has_column_privilege`, which conflates them.
+
+   Worth recording because the review's diagnosis was not quite the defect: the report said
+   `REVOKE ALL ON TABLE` does not remove a column grant. It does — measured. What never
+   happened was the enumeration, so the `REVOKE` was never issued.
+10. **Python `\s` and PostgreSQL `[[:space:]]` are different sets** (P2), so the metadata
+    policy's two implementations disagreed on real values: a U+00A0 before `Bearer example`
+    was refused at the boundary and accepted by the database, which is the half that holds
+    when a runtime role writes the call itself. Confirmed and wider than reported — U+0085,
+    U+00A0, U+2007, U+202F **and** the ASCII information separators U+001C–U+001F all
+    diverge on this server. Whitespace is now an enumerated code-point set folded to ASCII
+    by both implementations before any pattern runs, and the patterns say `[ ]`/`[^ ]` in
+    both languages. Ordinary Unicode letters are untouched and stay valid.
+11. **The standby diagnostic was unreachable on a standby** (P2). `auth_transaction_context`
+    is `UNLOGGED`, and PostgreSQL refuses to *plan* a query against an unlogged relation
+    during recovery — so the context read every entry path began with failed before the
+    deliberate `auth_require_writable_primary()` guard could speak. A preflight naming
+    nothing in the schema now runs first on every entry path, and the database guard is the
+    first executed statement of both entry functions so raw-SQL callers fail safely too.
+    **Authenticated reads remain primary-only; read-replica routing is Milestone 8**, and no
+    live standby has been tested or claimed.
+
+The suite is **1315 checks (1,314 passed, 1 skipped locally)**: 805 after the first
+correction pass, 934 after the second, 1122 after the third, and 1314 after the fourth,
+which added 192. Nothing was weakened to make any of them pass — the four tests whose subject was a mechanism that no
+longer exists were rewritten to assert the property that replaced it, and each says so in
+its docstring. Every test added by the third and fourth passes was run against the pre-fix
+code and seen to fail for the intended reason.
+
+### The case-fold half of finding 10 — closed in a fourth pass
+
+Fixing whitespace left the identical defect one clause over, and the review that found it
+was right that it is a defect rather than a design question: it is fixed, not deferred.
+
+`re.IGNORECASE` on `str` is Unicode case folding; PostgreSQL's `~*` is locale case folding.
+Measured on this server, with the whitespace fix already in:
+
+| value | `looks_like_secret` | `firmbatch.secret_shape` |
+| --- | --- | --- |
+| U+017F + `ecret=x` (LATIN SMALL LETTER LONG S) | refused | **accepted** |
+| `api` + U+212A + `ey=x` (KELVIN SIGN) | refused | **accepted** |
+
+The direction is the dangerous one: the database is the half with no Python in front of it.
+
+**The correction.** One pipeline in both implementations — fold the 29 enumerated whitespace
+code points to an ASCII space, fold `A`–`Z` to `a`–`z`, then match **case-sensitive**
+lowercase patterns. Nothing consults a locale or a Unicode table: `str.translate` here,
+nested `translate()` there, and no `str.lower()`, `str.casefold()`, `lower()`, `upper()`,
+`~*` or `(?i)` anywhere. `\b`/`\y` went the same way, replaced by an explicit
+`(?<![0-9a-z_])`, because they are the same locale question in other clothes.
+
+With every construct either engine has to look up removed, the pattern text itself is now
+**identical in both places**, and a test compares it character for character rather than
+comparing answers on samples somebody chose. Every caller inherits it: there are exactly two
+implementations of the rule and everything goes through one of them.
+
+**The limitation it buys, and it is a real one.** A Unicode homoglyph of a marker is now
+recognised by *neither* implementation, where before it was caught by one. That is the
+honest cost of an ASCII fold and the right trade — a Unicode fold cannot be reproduced by
+`translate()`, so keeping it leaves the layer a caller can walk around stricter than the
+layer that actually holds. The denylist is defense in depth against a credential pasted
+where a reference belongs; it does not claim to detect a semantic secret and does not claim
+to survive a homoglyph. Both homoglyphs sit in the **accepted** corpus so the limitation is
+a test somebody has to change on purpose. See ADR 0006 decision 8c.
+
+One behaviour change worth knowing: because the word boundary is ASCII-explicit now, a
+non-ASCII letter counts as a boundary, so `ıtoken=x` is recognised where `\b` and `\y` both
+used to say nothing. Stricter, and both implementations say it together.
+
+### `AUTH-MEMBERSHIP-BOUND-IDENTITY` — Milestone 3, and it blocks launch — PLANNED
+
+The successor to the identity half of `AUTH-BOUND-TENANT-CONTEXT`, recorded under its own
+name because the old one now describes a gap that is closed. Naming the remainder after the
+closed thing is how a finished piece of work gets re-litigated and an unfinished one gets
+overlooked.
+
+**What must become true.** An authenticated customer identity must be **proven to be an
+active member of the selected workspace and tenant** before a browser session or an account
+credential is issued for it.
+
+Today a credential *is* the membership: a binding names one tenant, and the database will
+not issue a context for any other. That is sufficient while credentials are provisioned out
+of band and there are no user accounts. It stops being sufficient the moment a person can
+sign in and choose a workspace, because something then has to decide which workspaces that
+person may choose from — and nothing does.
+
+**Why M2.3 could not close it.** There are no users, no memberships, no invitations and no
+sessions in this repository. The old completion case 5 asks what happens to an
+authenticated non-member; with no membership model there is no such person to test, and
+building a partial one here would be the half-built capability ADR 0004 §8g argues against.
+
+**Completion gate.** Adversarial tests, against real PostgreSQL 16, each failing closed:
+
+1. A verified account with no membership in a workspace cannot obtain a session or a
+   credential scoped to it, by any route the API exposes.
+2. Revoking a membership stops the identity acting in that workspace, on the same
+   linearisation terms the credential path already states.
+3. An invitation accepted for one tenant grants nothing in another.
+4. A session and an API credential remain distinct, and neither can be exchanged for the
+   other.
+
+**Customer-facing deployment remains blocked** until Milestone 3 supplies identity,
+membership and credential lifecycle together.
 
 ### M2.4 — explicit lifecycle state machines — PLANNED
 
-Conditional, persisted transitions that invalid transitions cannot race through. Not started.
+The next planned Milestone 2 slice. Conditional, persisted transitions that invalid
+transitions cannot race through. Not started.
 
-**Milestone 2's completion gate is met by M2.1 and M2.2 together, and Milestone 2 is still
-open.** The gate is cross-tenant reads and writes failing closed in automated tests **and**
-duplicate mutations producing one contractual effect; M2.1 delivered the first half and
-M2.2 the second. The milestone's declared scope is wider than its gate — audit events,
-tenant-scoped authorization, the secrets and encryption model, and explicit lifecycle state
-machines are all listed under Milestone 2 in the canonical roadmap, and none is built. Do
-not close the milestone on the gate sentence.
+**Milestone 2's completion gate is met and Milestone 2 is still open.** The gate is
+cross-tenant reads and writes failing closed in automated tests **and** duplicate mutations
+producing one contractual effect; M2.1 delivered the first half, M2.2 the second, and M2.3
+re-established the first on a mechanism a compromised runtime cannot drive. The milestone's
+declared scope is wider than its gate — of the items listed under Milestone 2 in the
+canonical roadmap, audit events, tenant-scoped authorization and the secrets and encryption
+model are now built, and **explicit lifecycle state machines are not**. Do not close the
+milestone on the gate sentence.
 
 Do not implement execution, customer billing, or the portal opportunistically inside this
 milestone.

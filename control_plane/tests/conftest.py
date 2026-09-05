@@ -22,13 +22,17 @@ from __future__ import annotations
 
 import os
 import uuid
+from dataclasses import dataclass
 
 import pytest
 from sqlalchemy import create_engine, text
 
 from firmbatch.control_plane import config, migrate
+from firmbatch.control_plane.db import auth
 from firmbatch.control_plane.db import engine as db_engine
 from firmbatch.control_plane.db.repositories import TenantRepository
+from firmbatch.control_plane.security.authorization import Scope
+from firmbatch.control_plane.security.secrets import Secret
 from firmbatch.control_plane.testing import bootstrap as bootstrap_version
 from firmbatch.control_plane.testing.bootstrap import create_disposable_database, drop_disposable_database
 
@@ -225,24 +229,147 @@ def raw_application_connection(disposable_database):
         engine.dispose()
 
 
-def _new_tenant(provisioning_engine, label: str) -> uuid.UUID:
+#: What a fixture credential carries unless a test asks for something narrower. Every
+#: customer capability the Milestone 2.3 catalogue defines, and deliberately **not**
+#: ``tenant:provision``: creating a tenant is not a customer capability, and a fixture that
+#: handed one out by default would make every scope test weaker than it looks.
+DEFAULT_SCOPES: tuple[Scope, ...] = (
+    Scope.TENANT_READ,
+    Scope.WORKSPACE_READ,
+    Scope.WORKSPACE_WRITE,
+    Scope.MUTATION_EXECUTE,
+    Scope.AUDIT_READ,
+    Scope.CREDENTIAL_MANAGE,
+)
+
+
+@dataclass(frozen=True)
+class TenantPrincipal:
+    """One tenant, one principal, and the credential that authenticates as it.
+
+    The three arrive together because they have to: a tenant has no credential until it
+    exists, and ``firmbatch.register_auth_binding`` derives the tenant from the current
+    context -- so the first credential for a tenant is minted inside the same provisioning
+    transaction that created it. That is the shape Milestone 3's signup flow will have,
+    and the fixture is not allowed to cheat around it.
+    """
+
+    id: uuid.UUID
+    principal_id: uuid.UUID
+    binding_id: uuid.UUID
+    credential: Secret
+    scopes: tuple[str, ...]
+
+
+def _new_principal(provisioning_engine, label: str, scopes=DEFAULT_SCOPES) -> TenantPrincipal:
     suffix = uuid.uuid4().hex[:10]
-    with db_engine.transaction(provisioning_engine) as session:
+    principal_id = uuid.uuid4()
+    with auth.provisioning_transaction(provisioning_engine) as session:
         tenant = TenantRepository(session).create(slug=f"{label}-{suffix}", name=f"Tenant {label} {suffix}")
-        return tenant.id
+        issued = auth.register_auth_binding(session, principal_id=principal_id, scopes=scopes)
+        return TenantPrincipal(
+            id=tenant.id,
+            principal_id=principal_id,
+            binding_id=issued.binding_id,
+            credential=issued.credential,
+            scopes=issued.scopes,
+        )
 
 
 @pytest.fixture()
-def tenant_a(provisioning_engine) -> uuid.UUID:
-    return _new_tenant(provisioning_engine, "alpha")
+def principal_a(provisioning_engine) -> TenantPrincipal:
+    return _new_principal(provisioning_engine, "alpha")
 
 
 @pytest.fixture()
-def tenant_b(provisioning_engine) -> uuid.UUID:
-    return _new_tenant(provisioning_engine, "beta")
+def principal_b(provisioning_engine) -> TenantPrincipal:
+    return _new_principal(provisioning_engine, "beta")
+
+
+@pytest.fixture()
+def tenant_a(principal_a) -> uuid.UUID:
+    """The tenant id alone, for the assertions that only need to name a tenant."""
+    return principal_a.id
+
+
+@pytest.fixture()
+def tenant_b(principal_b) -> uuid.UUID:
+    return principal_b.id
+
+
+@pytest.fixture()
+def new_principal(provisioning_engine):
+    """Make another tenant with a credential carrying exactly the scopes asked for."""
+
+    def _make(label: str = "gamma", scopes=DEFAULT_SCOPES) -> TenantPrincipal:
+        return _new_principal(provisioning_engine, label, scopes)
+
+    return _make
+
+
+@pytest.fixture()
+def issue_credential(application_engine):
+    """Mint a second credential **inside an existing tenant**, as that tenant.
+
+    Goes through the ordinary authenticated path rather than through provisioning, because
+    that is the path Milestone 3 will use and the one worth exercising: the issuing
+    credential must itself hold ``credential:manage``, and the new binding lands in the
+    issuer's tenant because the database derives it from the context.
+    """
+
+    def _issue(principal: TenantPrincipal, scopes, *, expires_at=None, principal_id=None):
+        with auth.authenticated_transaction(application_engine, principal.credential) as session:
+            issued = auth.register_auth_binding(
+                session,
+                principal_id=principal_id or uuid.uuid4(),
+                scopes=scopes,
+                expires_at=expires_at,
+            )
+            return TenantPrincipal(
+                id=principal.id,
+                principal_id=issued.principal_id,
+                binding_id=issued.binding_id,
+                credential=issued.credential,
+                scopes=issued.scopes,
+            )
+
+    return _issue
 
 
 @pytest.fixture()
 def server_version(owner_engine) -> int:
     with owner_engine.connect() as connection:
         return int(connection.execute(text("SHOW server_version_num")).scalar())
+
+
+def exception_chain(error: BaseException) -> str:
+    """Everything reachable from an exception, rendered -- not merely ``str(error)``.
+
+    The one helper behind every "this refusal carries no secret" test in the suite, in one
+    place because three copies of it is how one of them quietly stops walking the whole
+    graph.
+
+    Why the graph and not the message: ``raise X from None`` sets
+    ``__suppress_context__``, which stops a *printed* traceback showing the original. It
+    does **not** detach it. Anything that walks the chain still finds the original and
+    everything it renders -- and a log aggregator, a crash reporter and pytest's own
+    ``--tb=long`` are all exactly such a thing. A failing ``dict[key]`` is the same trap
+    from the other direction: the ``KeyError`` carries the key in ``args``, so its ``repr``
+    renders it even though its ``str`` is short.
+
+    So: ``repr``, ``str`` and ``args`` of every exception reachable through ``__cause__``
+    and ``__context__``, with a visited set because the graph can be cyclic.
+    """
+    seen: list[str] = []
+    stack: list = [error]
+    visited: set[int] = set()
+    while stack:
+        current = stack.pop()
+        if current is None or id(current) in visited:
+            continue
+        visited.add(id(current))
+        seen.append(repr(current))
+        seen.append(str(current))
+        seen.extend(repr(arg) for arg in getattr(current, "args", ()))
+        stack.extend([current.__cause__, current.__context__])
+    return "\n".join(seen)

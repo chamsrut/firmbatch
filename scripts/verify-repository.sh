@@ -251,6 +251,22 @@ REQUIRED_FILES=(
   control_plane/tests/test_idempotency.py
   control_plane/tests/test_idempotency_concurrency.py
   control_plane/tests/test_outbox_isolation.py
+  # --- authenticated context, authorization, audit, secrets (Milestone 2.3) --------
+  # Still no new gate, for the same reason: the foundation-suite gate below runs the
+  # whole control_plane/tests directory. What is registered here is their existence.
+  docs/adr/0006-authenticated-authorization-audit-and-secrets.md
+  control_plane/security/__init__.py
+  control_plane/security/authorization.py
+  control_plane/security/secrets.py
+  control_plane/db/auth.py
+  control_plane/db/audit.py
+  control_plane/db/metadata.py
+  control_plane/db/migrations/versions/0003_auth_context_and_audit.py
+  control_plane/tests/test_authenticated_context.py
+  control_plane/tests/test_authorization.py
+  control_plane/tests/test_protected_auth_state.py
+  control_plane/tests/test_audit_events.py
+  control_plane/tests/test_secrets_model.py
 )
 missing=()
 for f in "${REQUIRED_FILES[@]}"; do
