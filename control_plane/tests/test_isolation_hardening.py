@@ -1,4 +1,4 @@
-"""Regressions for the three ways the isolation boundary was reachable around.
+"""Regressions for the ways the isolation boundary was reachable around.
 
 Each of these was reproduced against a real PostgreSQL 16 server before the corresponding
 defence existed. They are kept apart from ``test_tenant_isolation.py`` because that module
@@ -6,14 +6,22 @@ asserts the boundary works; this one asserts the specific ways it did not.
 
 * **Finding 2 -- inherited tenant context.** A session-level ``app.tenant_id``, set by a
   plain ``SET`` on a pooled connection or smuggled in through libpq ``options``, became
-  the effective tenant of a transaction that set none.
+  the effective tenant of a transaction that set none. Milestone 2.3 removed the setting
+  from the mechanism entirely, so these tests now assert two things at once: the old route
+  is still closed, and it no longer leads anywhere even when it is open.
 * **Finding 3 -- identity-map leakage.** A reused ``Session`` served an object loaded
   under tenant A to tenant B out of its identity map, with PostgreSQL never consulted and
   the policy never evaluated.
 * **Finding 4 -- temporary-table shadowing.** ``CREATE TEMP TABLE workspaces (...)``
   shadowed the real table for the life of a connection, because PostgreSQL searches the
-  temporary schema before ``search_path``. Row-level security does not help: the policy is
-  attached to a table the query no longer reaches.
+  temporary schema before ``search_path``. Still closed the same way: no runtime role holds
+  ``TEMPORARY``, and ``search_path`` names ``pg_temp`` last.
+
+  The authentication context briefly lived in the temporary schema too, in the first
+  version of Milestone 2.3. It does not any more -- ``DISCARD TEMP`` drops a temporary
+  relation regardless of who owns it, and no privilege exists to revoke -- so the
+  ``TEMPORARY`` revoke is back to doing one job. ``test_authenticated_context.py`` covers
+  the replacement.
 """
 
 from __future__ import annotations
@@ -24,48 +32,48 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
 from firmbatch.control_plane.config import ConfigurationError
+from firmbatch.control_plane.db import auth
 from firmbatch.control_plane.db import engine as db_engine
 from firmbatch.control_plane.db.base import SCHEMA
 from firmbatch.control_plane.db.models import Tenant, Workspace
 from firmbatch.control_plane.db.repositories import WorkspaceRepository
 
 
-def _make_workspace(engine, tenant_id, slug, name=None):
-    with db_engine.tenant_transaction(engine, tenant_id) as session:
+def _make_workspace(engine, principal, slug, name=None):
+    with auth.authenticated_transaction(engine, principal.credential) as session:
         return WorkspaceRepository(session).create(slug=slug, name=name or slug.replace("-", " ")).id
 
 
 # --------------------------------------------------- inherited context (finding 2)
 
 
-def test_a_session_level_tenant_cannot_become_the_effective_tenant(single_connection_engine, tenant_a):
-    """Transaction-local is not the same as absent.
+def test_a_session_level_setting_cannot_become_the_effective_tenant(single_connection_engine, principal_a):
+    """Transaction-local is not the same as absent -- and the setting is now inert as well.
 
     A plain ``SET`` is a *session* value: it survives COMMIT, it survives the pool
     returning the connection, and ``current_setting`` hands it to the next transaction
     quite happily. One connection in the pool, so the poisoned connection is necessarily
-    the one reused.
+    the one reused. At Milestone 2.1 the defence was to clear the value; at 2.3 there is
+    additionally nothing that reads it.
     """
     engine = single_connection_engine
-    _make_workspace(engine, tenant_a, "poisoned-target")
+    _make_workspace(engine, principal_a, "poisoned-target")
 
     with engine.connect() as connection:
-        connection.execute(text("SELECT set_config('app.tenant_id', :t, false)"), {"t": str(tenant_a)})
+        connection.execute(text("SELECT set_config('app.tenant_id', :t, false)"), {"t": str(principal_a.id)})
         connection.commit()
 
     with db_engine.transaction(engine) as session:
-        assert db_engine.current_tenant_context(session) is None, "a session-level value leaked into the transaction"
+        assert db_engine.current_tenant_context(session) is None, "a session-level value leaked in"
         assert WorkspaceRepository(session).list() == []
         assert session.scalars(select(Tenant)).all() == []
 
 
-def test_a_url_supplied_tenant_option_is_refused_outright(disposable_database, tenant_a):
-    """The same leak, arriving through libpq ``options`` instead of SQL.
+def test_a_url_supplied_option_is_refused_outright(disposable_database, tenant_a):
+    """``options`` can preselect a role or unpin ``search_path``, so it is rejected as a class.
 
-    ``?options=-c app.tenant_id=<uuid>`` sets the GUC at connect time, before any of this
-    package runs. It is now refused during URL validation rather than merely cleared
-    afterwards: ``options`` can also preselect a role or unpin ``search_path``, so the
-    parameter has no legitimate use here and is rejected as a class.
+    The tenant setting it used to carry no longer means anything, and the parameter is
+    still refused: what made it dangerous was never only the tenant.
     """
     poisoned = make_url(disposable_database.application_url).update_query_dict(
         {"options": f"-c app.tenant_id={tenant_a}"}
@@ -75,60 +83,52 @@ def test_a_url_supplied_tenant_option_is_refused_outright(disposable_database, t
     assert "options" in str(exc.value)
 
 
-def test_a_session_guc_set_after_connect_is_still_cleared(single_connection_engine, tenant_a):
-    """Defence in depth: rejecting the URL is not the only thing standing between a
-    session-level value and the effective tenant.
+def test_an_authenticated_context_does_not_survive_the_pool(single_connection_engine, principal_a):
+    """The Milestone 2.3 form of the same property, on the mechanism that replaced it.
 
-    The GUC is set here through ordinary SQL on a pooled connection -- a route no URL
-    validation can see -- and must still not reach a transaction that asked for nothing.
+    One physical connection. A transaction binds, commits, and the next holder of that
+    connection must start with nothing -- which PostgreSQL guarantees by construction: the
+    context row carries the transaction id that wrote it, and the next transaction's id is
+    different. ``transaction()`` asserts that rather than clearing anything.
     """
     engine = single_connection_engine
-    _make_workspace(engine, tenant_a, "post-connect-target")
-    with engine.connect() as connection:
-        connection.execute(text("SELECT set_config('app.tenant_id', :t, false)"), {"t": str(tenant_a)})
-        connection.commit()
+    _make_workspace(engine, principal_a, "pool-context-target")
+
+    with auth.authenticated_transaction(engine, principal_a.credential) as session:
+        assert db_engine.current_tenant_context(session) == principal_a.id
+
     with db_engine.transaction(engine) as session:
         assert db_engine.current_tenant_context(session) is None
         assert WorkspaceRepository(session).list() == []
-
-
-def test_the_baseline_is_applied_before_the_requested_tenant(single_connection_engine, tenant_a, tenant_b):
-    """A poisoned connection must not influence a transaction that *does* set a context."""
-    engine = single_connection_engine
-    _make_workspace(engine, tenant_a, "baseline-a")
-    _make_workspace(engine, tenant_b, "baseline-b")
-
-    with engine.connect() as connection:
-        connection.execute(text("SELECT set_config('app.tenant_id', :t, false)"), {"t": str(tenant_a)})
-        connection.commit()
-
-    with db_engine.tenant_transaction(engine, tenant_b) as session:
-        assert db_engine.current_tenant_context(session) == tenant_b
-        assert [w.slug for w in WorkspaceRepository(session).list()] == ["baseline-b"]
+        assert session.scalars(select(Tenant)).all() == []
 
 
 # ------------------------------------------------ identity-map leakage (finding 3)
 
 
-def test_a_reused_session_cannot_serve_a_previous_tenants_object(application_engine, tenant_a, tenant_b):
+def test_a_reused_session_cannot_serve_a_previous_tenants_object(
+    application_engine, principal_a, principal_b
+):
     """SQLAlchemy answers ``get()`` from its identity map, not from PostgreSQL.
 
-    Holding a strong reference to an object loaded under tenant A and then switching the
-    same ``Session`` to tenant B used to return that object straight from the identity map.
-    The strong reference matters: the identity map holds weak references, so a test that
+    Holding a strong reference to an object loaded under tenant A and then using the same
+    ``Session`` as tenant B used to return that object straight from the identity map. The
+    strong reference matters: the identity map holds weak references, so a test that
     dropped the object would pass for the wrong reason.
     """
-    a_workspace = _make_workspace(application_engine, tenant_a, "identity-map-a", "Identity Map A")
+    a_workspace = _make_workspace(application_engine, principal_a, "identity-map-a", "Identity Map A")
 
     session = Session(bind=application_engine, expire_on_commit=False)
     try:
         with session.begin():
-            db_engine.set_tenant_context(session, tenant_a)
+            db_engine.require_no_inherited_context(session)
+            auth.bind_authenticated_context(session, principal_a.credential)
             held = session.get(Workspace, a_workspace)
             assert held is not None and held.slug == "identity-map-a"
 
         with session.begin():
-            db_engine.set_tenant_context(session, tenant_b)
+            db_engine.require_no_inherited_context(session)
+            auth.bind_authenticated_context(session, principal_b.credential)
             leaked = session.get(Workspace, a_workspace)
             assert leaked is None, "an object loaded under tenant A was served under tenant B"
             assert WorkspaceRepository(session).list() == []
@@ -139,42 +139,55 @@ def test_a_reused_session_cannot_serve_a_previous_tenants_object(application_eng
         session.close()
 
 
-def test_a_reused_session_cannot_serve_an_object_after_the_context_is_cleared(application_engine, tenant_a):
-    """The same defence for a cleared context, which is the fail-closed state."""
-    a_workspace = _make_workspace(application_engine, tenant_a, "identity-map-clear", "Identity Map Clear")
+def test_a_reused_session_cannot_serve_an_object_in_an_unauthenticated_transaction(
+    application_engine, principal_a
+):
+    """The same defence for the fail-closed state, reached the only way it can be reached.
+
+    Milestone 2.3 originally offered a way to *drop* a context part-way through a
+    transaction, and this test used it. That operation is gone -- it turned out to be a
+    route by which a caller could abandon one identity and bind another inside the same
+    transaction -- so the unauthenticated state is now reached the way a real request
+    reaches it: by being a different transaction.
+    """
+    a_workspace = _make_workspace(application_engine, principal_a, "identity-map-clear", "Identity Map Clear")
 
     session = Session(bind=application_engine, expire_on_commit=False)
     try:
         with session.begin():
-            db_engine.set_tenant_context(session, tenant_a)
+            db_engine.require_no_inherited_context(session)
+            auth.bind_authenticated_context(session, principal_a.credential)
             held = session.get(Workspace, a_workspace)
             assert held is not None
 
         with session.begin():
-            db_engine.reset_tenant_context(session)
+            db_engine.require_no_inherited_context(session)
+            assert held is not None  # strong reference kept on purpose
             assert session.get(Workspace, a_workspace) is None
     finally:
         session.close()
 
 
 def test_switching_back_to_the_original_tenant_still_reads_from_postgresql(
-    application_engine, tenant_a, tenant_b
+    application_engine, principal_a, principal_b
 ):
     """Expunging must not break the legitimate case: A then B then A still works."""
-    a_workspace = _make_workspace(application_engine, tenant_a, "round-trip-a", "Round Trip A")
+    a_workspace = _make_workspace(application_engine, principal_a, "round-trip-a", "Round Trip A")
 
     session = Session(bind=application_engine, expire_on_commit=False)
     try:
-        with session.begin():
-            db_engine.set_tenant_context(session, tenant_a)
-            assert session.get(Workspace, a_workspace) is not None
-        with session.begin():
-            db_engine.set_tenant_context(session, tenant_b)
-            assert session.get(Workspace, a_workspace) is None
-        with session.begin():
-            db_engine.set_tenant_context(session, tenant_a)
-            again = session.get(Workspace, a_workspace)
-            assert again is not None and again.slug == "round-trip-a"
+        for credential, expected in (
+            (principal_a.credential, True),
+            (principal_b.credential, False),
+            (principal_a.credential, True),
+        ):
+            with session.begin():
+                db_engine.require_no_inherited_context(session)
+                auth.bind_authenticated_context(session, credential)
+                found = session.get(Workspace, a_workspace)
+                assert (found is not None) is expected
+                if found is not None:
+                    assert found.slug == "round-trip-a"
     finally:
         session.close()
 
@@ -183,7 +196,12 @@ def test_switching_back_to_the_original_tenant_still_reads_from_postgresql(
 
 
 def test_the_application_role_cannot_create_a_temporary_table(raw_application_connection):
-    """TEMP is revoked from PUBLIC and granted to no runtime role."""
+    """TEMP is revoked from PUBLIC and granted to no runtime role.
+
+    Load-bearing twice since Milestone 2.3: it stops a temporary relation shadowing a
+    Firmbatch table, and it stops one being created where the authentication context
+    lives.
+    """
     with pytest.raises(ProgrammingError) as exc:
         raw_application_connection.execute(
             text("CREATE TEMP TABLE workspaces (id uuid, tenant_id uuid, slug text, name text)")
@@ -203,15 +221,15 @@ def test_the_provisioning_role_cannot_create_a_temporary_table(disposable_databa
         engine.dispose()
 
 
-def test_an_unqualified_reference_resolves_to_the_real_table(application_engine, tenant_a):
+def test_an_unqualified_reference_resolves_to_the_real_table(application_engine, principal_a):
     """The second defence: search_path names pg_temp explicitly and last.
 
     Compared by OID rather than by rendered name: ``to_regclass`` omits the schema when the
     relation is reachable through ``search_path``, so a name comparison would fail on a
     correctly resolved table.
     """
-    _make_workspace(application_engine, tenant_a, "unqualified-target")
-    with db_engine.tenant_transaction(application_engine, tenant_a) as session:
+    _make_workspace(application_engine, principal_a, "unqualified-target")
+    with auth.authenticated_transaction(application_engine, principal_a.credential) as session:
         same = session.execute(
             text(f"SELECT to_regclass('workspaces') = to_regclass('{SCHEMA}.workspaces')")
         ).scalar()
@@ -228,14 +246,16 @@ def test_search_path_names_pg_temp_last_on_every_connection(application_engine):
     assert parts[-1] == "pg_temp", f"pg_temp must be named explicitly and last: {search_path!r}"
 
 
-def test_a_temporary_table_created_by_the_owner_cannot_shadow_the_real_one(owner_engine, application_engine, tenant_a):
+def test_a_temporary_table_created_by_the_owner_cannot_shadow_the_real_one(
+    owner_engine, application_engine, principal_a
+):
     """Even where TEMP is held, the pinned search_path keeps resolution correct.
 
     The owner legitimately holds TEMP. This proves the second defence stands on its own:
     a temporary relation with the same name does not capture an unqualified reference,
     because pg_temp is searched last.
     """
-    _make_workspace(application_engine, tenant_a, "owner-shadow-target")
+    _make_workspace(application_engine, principal_a, "owner-shadow-target")
     with owner_engine.connect() as connection:
         connection.execute(text("CREATE TEMP TABLE workspaces (id uuid, tenant_id uuid, slug text, name text)"))
         connection.execute(
@@ -253,151 +273,132 @@ def test_a_temporary_table_created_by_the_owner_cannot_shadow_the_real_one(owner
         connection.rollback()
 
 
-# ------------------------------------------- nested savepoints (finding 4)
+# ------------------------------------------------------------- nested savepoints
 
 
-def test_a_tenant_switch_inside_a_savepoint_is_refused(application_engine, tenant_a, tenant_b):
-    """One tenant context per outer transaction.
+def test_acquiring_a_context_inside_a_savepoint_is_refused(application_engine, principal_a, principal_b):
+    """One authenticated context per outer transaction.
 
-    A savepoint rollback restores the PostgreSQL setting but not the ORM identity map, so
-    a switch inside one could leave another tenant rows cached. Rather than trying to
-    unwind that bookkeeping correctly, the switch is refused.
+    A savepoint rollback removes a context written inside it while a release keeps one,
+    and neither restores the ORM identity map -- so a bind here would sometimes survive
+    and sometimes not, decided by how the caller happened to end the savepoint. Rather
+    than trying to unwind that bookkeeping correctly, it is refused.
     """
     session = Session(bind=application_engine, expire_on_commit=False)
     try:
         with session.begin():
-            db_engine.set_tenant_context(session, tenant_a)
+            db_engine.require_no_inherited_context(session)
+            auth.bind_authenticated_context(session, principal_a.credential)
             nested = session.begin_nested()
             try:
                 with pytest.raises(db_engine.TenantContextError) as exc:
-                    db_engine.set_tenant_context(session, tenant_b)
+                    auth.bind_authenticated_context(session, principal_b.credential)
                 assert "SAVEPOINT" in str(exc.value)
                 with pytest.raises(db_engine.TenantContextError):
-                    db_engine.clear_tenant_context(session)
-                with pytest.raises(db_engine.TenantContextError):
-                    db_engine.reset_tenant_context(session)
+                    auth.begin_tenant_provisioning(session)
             finally:
                 nested.rollback()
     finally:
         session.close()
 
 
-def test_a_raw_switch_inside_a_savepoint_cannot_survive_its_rollback(
-    application_engine, tenant_a, tenant_b
+def test_there_is_no_raw_route_to_change_the_context_inside_a_savepoint(
+    application_engine, principal_a, tenant_b
 ):
-    """The second defence, for a caller that bypasses this module and uses raw SQL.
+    """The defence that used to be needed here has been replaced by an absence.
 
-    Reproduced against a real server: after the nested rollback PostgreSQL correctly
-    restored tenant A, and ``session.get()`` still returned the tenant B object straight
-    from the identity map. Ending a savepoint now empties the map.
+    At Milestone 2.1 a caller could bypass this module and change tenant with a raw
+    ``set_config`` inside a savepoint; the guard existed because the raw route worked. It
+    no longer does -- the setting is read by nothing, and the function that writes a
+    context is executable by no runtime role -- so what is asserted here is that both raw
+    routes fail and the outer context is unchanged.
     """
-    a_workspace = _make_workspace(application_engine, tenant_a, "savepoint-a", "Savepoint A")
-    b_workspace = _make_workspace(application_engine, tenant_b, "savepoint-b", "Savepoint B")
-
     session = Session(bind=application_engine, expire_on_commit=False)
     try:
         with session.begin():
-            db_engine.set_tenant_context(session, tenant_a)
-            assert session.get(Workspace, a_workspace) is not None
+            db_engine.require_no_inherited_context(session)
+            auth.bind_authenticated_context(session, principal_a.credential)
 
             nested = session.begin_nested()
             try:
-                # Raw set_config, deliberately going around set_tenant_context.
-                session.execute(
-                    text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(tenant_b)}
-                )
-                held_b = session.get(Workspace, b_workspace)
-                assert held_b is not None and held_b.slug == "savepoint-b"
+                session.execute(text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(tenant_b)})
+                assert db_engine.current_tenant_context(session) == principal_a.id
             finally:
                 nested.rollback()
 
-            # PostgreSQL restored tenant A ...
-            assert db_engine.current_tenant_context(session) == tenant_a
-            # ... and the tenant B object must not be servable from the identity map.
-            assert session.get(Workspace, b_workspace) is None
-            assert session.get(Workspace, a_workspace) is not None
+            nested = session.begin_nested()
+            try:
+                with pytest.raises(ProgrammingError) as exc:
+                    session.execute(
+                        text(
+                            f"SELECT {SCHEMA}.auth_context_begin("
+                            "NULL, :t, NULL, 'credential', ARRAY['workspace:read'])"
+                        ),
+                        {"t": str(tenant_b)},
+                    )
+                assert "permission denied" in str(exc.value).lower()
+            finally:
+                nested.rollback()
+
+            assert db_engine.current_tenant_context(session) == principal_a.id
     finally:
         session.close()
 
 
-def test_a_nested_commit_clears_the_identity_map_and_leaves_the_switch_standing(
-    application_engine, tenant_a, tenant_b
-):
-    """The commit path, and the PostgreSQL fact that makes the API prohibition necessary.
+def test_ending_a_savepoint_empties_the_identity_map(application_engine, principal_a):
+    """The guard that fires whenever a savepoint ends, on rollback, commit and exception.
 
-    Releasing a savepoint does **not** undo a ``SET LOCAL`` made inside it -- only rolling
-    the savepoint back does. So a raw switch inside a savepoint that commits leaves the
-    outer transaction genuinely running as the other tenant, and no amount of Python
-    bookkeeping can undo that. This is measured here rather than assumed, because it is
-    the reason ``set_tenant_context`` refuses to switch inside a savepoint at all: the
-    only safe answer is not to allow the switch.
-
-    What the guard still does on this path is empty the identity map, so nothing is served
-    from cache and every read is re-evaluated by PostgreSQL under whatever context is
-    actually in force.
+    It is what stopped an object loaded under one context being served after the context
+    that loaded it was gone. The context can no longer change inside a savepoint, so this
+    is now defence in depth rather than the primary fix -- and it is exactly the kind of
+    guard that would be quietly refactored away if nothing asserted it.
     """
-    a_workspace = _make_workspace(application_engine, tenant_a, "savepoint-commit-a", "SC A")
-    b_workspace = _make_workspace(application_engine, tenant_b, "savepoint-commit-b", "SC B")
+    a_workspace = _make_workspace(application_engine, principal_a, "savepoint-map", "Savepoint Map")
 
     session = Session(bind=application_engine, expire_on_commit=False)
     try:
         with session.begin():
-            db_engine.set_tenant_context(session, tenant_a)
-            assert session.get(Workspace, a_workspace) is not None
+            db_engine.require_no_inherited_context(session)
+            auth.bind_authenticated_context(session, principal_a.credential)
+            # Strong references throughout: the identity map holds weak ones, so a test
+            # that let the object be collected would watch the map empty itself and
+            # conclude the guard had worked.
+            held = session.get(Workspace, a_workspace)
+            assert held is not None and session.identity_map.keys() != set()
 
             nested = session.begin_nested()
-            session.execute(text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(tenant_b)})
-            assert session.get(Workspace, b_workspace) is not None
             nested.commit()
-
-            # The identity map was emptied when the savepoint ended.
             assert session.identity_map.keys() == set()
-            # PostgreSQL keeps the switch: a released savepoint does not restore SET LOCAL.
-            assert db_engine.current_tenant_context(session) == tenant_b
-            # And every read now genuinely reflects that context rather than a cache.
-            assert session.get(Workspace, a_workspace) is None
-    finally:
-        session.close()
 
+            held = session.get(Workspace, a_workspace)
+            assert held is not None
+            with session.begin_nested() as nested:
+                nested.rollback()
+            assert session.identity_map.keys() == set()
 
-def test_an_exception_unwinding_through_a_savepoint_clears_the_identity_map(
-    application_engine, tenant_a, tenant_b
-):
-    """The exceptional path: no explicit rollback call, the context manager unwinds."""
-    b_workspace = _make_workspace(application_engine, tenant_b, "savepoint-exc-b", "SE B")
-
-    session = Session(bind=application_engine, expire_on_commit=False)
-    try:
-        with session.begin():
-            db_engine.set_tenant_context(session, tenant_a)
+            held = session.get(Workspace, a_workspace)
+            assert held is not None
             try:
                 with session.begin_nested():
-                    session.execute(
-                        text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(tenant_b)}
-                    )
-                    assert session.get(Workspace, b_workspace) is not None
                     raise RuntimeError("deliberate failure inside a savepoint")
             except RuntimeError:
                 pass
-
-            # An exception unwinds the savepoint by rollback, so the context is restored
-            # and the cache is empty.
-            assert db_engine.current_tenant_context(session) == tenant_a
-            assert session.get(Workspace, b_workspace) is None
+            assert session.identity_map.keys() == set()
     finally:
         session.close()
 
 
-def test_the_outer_tenant_context_still_works_after_a_savepoint(application_engine, tenant_a):
+def test_the_outer_context_still_works_after_a_savepoint(application_engine, principal_a):
     """The prohibition must not break ordinary savepoint use within one tenant."""
     session = Session(bind=application_engine, expire_on_commit=False)
     try:
         with session.begin():
-            db_engine.set_tenant_context(session, tenant_a)
+            db_engine.require_no_inherited_context(session)
+            auth.bind_authenticated_context(session, principal_a.credential)
             repo = WorkspaceRepository(session)
             with session.begin_nested():
                 repo.create(slug="savepoint-inner", name="Savepoint Inner")
-            assert db_engine.current_tenant_context(session) == tenant_a
+            assert db_engine.current_tenant_context(session) == principal_a.id
             assert any(w.slug == "savepoint-inner" for w in repo.list())
     finally:
         session.close()

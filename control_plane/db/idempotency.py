@@ -134,8 +134,6 @@ that bypasses this module.
 from __future__ import annotations
 
 import hashlib
-import json
-import math
 import re
 import uuid
 from contextlib import contextmanager
@@ -146,7 +144,21 @@ from sqlalchemy import event, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .engine import TenantContextError, current_tenant_context
+from ..security.authorization import Scope
+from ..security.secrets import looks_like_secret
+from .auth import require_authenticated_context
+from .engine import TenantContextError
+# Re-exported, in the ``name as name`` form that says so: the metadata policy moved to
+# ``db/metadata.py`` at Milestone 2.3 so the audit trail could hold itself to the same
+# rule, and every caller that imported one of these from here keeps working.
+from .metadata import DENIED_METADATA_KEYS as DENIED_METADATA_KEYS
+from .metadata import MAX_METADATA_DOCUMENT_BYTES as MAX_METADATA_DOCUMENT_BYTES
+from .metadata import MAX_METADATA_KEYS as MAX_METADATA_KEYS
+from .metadata import MAX_METADATA_SEQUENCE_LENGTH as MAX_METADATA_SEQUENCE_LENGTH
+from .metadata import MAX_METADATA_STRING_LENGTH as MAX_METADATA_STRING_LENGTH
+from .metadata import METADATA_KEY_REGEX as METADATA_KEY_REGEX
+from .metadata import MetadataPolicyError as MetadataPolicyError
+from .metadata import canonical_json, validated_metadata
 from .models import (
     DOTTED_NAME_REGEX,
     IDEMPOTENCY_KEY_REGEX,
@@ -165,86 +177,12 @@ CLAIM_CONSTRAINT = "uq_idempotency_records_tenant_id_operation_idempotency_key"
 #: default. Anything else is refused.
 REQUIRED_ISOLATION_LEVEL = "read committed"
 
-#: Boundary limits on a metadata document. The database's own check allows twice this,
-#: because PostgreSQL renders ``jsonb::text`` with spaces that the canonical form here
-#: does not -- the backstop has to leave room for the difference rather than reject
-#: documents this module accepted.
-MAX_METADATA_DOCUMENT_BYTES = 2048
-MAX_METADATA_KEYS = 32
-MAX_METADATA_STRING_LENGTH = 256
-MAX_METADATA_SEQUENCE_LENGTH = 16
-
-#: Metadata keys are identifiers, not free text. Applied with ``fullmatch``, so a trailing
-#: newline cannot slip past ``$``.
-METADATA_KEY_REGEX = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
-
-#: Key names that mean the content itself rather than a reference to it, matched **whole**
-#: rather than as substrings. Substring matching was the earlier rule and it was wrong in
-#: the direction that matters: it rejected ``input_manifest_id``, ``output_object_key`` and
-#: ``artifact_digest``, which are exactly the metadata this table is *for*, while a
-#: determined caller could still spell a payload field something else.
+#: The metadata policy for every bounded ``jsonb`` column in this schema lives in
+#: ``db/metadata.py``. It was extracted at Milestone 2.3 so that the audit trail could hold
+#: itself to exactly the same rule; every public name is re-exported here, so callers that
+#: imported it from this module are unaffected.
 #:
-#: So this is a list of names, not a pattern. It stops ``payload``, ``prompt`` and
-#: ``api_key`` -- the fields somebody adds without thinking -- and it is **defense in
-#: depth, not proof**: no name rule can establish that a value is not content. See the
-#: module docstring on what M2.2 does and does not prove.
-DENIED_METADATA_KEYS: frozenset[str] = frozenset(
-    {
-        # The content itself.
-        "payload",
-        "raw_payload",
-        "payload_bytes",
-        "body",
-        "request_body",
-        "response_body",
-        "content",
-        "blob",
-        "bytes",
-        "data",
-        "text",
-        "input",
-        "input_text",
-        "input_bytes",
-        "output",
-        "output_text",
-        "output_bytes",
-        "prompt",
-        "prompt_text",
-        "completion",
-        "completion_text",
-        "message",
-        "messages",
-        "ciphertext",
-        "plaintext",
-        # Credentials and the things that carry them.
-        "password",
-        "passwd",
-        "secret",
-        "client_secret",
-        "secret_key",
-        "private_key",
-        "api_key",
-        "apikey",
-        "access_key",
-        "token",
-        "access_token",
-        "refresh_token",
-        "bearer_token",
-        "session_token",
-        "auth_token",
-        "id_token",
-        "credential",
-        "credentials",
-        "authorization",
-        "auth",
-        "cookie",
-        "connection_string",
-        "database_url",
-        "dsn",
-    }
-)
-
-_SCALARS = (str, int, float, bool, type(None), uuid.UUID)
+#: See that module for what is refused and, more importantly, for what none of it proves.
 
 #: What a mutation may reach through its unit of work.
 _FORWARDED_OPERATIONS = (
@@ -292,10 +230,6 @@ class IdempotencyError(RuntimeError):
 
 class IdempotencyConflict(IdempotencyError):
     """The key exists for this tenant and operation, claimed for a different request."""
-
-
-class MetadataPolicyError(IdempotencyError):
-    """A result, event or request identity carried something that may not be stored."""
 
 
 class IsolationLevelError(IdempotencyError):
@@ -406,27 +340,6 @@ Mutation = Callable[[MutationUnitOfWork], MutationOutcome]
 # --------------------------------------------------------------------- fingerprinting
 
 
-def canonical_json(value: Any) -> str:
-    """A stable text rendering, so the same identity always hashes the same way.
-
-    Sorted keys and no insignificant whitespace. ``allow_nan=False`` because ``NaN`` is
-    not JSON, is not equal to itself, and would make a fingerprint that never matches.
-    """
-    return json.dumps(
-        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False, default=_encode
-    )
-
-
-def _encode(value: Any) -> Any:
-    if isinstance(value, uuid.UUID):
-        return str(value)
-    raise TypeError(
-        f"{type(value).__name__} cannot be fingerprinted deterministically. Give the request "
-        "identity JSON-native values (and UUIDs) so that the same request always produces the "
-        "same digest."
-    )
-
-
 def request_fingerprint(*, tenant_id: uuid.UUID, operation: str, request_identity: Mapping[str, Any]) -> str:
     """The SHA-256 digest stored in place of the request identity.
 
@@ -438,71 +351,6 @@ def request_fingerprint(*, tenant_id: uuid.UUID, operation: str, request_identit
         {"tenant": str(tenant_id), "operation": operation, "request_identity": dict(request_identity)}
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
-
-
-# ------------------------------------------------------------------- metadata policy
-
-
-def _reject(where: str, why: str) -> None:
-    raise MetadataPolicyError(
-        f"{where} {why}. These columns hold bounded metadata -- identifiers, counts, digests, and "
-        "references to objects that live elsewhere. Customer payload belongs in S3; put its "
-        "reference here."
-    )
-
-
-def _check_key(where: str, key: Any) -> None:
-    if not isinstance(key, str) or not METADATA_KEY_REGEX.fullmatch(key):
-        _reject(where, f"has key {key!r}, which is not a lowercase identifier of at most 63 characters")
-    if key in DENIED_METADATA_KEYS:
-        _reject(
-            where,
-            f"has key {key!r}, which names content or a credential rather than a reference to one "
-            f"(a reference such as 'input_manifest_id', 'output_object_key' or 'artifact_digest' is fine)",
-        )
-
-
-def _check_scalar(where: str, key: str, value: Any) -> None:
-    if isinstance(value, (bytes, bytearray, memoryview)):
-        _reject(where, f"stores raw bytes at {key!r}; binary values are refused outright")
-    if not isinstance(value, _SCALARS):
-        _reject(where, f"stores {type(value).__name__} at {key!r}; only strings, numbers, booleans, null and UUIDs fit")
-    if isinstance(value, str) and len(value) > MAX_METADATA_STRING_LENGTH:
-        _reject(where, f"stores {len(value)} characters at {key!r}, over the {MAX_METADATA_STRING_LENGTH} allowed")
-    # NaN and the infinities are not JSON. Caught here so the caller gets the policy
-    # error that names the field, rather than a ValueError out of the encoder below.
-    if isinstance(value, float) and not math.isfinite(value):
-        _reject(where, f"stores {value!r} at {key!r}, which is not representable in JSON")
-
-
-def validated_metadata(value: Mapping[str, Any], *, where: str) -> dict[str, Any]:
-    """Return ``value`` as a plain, storable dict, or refuse it.
-
-    Flat by construction: one level of scalars is enough to name a row, count a thing, or
-    reference an object, and a nested document is the shape a request body arrives in.
-    """
-    if not isinstance(value, Mapping):
-        _reject(where, f"is {type(value).__name__}, not a mapping of names to values")
-    if len(value) > MAX_METADATA_KEYS:
-        _reject(where, f"has {len(value)} keys, over the {MAX_METADATA_KEYS} allowed")
-
-    out: dict[str, Any] = {}
-    for key, item in value.items():
-        _check_key(where, key)
-        if isinstance(item, (list, tuple)):
-            if len(item) > MAX_METADATA_SEQUENCE_LENGTH:
-                _reject(where, f"stores {len(item)} entries at {key!r}, over the {MAX_METADATA_SEQUENCE_LENGTH} allowed")
-            for entry in item:
-                _check_scalar(where, key, entry)
-            out[key] = [str(e) if isinstance(e, uuid.UUID) else e for e in item]
-            continue
-        _check_scalar(where, key, item)
-        out[key] = str(item) if isinstance(item, uuid.UUID) else item
-
-    encoded = canonical_json(out).encode("utf-8")
-    if len(encoded) > MAX_METADATA_DOCUMENT_BYTES:
-        _reject(where, f"renders to {len(encoded)} bytes, over the {MAX_METADATA_DOCUMENT_BYTES} allowed")
-    return out
 
 
 # --------------------------------------------------------------------------- preconditions
@@ -517,21 +365,49 @@ def _require_open_transaction(session: Session, function: str) -> None:
 
 
 def _require_valid_name(value: Any, *, pattern: str, what: str, example: str) -> None:
+    """Validate one caller-supplied name without repeating it back.
+
+    Shape first, then format. The value is not echoed: an operation name is caller-supplied
+    text, and a refusal that quoted it would put whatever was pasted there into an
+    exception and from there into a log.
+    """
+    shape = looks_like_secret(value)
+    if shape is not None:
+        raise IdempotencyError(
+            f"the {what} looks like {shape}. It names an operation; it is not a place for a "
+            "secret, and the value is deliberately not repeated here."
+        )
     if not isinstance(value, str) or not re.fullmatch(pattern, value):
         raise IdempotencyError(
-            f"{value!r} is not an acceptable {what}; it must match {pattern} (for example "
-            f"{example!r}). Checked here, before the mutation runs, so a malformed name cannot "
-            "produce a business change that the claim then fails to record."
+            f"the {what} is not acceptable; it must match {pattern} (for example {example!r}). "
+            "Checked here, before the mutation runs, so a malformed name cannot produce a "
+            "business change that the claim then fails to record. The value is deliberately not "
+            "repeated."
         )
 
 
 def _require_valid_key(idempotency_key: Any) -> None:
+    """Validate the caller-chosen key, and refuse one that carries a secret shape.
+
+    The key format -- letters, digits and ``._:@=+-`` -- happily accepts a Firmbatch bearer
+    credential, and the key is **stored verbatim**. So the shape test is not cosmetic here:
+    it is what stops a caller that reached for the nearest unique-looking string from
+    writing a live credential into a column, and it runs before the format test so a
+    rejected one is never quoted back.
+    """
+    shape = looks_like_secret(idempotency_key)
+    if shape is not None:
+        raise IdempotencyError(
+            f"the idempotency key looks like {shape}. Keys are stored verbatim, so one must be an "
+            "identifier chosen for this request and nothing else. The value is deliberately not "
+            "repeated here."
+        )
     if not isinstance(idempotency_key, str) or not re.fullmatch(IDEMPOTENCY_KEY_REGEX, idempotency_key):
         raise IdempotencyError(
-            f"{idempotency_key!r} is not an acceptable idempotency key. Keys are 8 to 200 characters "
-            "of letters, digits and '._:@=+-'; they are stored verbatim, so they are identifiers and "
-            "not a place to put anything else. Matched with fullmatch, so a trailing newline is "
-            "refused rather than passed through by '$'."
+            "the idempotency key is not acceptable. Keys are 8 to 200 characters of letters, "
+            "digits and '._:@=+-'; they are stored verbatim, so they are identifiers and not a "
+            "place to put anything else. Matched with fullmatch, so a trailing newline is refused "
+            "rather than passed through by '$'. The value is deliberately not repeated."
         )
 
 
@@ -580,14 +456,28 @@ def _require_read_committed(session: Session) -> None:
 
 
 def _tenant_context(session: Session) -> uuid.UUID:
-    tenant_id = current_tenant_context(session)
-    if tenant_id is None:
+    """The tenant this transaction authenticated as, and the capability to use it.
+
+    Milestone 2.3 changed where this comes from and not what it means. It used to read a
+    setting the caller had set; it now reads the authenticated context, so a caller that
+    has not presented a credential is refused here and would be refused by the policies
+    anyway.
+
+    ``mutation:execute`` is checked in Python as well as by the policies because a missing
+    capability should name itself. It is the minimal framework capability: it permits
+    claiming a key and appending the event that goes with it, and says nothing about any
+    customer resource.
+    """
+    try:
+        context = require_authenticated_context(session)
+    except Exception as exc:
         raise TenantContextError(
-            "a tenant context is required: outbox events and idempotency keys are tenant-scoped, "
-            "and without one the row-level security policies would reject the write anyway. "
-            "Use tenant_transaction()."
-        )
-    return tenant_id
+            "an authenticated context is required: outbox events and idempotency keys are "
+            "tenant-scoped, and without one the row-level security policies would reject the write "
+            f"anyway. Use authenticated_transaction(). ({exc})"
+        ) from None
+    context.require_scope(Scope.MUTATION_EXECUTE)
+    return context.tenant_id
 
 
 @contextmanager
@@ -787,7 +677,7 @@ def execute_idempotent_mutation(
     """Commit ``mutate``'s effect at most once per ``(tenant, operation, key)``.
 
     Runs entirely inside ``session``'s existing transaction and commits nothing itself:
-    the caller's ``tenant_transaction`` block is what makes the state change, the claim
+    the caller's ``authenticated_transaction`` block is what makes the state change, the claim
     and the event durable, together or not at all.
 
     ``mutate`` is called with a :class:`MutationUnitOfWork`, not with ``session``. See the

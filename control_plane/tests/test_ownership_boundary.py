@@ -10,8 +10,10 @@ defeat a policy -- it can remove one:
 * a **relation** owner can ``ALTER TABLE ... NO FORCE ROW LEVEL SECURITY`` or
   ``DROP POLICY`` -- and this covers sequences, views and partitions, not only the two
   tables that were named;
-* the owner of **``app_current_tenant_id()``** can ``CREATE OR REPLACE`` it, and every
-  policy predicate in the schema calls it, so it decides what every policy sees;
+* the owner of the **authentication functions** can ``CREATE OR REPLACE`` any of them.
+  Every policy predicate in the schema calls ``auth_tenant_id()`` and ``auth_has_scope()``,
+  and ``auth_context_begin()`` is what writes a context at all -- so that owner decides
+  what every policy sees and who every caller is;
 * a **type** owner can drop a domain's constraints.
 
 Each is tested separately, because a single "owns something" assertion would pass while
@@ -65,7 +67,8 @@ def test_the_owner_role_owns_the_whole_boundary(disposable_database):
     names = {entry.split(" ", 1)[1] for entry in report.owned_objects}
     assert disposable_database.database in names, "the database owner was not detected"
     assert SCHEMA in names, "the schema owner was not detected"
-    assert "app_current_tenant_id" in names, "the policy helper's owner was not detected"
+    assert "auth_tenant_id" in names, "the policy helper's owner was not detected"
+    assert "bind_authenticated_context" in names, "the credential resolver's owner was not detected"
     assert {"tenants", "workspaces"} <= names
     assert not report.is_safe
 
@@ -80,8 +83,8 @@ def test_the_owner_role_owns_the_whole_boundary(disposable_database):
         ),
         (
             "function",
-            f'ALTER FUNCTION {SCHEMA}.app_current_tenant_id() OWNER TO "{{probe}}"',
-            "function app_current_tenant_id",
+            f'ALTER FUNCTION {SCHEMA}.auth_tenant_id() OWNER TO "{{probe}}"',
+            "function auth_tenant_id",
         ),
     ],
 )
@@ -267,6 +270,6 @@ def test_the_rejection_names_what_was_owned(disposable_database):
             engine.connect()
         message = str(exc.value)
         assert "isolation-boundary object" in message
-        assert "redefine app_current_tenant_id()" in message
+        assert "redefine the authentication functions the policies call" in message
     finally:
         engine.dispose()

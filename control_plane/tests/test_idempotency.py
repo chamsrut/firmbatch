@@ -23,12 +23,14 @@ Milestone 5's.
 
 from __future__ import annotations
 
+import re
 import uuid
 
 import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError, ProgrammingError
 
+from firmbatch.control_plane.db import auth
 from firmbatch.control_plane.db import engine as db_engine
 from firmbatch.control_plane.db.base import SCHEMA
 from firmbatch.control_plane.db.idempotency import (
@@ -105,8 +107,8 @@ def _create_workspace(slug: str, *, fail_after: bool = False) -> _Recorder:
     return _Recorder(slug, fail_after=fail_after)
 
 
-def _run(engine, tenant_id, *, key: str, identity: dict, mutate, operation: str = OPERATION):
-    with db_engine.tenant_transaction(engine, tenant_id) as session:
+def _run(engine, principal, *, key: str, identity: dict, mutate, operation: str = OPERATION):
+    with auth.authenticated_transaction(engine, principal.credential) as session:
         return execute_idempotent_mutation(
             session,
             operation=operation,
@@ -116,9 +118,9 @@ def _run(engine, tenant_id, *, key: str, identity: dict, mutate, operation: str 
         )
 
 
-def _counts(engine, tenant_id) -> dict[str, int]:
+def _counts(engine, principal) -> dict[str, int]:
     """What this tenant can actually see, read back on its own transaction."""
-    with db_engine.tenant_transaction(engine, tenant_id) as session:
+    with auth.authenticated_transaction(engine, principal.credential) as session:
         return {
             "workspaces": session.scalar(select(func.count()).select_from(Workspace)),
             "records": session.scalar(select(func.count()).select_from(IdempotencyRecord)),
@@ -129,11 +131,11 @@ def _counts(engine, tenant_id) -> dict[str, int]:
 # ------------------------------------------------------------------ the replay contract
 
 
-def test_an_identical_retry_returns_the_stored_result(application_engine, tenant_a):
+def test_an_identical_retry_returns_the_stored_result(application_engine, principal_a):
     key = _key()
 
-    first = _run(application_engine, tenant_a, key=key, identity=MANIFEST_IDENTITY, mutate=_create_workspace("alpha-one"))
-    second = _run(application_engine, tenant_a, key=key, identity=MANIFEST_IDENTITY, mutate=_create_workspace("alpha-one"))
+    first = _run(application_engine, principal_a, key=key, identity=MANIFEST_IDENTITY, mutate=_create_workspace("alpha-one"))
+    second = _run(application_engine, principal_a, key=key, identity=MANIFEST_IDENTITY, mutate=_create_workspace("alpha-one"))
 
     assert first.replayed is False
     assert second.replayed is True
@@ -143,29 +145,29 @@ def test_an_identical_retry_returns_the_stored_result(application_engine, tenant
     assert uuid.UUID(second.result["workspace_id"])
 
 
-def test_an_identical_retry_makes_exactly_one_contractual_effect(application_engine, tenant_a):
+def test_an_identical_retry_makes_exactly_one_contractual_effect(application_engine, principal_a):
     """The count, not the return value. One workspace, one claim, one event."""
     key = _key()
     mutate = _create_workspace("alpha-once")
 
     for _ in range(4):
-        _run(application_engine, tenant_a, key=key, identity=MANIFEST_IDENTITY, mutate=mutate)
+        _run(application_engine, principal_a, key=key, identity=MANIFEST_IDENTITY, mutate=mutate)
 
-    assert _counts(application_engine, tenant_a) == {"workspaces": 1, "records": 1, "events": 1}
+    assert _counts(application_engine, principal_a) == {"workspaces": 1, "records": 1, "events": 1}
     assert mutate.calls == 1, "a replay must not reach the mutation at all"
 
 
-def test_the_second_call_never_runs_the_mutation(application_engine, tenant_a):
+def test_the_second_call_never_runs_the_mutation(application_engine, principal_a):
     """A replay must not reach the mutation -- not merely undo it afterwards."""
     mutate = _create_workspace("alpha-counted")
     key = _key()
-    _run(application_engine, tenant_a, key=key, identity=MANIFEST_IDENTITY, mutate=mutate)
-    _run(application_engine, tenant_a, key=key, identity=MANIFEST_IDENTITY, mutate=mutate)
+    _run(application_engine, principal_a, key=key, identity=MANIFEST_IDENTITY, mutate=mutate)
+    _run(application_engine, principal_a, key=key, identity=MANIFEST_IDENTITY, mutate=mutate)
 
     assert mutate.calls == 1
 
 
-def test_the_primitive_writes_exactly_one_linked_event(application_engine, tenant_a):
+def test_the_primitive_writes_exactly_one_linked_event(application_engine, principal_a):
     """Exactly one, atomically -- which is a property of the primitive, not of a constraint.
 
     The unique constraint on ``(tenant_id, idempotency_record_id)`` bounds duplicates; it
@@ -174,10 +176,10 @@ def test_the_primitive_writes_exactly_one_linked_event(application_engine, tenan
     """
     key = _key()
     result = _run(
-        application_engine, tenant_a, key=key, identity=MANIFEST_IDENTITY, mutate=_create_workspace("alpha-evented")
+        application_engine, principal_a, key=key, identity=MANIFEST_IDENTITY, mutate=_create_workspace("alpha-evented")
     )
 
-    with db_engine.tenant_transaction(application_engine, tenant_a) as session:
+    with auth.authenticated_transaction(application_engine, principal_a.credential) as session:
         events = outbox_events(session)
         assert len(events) == 1
         event = events[0]
@@ -186,22 +188,22 @@ def test_the_primitive_writes_exactly_one_linked_event(application_engine, tenan
         assert event.aggregate_type == "workspace"
         assert str(event.aggregate_id) == result.result["workspace_id"]
         assert event.attributes == {"slug": "alpha-evented"}
-        assert event.tenant_id == tenant_a
+        assert event.tenant_id == principal_a.id
         # The event is attributable to the claim it committed with.
         assert event.idempotency_record_id == result.record_id
         # And the claim exists, in the same committed state.
         assert session.scalars(select(IdempotencyRecord)).one().id == result.record_id
 
 
-def test_the_claim_records_a_digest_and_not_the_request(application_engine, tenant_a):
+def test_the_claim_records_a_digest_and_not_the_request(application_engine, principal_a):
     key = _key()
     identity = dict(MANIFEST_IDENTITY, workspace_slug="alpha-digest")
-    _run(application_engine, tenant_a, key=key, identity=identity, mutate=_create_workspace("alpha-digest"))
+    _run(application_engine, principal_a, key=key, identity=identity, mutate=_create_workspace("alpha-digest"))
 
-    with db_engine.tenant_transaction(application_engine, tenant_a) as session:
+    with auth.authenticated_transaction(application_engine, principal_a.credential) as session:
         record = session.scalars(select(IdempotencyRecord)).one()
         assert record.request_fingerprint == request_fingerprint(
-            tenant_id=tenant_a, operation=OPERATION, request_identity=identity
+            tenant_id=principal_a.id, operation=OPERATION, request_identity=identity
         )
         assert len(record.request_fingerprint) == 64
         assert record.status == "completed"
@@ -213,11 +215,11 @@ def test_the_claim_records_a_digest_and_not_the_request(application_engine, tena
 # ----------------------------------------------------------------- conflicting reuse
 
 
-def test_reusing_a_key_with_a_different_request_is_rejected(application_engine, tenant_a):
+def test_reusing_a_key_with_a_different_request_is_rejected(application_engine, principal_a):
     key = _key()
     _run(
         application_engine,
-        tenant_a,
+        principal_a,
         key=key,
         identity=dict(MANIFEST_IDENTITY, workspace_slug="alpha-first"),
         mutate=_create_workspace("alpha-first"),
@@ -227,7 +229,7 @@ def test_reusing_a_key_with_a_different_request_is_rejected(application_engine, 
     with pytest.raises(IdempotencyConflict) as exc:
         _run(
             application_engine,
-            tenant_a,
+            principal_a,
             key=key,
             identity=dict(MANIFEST_IDENTITY, workspace_slug="alpha-second"),
             mutate=second,
@@ -236,24 +238,24 @@ def test_reusing_a_key_with_a_different_request_is_rejected(application_engine, 
     assert second.calls == 0, "a conflicting reuse must be refused before the mutation runs"
 
     # And the conflicting call changed nothing.
-    assert _counts(application_engine, tenant_a) == {"workspaces": 1, "records": 1, "events": 1}
-    with db_engine.tenant_transaction(application_engine, tenant_a) as session:
+    assert _counts(application_engine, principal_a) == {"workspaces": 1, "records": 1, "events": 1}
+    with auth.authenticated_transaction(application_engine, principal_a.credential) as session:
         assert [w.slug for w in WorkspaceRepository(session).list()] == ["alpha-first"]
 
 
-def test_the_same_key_under_a_different_operation_is_a_different_claim(application_engine, tenant_a):
+def test_the_same_key_under_a_different_operation_is_a_different_claim(application_engine, principal_a):
     """Keys are scoped by operation as well as tenant, so this is not a conflict."""
     key = _key()
     _run(
         application_engine,
-        tenant_a,
+        principal_a,
         key=key,
         identity=dict(MANIFEST_IDENTITY, workspace_slug="alpha-op-one"),
         mutate=_create_workspace("alpha-op-one"),
     )
     second = _run(
         application_engine,
-        tenant_a,
+        principal_a,
         key=key,
         identity=dict(MANIFEST_IDENTITY, workspace_slug="alpha-op-two"),
         mutate=_create_workspace("alpha-op-two"),
@@ -261,55 +263,55 @@ def test_the_same_key_under_a_different_operation_is_a_different_claim(applicati
     )
 
     assert second.replayed is False
-    assert _counts(application_engine, tenant_a) == {"workspaces": 2, "records": 2, "events": 2}
+    assert _counts(application_engine, principal_a) == {"workspaces": 2, "records": 2, "events": 2}
 
 
-def test_a_key_is_independent_between_tenants(application_engine, tenant_a, tenant_b):
+def test_a_key_is_independent_between_tenants(application_engine, principal_a, principal_b):
     """The same key, the same operation, the same identity, in two tenants: two effects."""
     key = _key()
 
-    a = _run(application_engine, tenant_a, key=key, identity=MANIFEST_IDENTITY, mutate=_create_workspace("shared-key-ws"))
-    b = _run(application_engine, tenant_b, key=key, identity=MANIFEST_IDENTITY, mutate=_create_workspace("shared-key-ws"))
+    a = _run(application_engine, principal_a, key=key, identity=MANIFEST_IDENTITY, mutate=_create_workspace("shared-key-ws"))
+    b = _run(application_engine, principal_b, key=key, identity=MANIFEST_IDENTITY, mutate=_create_workspace("shared-key-ws"))
 
     assert a.replayed is False and b.replayed is False
     assert a.record_id != b.record_id
     assert a.result["workspace_id"] != b.result["workspace_id"]
-    assert _counts(application_engine, tenant_a) == {"workspaces": 1, "records": 1, "events": 1}
-    assert _counts(application_engine, tenant_b) == {"workspaces": 1, "records": 1, "events": 1}
+    assert _counts(application_engine, principal_a) == {"workspaces": 1, "records": 1, "events": 1}
+    assert _counts(application_engine, principal_b) == {"workspaces": 1, "records": 1, "events": 1}
 
 
-def test_the_fingerprint_is_scoped_to_its_tenant_and_operation(tenant_a, tenant_b):
+def test_the_fingerprint_is_scoped_to_its_tenant_and_operation(principal_a, principal_b):
     identity = {"workspace_slug": "same"}
-    base = request_fingerprint(tenant_id=tenant_a, operation=OPERATION, request_identity=identity)
-    assert base == request_fingerprint(tenant_id=tenant_a, operation=OPERATION, request_identity=identity)
-    assert base != request_fingerprint(tenant_id=tenant_b, operation=OPERATION, request_identity=identity)
-    assert base != request_fingerprint(tenant_id=tenant_a, operation="workspace.provision", request_identity=identity)
+    base = request_fingerprint(tenant_id=principal_a.id, operation=OPERATION, request_identity=identity)
+    assert base == request_fingerprint(tenant_id=principal_a.id, operation=OPERATION, request_identity=identity)
+    assert base != request_fingerprint(tenant_id=principal_b.id, operation=OPERATION, request_identity=identity)
+    assert base != request_fingerprint(tenant_id=principal_a.id, operation="workspace.provision", request_identity=identity)
     # Key order is not part of the identity.
     assert request_fingerprint(
-        tenant_id=tenant_a, operation=OPERATION, request_identity={"a": 1, "b": 2}
-    ) == request_fingerprint(tenant_id=tenant_a, operation=OPERATION, request_identity={"b": 2, "a": 1})
+        tenant_id=principal_a.id, operation=OPERATION, request_identity={"a": 1, "b": 2}
+    ) == request_fingerprint(tenant_id=principal_a.id, operation=OPERATION, request_identity={"b": 2, "a": 1})
 
 
 # --------------------------------------------------------------------------- rollback
 
 
-def test_a_failure_inside_the_mutation_leaves_nothing_behind(application_engine, tenant_a):
+def test_a_failure_inside_the_mutation_leaves_nothing_behind(application_engine, principal_a):
     with pytest.raises(RuntimeError):
         _run(
             application_engine,
-            tenant_a,
+            principal_a,
             key=_key(),
             identity=MANIFEST_IDENTITY,
             mutate=_create_workspace("alpha-doomed", fail_after=True),
         )
 
-    assert _counts(application_engine, tenant_a) == {"workspaces": 0, "records": 0, "events": 0}
+    assert _counts(application_engine, principal_a) == {"workspaces": 0, "records": 0, "events": 0}
 
 
-def test_a_failure_after_the_primitive_returns_rolls_the_whole_thing_back(application_engine, tenant_a):
+def test_a_failure_after_the_primitive_returns_rolls_the_whole_thing_back(application_engine, principal_a):
     """The caller owns the commit, so a caller that dies before it leaves no claim."""
     with pytest.raises(RuntimeError):
-        with db_engine.tenant_transaction(application_engine, tenant_a) as session:
+        with auth.authenticated_transaction(application_engine, principal_a.credential) as session:
             execute_idempotent_mutation(
                 session,
                 operation=OPERATION,
@@ -319,10 +321,10 @@ def test_a_failure_after_the_primitive_returns_rolls_the_whole_thing_back(applic
             )
             raise RuntimeError("the process dies here, before COMMIT")
 
-    assert _counts(application_engine, tenant_a) == {"workspaces": 0, "records": 0, "events": 0}
+    assert _counts(application_engine, principal_a) == {"workspaces": 0, "records": 0, "events": 0}
 
 
-def test_a_rolled_back_claim_does_not_block_the_retry(application_engine, tenant_a):
+def test_a_rolled_back_claim_does_not_block_the_retry(application_engine, principal_a):
     """No durable 'in progress' row, so the retry is an ordinary first attempt.
 
     This is the property that makes it safe not to have written a recovery system: there
@@ -330,7 +332,7 @@ def test_a_rolled_back_claim_does_not_block_the_retry(application_engine, tenant
     """
     key = _key()
     with pytest.raises(RuntimeError):
-        with db_engine.tenant_transaction(application_engine, tenant_a) as session:
+        with auth.authenticated_transaction(application_engine, principal_a.credential) as session:
             execute_idempotent_mutation(
                 session,
                 operation=OPERATION,
@@ -341,13 +343,13 @@ def test_a_rolled_back_claim_does_not_block_the_retry(application_engine, tenant
             raise RuntimeError("crash before COMMIT")
 
     result = _run(
-        application_engine, tenant_a, key=key, identity=MANIFEST_IDENTITY, mutate=_create_workspace("alpha-retried")
+        application_engine, principal_a, key=key, identity=MANIFEST_IDENTITY, mutate=_create_workspace("alpha-retried")
     )
     assert result.replayed is False
-    assert _counts(application_engine, tenant_a) == {"workspaces": 1, "records": 1, "events": 1}
+    assert _counts(application_engine, principal_a) == {"workspaces": 1, "records": 1, "events": 1}
 
 
-def test_a_refused_result_leaves_nothing_behind(application_engine, tenant_a):
+def test_a_refused_result_leaves_nothing_behind(application_engine, principal_a):
     """The metadata policy refuses before COMMIT, so the mutation goes back with it."""
 
     def body(unit_of_work):
@@ -360,16 +362,16 @@ def test_a_refused_result_leaves_nothing_behind(application_engine, tenant_a):
         )
 
     with pytest.raises(MetadataPolicyError):
-        _run(application_engine, tenant_a, key=_key(), identity=MANIFEST_IDENTITY, mutate=_Recorder("x", body=body))
+        _run(application_engine, principal_a, key=_key(), identity=MANIFEST_IDENTITY, mutate=_Recorder("x", body=body))
 
-    assert _counts(application_engine, tenant_a) == {"workspaces": 0, "records": 0, "events": 0}
+    assert _counts(application_engine, principal_a) == {"workspaces": 0, "records": 0, "events": 0}
 
 
-def test_a_business_constraint_violation_is_the_callers_error(application_engine, tenant_a):
+def test_a_business_constraint_violation_is_the_callers_error(application_engine, principal_a):
     """A duplicate slug under a *fresh* key is not a lost race, and must not look like one."""
     _run(
         application_engine,
-        tenant_a,
+        principal_a,
         key=_key(),
         identity=MANIFEST_IDENTITY,
         mutate=_create_workspace("alpha-taken"),
@@ -377,19 +379,19 @@ def test_a_business_constraint_violation_is_the_callers_error(application_engine
     with pytest.raises(IntegrityError) as exc:
         _run(
             application_engine,
-            tenant_a,
+            principal_a,
             key=_key(),
             identity=MANIFEST_IDENTITY,
             mutate=_create_workspace("alpha-taken"),
         )
     assert "uq_workspaces_tenant_id_slug" in str(exc.value)
-    assert _counts(application_engine, tenant_a) == {"workspaces": 1, "records": 1, "events": 1}
+    assert _counts(application_engine, principal_a) == {"workspaces": 1, "records": 1, "events": 1}
 
 
 # ---------------------------------------------------------------- the mutation contract
 
 
-def test_a_mutation_cannot_commit_the_outer_transaction(application_engine, tenant_a):
+def test_a_mutation_cannot_commit_the_outer_transaction(application_engine, principal_a):
     """The merge blocker.
 
     ``Session.commit()`` in SQLAlchemy 2.x commits the **outermost** transaction even
@@ -406,14 +408,14 @@ def test_a_mutation_cannot_commit_the_outer_transaction(application_engine, tena
 
     mutate = _Recorder("alpha-committer", body=body)
     with pytest.raises(MutationContractError) as exc:
-        _run(application_engine, tenant_a, key=_key(), identity=MANIFEST_IDENTITY, mutate=mutate)
+        _run(application_engine, principal_a, key=_key(), identity=MANIFEST_IDENTITY, mutate=mutate)
 
     assert "commit" in str(exc.value)
     assert mutate.calls == 1
-    assert _counts(application_engine, tenant_a) == {"workspaces": 0, "records": 0, "events": 0}
+    assert _counts(application_engine, principal_a) == {"workspaces": 0, "records": 0, "events": 0}
 
 
-def test_a_mutation_that_rolls_back_fails_cleanly_and_leaves_nothing(application_engine, tenant_a):
+def test_a_mutation_that_rolls_back_fails_cleanly_and_leaves_nothing(application_engine, principal_a):
     def body(unit_of_work):
         WorkspaceRepository(unit_of_work).create(slug="alpha-rollback", name="Alpha Rollback")
         unit_of_work.rollback()  # must be refused
@@ -422,14 +424,14 @@ def test_a_mutation_that_rolls_back_fails_cleanly_and_leaves_nothing(application
     with pytest.raises(MutationContractError) as exc:
         _run(
             application_engine,
-            tenant_a,
+            principal_a,
             key=_key(),
             identity=MANIFEST_IDENTITY,
             mutate=_Recorder("alpha-rollback", body=body),
         )
 
     assert "rollback" in str(exc.value)
-    assert _counts(application_engine, tenant_a) == {"workspaces": 0, "records": 0, "events": 0}
+    assert _counts(application_engine, principal_a) == {"workspaces": 0, "records": 0, "events": 0}
 
 
 @pytest.mark.parametrize(
@@ -445,7 +447,7 @@ def test_the_unit_of_work_refuses_every_transaction_control_operation(operation)
     assert "rollback-safe transactional DML" in str(exc.value)
 
 
-def test_the_transaction_boundary_survives_the_callback(application_engine, tenant_a):
+def test_the_transaction_boundary_survives_the_callback(application_engine, principal_a):
     """The primitive re-checks its own boundary after the callback returns.
 
     The unit of work removes the reflex path out; this check catches an escape by any
@@ -463,7 +465,7 @@ def test_the_transaction_boundary_survives_the_callback(application_engine, tena
             ),
         )
 
-    with db_engine.tenant_transaction(application_engine, tenant_a) as session:
+    with auth.authenticated_transaction(application_engine, principal_a.credential) as session:
         observed["outer"] = session.get_transaction()
         execute_idempotent_mutation(
             session,
@@ -476,10 +478,10 @@ def test_the_transaction_boundary_survives_the_callback(application_engine, tena
         assert session.get_transaction() is observed["outer"]
         assert session.get_nested_transaction() is None
 
-    assert _counts(application_engine, tenant_a) == {"workspaces": 1, "records": 1, "events": 1}
+    assert _counts(application_engine, principal_a) == {"workspaces": 1, "records": 1, "events": 1}
 
 
-def test_an_escape_around_the_unit_of_work_is_detected_and_refused(application_engine, tenant_a):
+def test_an_escape_around_the_unit_of_work_is_detected_and_refused(application_engine, principal_a):
     """The commit is refused **before** it happens, not noticed after it.
 
     ``object_session(row)`` hands a callback the real ``Session``, and
@@ -499,7 +501,7 @@ def test_an_escape_around_the_unit_of_work_is_detected_and_refused(application_e
     with pytest.raises(MutationContractError) as exc:
         _run(
             application_engine,
-            tenant_a,
+            principal_a,
             key=_key(),
             identity=MANIFEST_IDENTITY,
             mutate=_Recorder("alpha-escape", body=body),
@@ -508,10 +510,10 @@ def test_an_escape_around_the_unit_of_work_is_detected_and_refused(application_e
 
     # Nothing survives. Not the workspace, not a claim, not an event -- which is the whole
     # point: a partial commit is the state this primitive exists to make impossible.
-    assert _counts(application_engine, tenant_a) == {"workspaces": 0, "records": 0, "events": 0}
+    assert _counts(application_engine, principal_a) == {"workspaces": 0, "records": 0, "events": 0}
 
 
-def test_the_commit_guard_is_removed_before_the_caller_commits(application_engine, tenant_a):
+def test_the_commit_guard_is_removed_before_the_caller_commits(application_engine, principal_a):
     """The guard is scoped to the callback, and its removal is proved by the commit.
 
     Two commits follow every successful mutation and both are legitimate: the primitive
@@ -521,7 +523,7 @@ def test_the_commit_guard_is_removed_before_the_caller_commits(application_engin
     proof that it was removed.
     """
     key = _key()
-    with db_engine.tenant_transaction(application_engine, tenant_a) as session:
+    with auth.authenticated_transaction(application_engine, principal_a.credential) as session:
         result = execute_idempotent_mutation(
             session,
             operation=OPERATION,
@@ -534,9 +536,9 @@ def test_the_commit_guard_is_removed_before_the_caller_commits(application_engin
         assert session.get_nested_transaction() is None
 
     # And the outer commit went through.
-    assert _counts(application_engine, tenant_a) == {"workspaces": 1, "records": 1, "events": 1}
+    assert _counts(application_engine, principal_a) == {"workspaces": 1, "records": 1, "events": 1}
 
-    with db_engine.tenant_transaction(application_engine, tenant_a) as session:
+    with auth.authenticated_transaction(application_engine, principal_a.credential) as session:
         record = session.scalars(select(IdempotencyRecord)).one()
         event = session.scalars(select(OutboxEvent)).one()
         assert record.id == result.record_id
@@ -548,16 +550,16 @@ def test_the_commit_guard_is_removed_before_the_caller_commits(application_engin
     # different operation commits normally on the same engine.
     second = _run(
         application_engine,
-        tenant_a,
+        principal_a,
         key=_key(),
         identity=dict(MANIFEST_IDENTITY, workspace_slug="alpha-guard-second"),
         mutate=_create_workspace("alpha-guard-second"),
     )
     assert second.replayed is False
-    assert _counts(application_engine, tenant_a) == {"workspaces": 2, "records": 2, "events": 2}
+    assert _counts(application_engine, principal_a) == {"workspaces": 2, "records": 2, "events": 2}
 
 
-def test_pending_orm_state_at_entry_is_rejected(application_engine, tenant_a):
+def test_pending_orm_state_at_entry_is_rejected(application_engine, principal_a):
     """``begin_nested()`` flushes pending state *before* it opens the SAVEPOINT.
 
     A row the caller added and did not flush would therefore be written outside the
@@ -567,8 +569,8 @@ def test_pending_orm_state_at_entry_is_rejected(application_engine, tenant_a):
     """
     mutate = _create_workspace("alpha-clean")
     with pytest.raises(MutationContractError) as exc:
-        with db_engine.tenant_transaction(application_engine, tenant_a) as session:
-            session.add(Workspace(tenant_id=tenant_a, slug="alpha-pending", name="Alpha Pending"))
+        with auth.authenticated_transaction(application_engine, principal_a.credential) as session:
+            session.add(Workspace(tenant_id=principal_a.id, slug="alpha-pending", name="Alpha Pending"))
             execute_idempotent_mutation(
                 session,
                 operation=OPERATION,
@@ -578,10 +580,10 @@ def test_pending_orm_state_at_entry_is_rejected(application_engine, tenant_a):
             )
     assert "unflushed ORM state" in str(exc.value)
     assert mutate.calls == 0, "the mutation must not run once the session is known to be dirty"
-    assert _counts(application_engine, tenant_a) == {"workspaces": 0, "records": 0, "events": 0}
+    assert _counts(application_engine, principal_a) == {"workspaces": 0, "records": 0, "events": 0}
 
 
-def test_a_write_flushed_before_the_primitive_is_outside_its_savepoint(application_engine, tenant_a):
+def test_a_write_flushed_before_the_primitive_is_outside_its_savepoint(application_engine, principal_a):
     """The limit of the entry check, recorded so it is not mistaken for coverage.
 
     The pending-state check sees ``session.new``/``dirty``/``deleted``. A write the caller
@@ -598,8 +600,8 @@ def test_a_write_flushed_before_the_primitive_is_outside_its_savepoint(applicati
     transaction even though they do not share the savepoint.
     """
     with pytest.raises(RuntimeError):
-        with db_engine.tenant_transaction(application_engine, tenant_a) as session:
-            session.add(Workspace(tenant_id=tenant_a, slug="alpha-flushed", name="Alpha Flushed"))
+        with auth.authenticated_transaction(application_engine, principal_a.credential) as session:
+            session.add(Workspace(tenant_id=principal_a.id, slug="alpha-flushed", name="Alpha Flushed"))
             session.flush()
             execute_idempotent_mutation(
                 session,
@@ -610,13 +612,13 @@ def test_a_write_flushed_before_the_primitive_is_outside_its_savepoint(applicati
             )
             raise RuntimeError("crash before COMMIT")
 
-    assert _counts(application_engine, tenant_a) == {"workspaces": 0, "records": 0, "events": 0}
+    assert _counts(application_engine, principal_a) == {"workspaces": 0, "records": 0, "events": 0}
 
 
 # ------------------------------------------------------------------------ fail closed
 
 
-def test_without_tenant_context_an_idempotent_mutation_is_refused(application_engine):
+def test_without_an_authenticated_context_an_idempotent_mutation_is_refused(application_engine):
     mutate = _create_workspace("no-context")
     with pytest.raises(db_engine.TenantContextError) as exc:
         with db_engine.transaction(application_engine) as session:
@@ -627,11 +629,33 @@ def test_without_tenant_context_an_idempotent_mutation_is_refused(application_en
                 request_identity=MANIFEST_IDENTITY,
                 mutate=mutate,
             )
-    assert "tenant context" in str(exc.value)
+    assert "authenticated context is required" in str(exc.value)
     assert mutate.calls == 0
 
 
-def test_the_database_also_refuses_a_claim_written_without_context(application_engine, tenant_a):
+def test_a_context_without_mutation_execute_cannot_claim_a_key(
+    application_engine, new_principal, issue_credential
+):
+    """The framework tables take the minimal framework capability, and no other.
+
+    A credential that can create workspaces but was never granted ``mutation:execute``
+    gets an explanatory refusal from the primitive -- and would get an empty result set
+    and a policy violation from PostgreSQL if it went around it.
+    """
+    from firmbatch.control_plane.security.authorization import AuthorizationError, Scope
+
+    owner = new_principal("scoped")
+    narrow = issue_credential(owner, [Scope.WORKSPACE_READ, Scope.WORKSPACE_WRITE])
+    mutate = _create_workspace("unscoped")
+
+    with pytest.raises(AuthorizationError) as exc:
+        _run(application_engine, narrow, key=_key(), identity=MANIFEST_IDENTITY, mutate=mutate)
+    assert "mutation:execute" in str(exc.value)
+    assert mutate.calls == 0
+    assert _counts(application_engine, owner) == {"workspaces": 0, "records": 0, "events": 0}
+
+
+def test_the_database_also_refuses_a_claim_written_without_context(application_engine, principal_a):
     """Two layers, and the database is the one that counts.
 
     The primitive refuses in Python; this is the same write going straight to PostgreSQL
@@ -645,7 +669,7 @@ def test_the_database_also_refuses_a_claim_written_without_context(application_e
                     "(tenant_id, operation, idempotency_key, request_fingerprint, result) "
                     "VALUES (:t, 'workspace.create', 'orphan-key-12345', :f, '{}'::jsonb)"
                 ),
-                {"t": tenant_a, "f": "0" * 64},
+                {"t": principal_a.id, "f": "0" * 64},
             )
     assert "row-level security" in str(exc.value).lower()
 
@@ -669,20 +693,45 @@ def test_outside_a_transaction_it_is_refused(application_engine):
     assert mutate.calls == 0
 
 
-def test_a_stricter_isolation_level_is_refused_rather_than_mishandled(application_engine, tenant_a):
+def test_a_stricter_isolation_level_is_refused_rather_than_mishandled(application_engine, principal_a):
     """Recovering from a lost race means re-reading a just-committed row.
 
     Only READ COMMITTED takes a fresh snapshot per statement. Under REPEATABLE READ the
     re-read would return nothing and the caller would be told the key is free when it is
     not, so the level is checked and the wrong one is refused.
+
+    Since Milestone 2.3 the refusal arrives **earlier**, from the database, when the
+    transaction tries to authenticate at all -- a stricter level would read the credential
+    registry through a stale snapshot, which is a worse problem than a stale re-read. So a
+    stricter transaction never acquires a context and never reaches this primitive.
     """
     strict = application_engine.execution_options(isolation_level="REPEATABLE READ")
     mutate = _create_workspace("alpha-strict")
-    with pytest.raises(IsolationLevelError) as exc:
-        _run(strict, tenant_a, key=_key(), identity=MANIFEST_IDENTITY, mutate=mutate)
-    assert "repeatable read" in str(exc.value).lower()
+    with pytest.raises(auth.UnsupportedIsolationLevelError) as exc:
+        _run(strict, principal_a, key=_key(), identity=MANIFEST_IDENTITY, mutate=mutate)
+    assert "read committed" in str(exc.value).lower()
     assert mutate.calls == 0
-    assert _counts(application_engine, tenant_a) == {"workspaces": 0, "records": 0, "events": 0}
+    assert _counts(application_engine, principal_a) == {"workspaces": 0, "records": 0, "events": 0}
+
+
+def test_the_primitive_keeps_its_own_isolation_check(application_engine):
+    """Unreachable in practice now, and kept, and therefore asserted directly.
+
+    A transaction cannot hold a context under a stricter level, so the primitive's own
+    check no longer fires on any route a caller has. It stays because the reason for it is
+    unchanged -- the recovery path re-reads a row another transaction just committed -- and
+    a guard nothing exercises is a guard that gets deleted by the next person who notices.
+    """
+    from firmbatch.control_plane.db.idempotency import _require_read_committed
+
+    strict = application_engine.execution_options(isolation_level="REPEATABLE READ")
+    with db_engine.transaction(strict) as session:
+        with pytest.raises(IsolationLevelError) as exc:
+            _require_read_committed(session)
+        assert "repeatable read" in str(exc.value).lower()
+
+    with db_engine.transaction(application_engine) as session:
+        _require_read_committed(session)  # the positive control
 
 
 # ------------------------------------------------------- input validation before mutation
@@ -703,19 +752,19 @@ def test_a_stricter_isolation_level_is_refused_rather_than_mishandled(applicatio
         "valid-key-1234\nsecond-line",
     ],
 )
-def test_a_malformed_idempotency_key_is_refused_before_the_mutation(application_engine, tenant_a, bad_key):
+def test_a_malformed_idempotency_key_is_refused_before_the_mutation(application_engine, principal_a, bad_key):
     mutate = _create_workspace("alpha-badkey")
     with pytest.raises(IdempotencyError):
-        _run(application_engine, tenant_a, key=bad_key, identity=MANIFEST_IDENTITY, mutate=mutate)
+        _run(application_engine, principal_a, key=bad_key, identity=MANIFEST_IDENTITY, mutate=mutate)
     assert mutate.calls == 0
-    assert _counts(application_engine, tenant_a) == {"workspaces": 0, "records": 0, "events": 0}
+    assert _counts(application_engine, principal_a) == {"workspaces": 0, "records": 0, "events": 0}
 
 
 @pytest.mark.parametrize(
     "bad_operation",
     ["", "Not A Valid Operation", "nodots", "workspace.", ".create", "workspace.create\n", "workspace.CREATE"],
 )
-def test_a_malformed_operation_is_refused_before_the_mutation(application_engine, tenant_a, bad_operation):
+def test_a_malformed_operation_is_refused_before_the_mutation(application_engine, principal_a, bad_operation):
     """Validated in Python now, so a bad name cannot produce an unrecorded business change.
 
     The old behaviour ran the mutation and let the check constraint refuse the claim
@@ -726,41 +775,41 @@ def test_a_malformed_operation_is_refused_before_the_mutation(application_engine
     with pytest.raises(IdempotencyError):
         _run(
             application_engine,
-            tenant_a,
+            principal_a,
             key=_key(),
             identity=MANIFEST_IDENTITY,
             mutate=mutate,
             operation=bad_operation,
         )
     assert mutate.calls == 0
-    assert _counts(application_engine, tenant_a) == {"workspaces": 0, "records": 0, "events": 0}
+    assert _counts(application_engine, principal_a) == {"workspaces": 0, "records": 0, "events": 0}
 
 
-def test_the_database_still_refuses_a_malformed_operation(application_engine, tenant_a):
+def test_the_database_still_refuses_a_malformed_operation(application_engine, principal_a):
     """Defense in depth: the check constraint holds for a writer that bypasses Python."""
     with pytest.raises(IntegrityError) as exc:
-        with db_engine.tenant_transaction(application_engine, tenant_a) as session:
+        with auth.authenticated_transaction(application_engine, principal_a.credential) as session:
             session.execute(
                 text(
                     f"INSERT INTO {SCHEMA}.idempotency_records "
                     "(tenant_id, operation, idempotency_key, request_fingerprint, result) "
                     "VALUES (:t, 'Not A Valid Operation', 'bypass-key-1234', :f, '{}'::jsonb)"
                 ),
-                {"t": tenant_a, "f": "0" * 64},
+                {"t": principal_a.id, "f": "0" * 64},
             )
     assert "ck_idempotency_records_operation_format" in str(exc.value)
 
 
-def test_a_mutation_that_returns_the_wrong_type_is_refused(application_engine, tenant_a):
+def test_a_mutation_that_returns_the_wrong_type_is_refused(application_engine, principal_a):
     with pytest.raises(IdempotencyError):
         _run(
             application_engine,
-            tenant_a,
+            principal_a,
             key=_key(),
             identity=MANIFEST_IDENTITY,
             mutate=_Recorder("x", body=lambda unit_of_work: {"result": {}}),
         )
-    assert _counts(application_engine, tenant_a) == {"workspaces": 0, "records": 0, "events": 0}
+    assert _counts(application_engine, principal_a) == {"workspaces": 0, "records": 0, "events": 0}
 
 
 # ------------------------------------------------------------------- metadata policy
@@ -816,7 +865,7 @@ def test_reference_shaped_keys_are_accepted(key):
     }
 
 
-def test_payload_shaped_material_is_rejected_before_the_mutation_runs(application_engine, tenant_a):
+def test_payload_shaped_material_is_rejected_before_the_mutation_runs(application_engine, principal_a):
     """The ordering matters, not only the refusal.
 
     The request identity is validated at entry, so a caller that passes a raw prompt or an
@@ -831,10 +880,10 @@ def test_payload_shaped_material_is_rejected_before_the_mutation_runs(applicatio
     ):
         mutate = _create_workspace("alpha-rejected")
         with pytest.raises(MetadataPolicyError):
-            _run(application_engine, tenant_a, key=_key(), identity=identity, mutate=mutate)
+            _run(application_engine, principal_a, key=_key(), identity=identity, mutate=mutate)
         assert mutate.calls == 0, f"{identity!r} must be refused before the mutation runs"
 
-    assert _counts(application_engine, tenant_a) == {"workspaces": 0, "records": 0, "events": 0}
+    assert _counts(application_engine, principal_a) == {"workspaces": 0, "records": 0, "events": 0}
 
 
 @pytest.mark.parametrize(
@@ -883,7 +932,7 @@ def test_an_oversized_metadata_document_is_refused():
     assert "bytes" in str(exc.value)
 
 
-def test_only_a_digest_of_the_request_identity_is_persisted(application_engine, tenant_a):
+def test_only_a_digest_of_the_request_identity_is_persisted(application_engine, principal_a):
     """What M2.2 actually proves about the payload plane, stated as narrowly as it holds.
 
     The identity is bounded metadata -- object references and counts -- and none of its
@@ -900,9 +949,9 @@ def test_only_a_digest_of_the_request_identity_is_persisted(application_engine, 
         "input_manifest_digest": f"DIGESTMARKER{marker}",
         "output_object_key": f"KEYMARKER{marker}",
     }
-    _run(application_engine, tenant_a, key=_key(), identity=identity, mutate=_create_workspace("alpha-private"))
+    _run(application_engine, principal_a, key=_key(), identity=identity, mutate=_create_workspace("alpha-private"))
 
-    with db_engine.tenant_transaction(application_engine, tenant_a) as session:
+    with auth.authenticated_transaction(application_engine, principal_a.credential) as session:
         stored = "".join(
             session.scalars(text(f"SELECT row_to_json(t)::text FROM {SCHEMA}.idempotency_records t")).all()
         ) + "".join(
@@ -925,3 +974,95 @@ def test_the_application_role_cannot_widen_the_bounds_it_was_given(raw_applicati
         )
     message = str(exc.value).lower()
     assert "must be owner" in message or "permission denied" in message
+
+
+# --------------------------------------------- validation errors never echo (finding 7)
+
+ECHO_PROBES = (
+    "fbk_" + "A" * 43,
+    "postgresql://firmbatch:hunter2@db.internal:5432/prod",
+    "AKIAIOSFODNN7EXAMPLE",
+)
+
+
+def _chain(error: BaseException) -> str:
+    seen = []
+    current: BaseException | None = error
+    while current is not None and len(seen) < 20:
+        seen.append(f"{current!r} {current!s}")
+        current = current.__cause__ or current.__context__
+    return " || ".join(seen)
+
+
+@pytest.mark.parametrize("probe", ECHO_PROBES)
+def test_a_rejected_request_identity_never_echoes_the_key_or_the_value(probe):
+    """The same rule as the audit trail, on the M2.2 surface it was extracted from."""
+    for document in ({probe: 1}, {"note": probe}):
+        with pytest.raises(MetadataPolicyError) as exc:
+            validated_metadata(document, where="the request identity")
+        chain = _chain(exc.value)
+        assert probe not in chain
+        assert probe[:8] not in chain
+
+
+@pytest.mark.parametrize("probe", ECHO_PROBES)
+def test_a_rejected_operation_name_is_never_echoed(application_engine, principal_a, probe):
+    mutate = _create_workspace("echo-op")
+    with pytest.raises(IdempotencyError) as exc:
+        _run(
+            application_engine,
+            principal_a,
+            key=_key(),
+            identity=MANIFEST_IDENTITY,
+            mutate=mutate,
+            operation=probe,
+        )
+    chain = _chain(exc.value)
+    assert probe not in chain
+    assert probe[:8] not in chain
+    assert mutate.calls == 0
+
+
+def test_a_credential_used_as_an_idempotency_key_is_refused_and_not_echoed(
+    application_engine, principal_a
+):
+    """The key format accepts a bearer credential, and the key is **stored verbatim**.
+
+    So this is not cosmetic: without the shape test a caller that reached for the nearest
+    unique-looking string would write a live credential into a column. It is refused, and
+    the refusal does not repeat it.
+    """
+    probe = "fbk_" + "E" * 43
+    from firmbatch.control_plane.db.models import IDEMPOTENCY_KEY_REGEX
+
+    assert re.fullmatch(IDEMPOTENCY_KEY_REGEX, probe), (
+        "if the key format stopped accepting a credential this test would pass vacuously"
+    )
+
+    mutate = _create_workspace("echo-key")
+    with pytest.raises(IdempotencyError) as exc:
+        _run(application_engine, principal_a, key=probe, identity=MANIFEST_IDENTITY, mutate=mutate)
+    chain = _chain(exc.value)
+    assert probe not in chain
+    assert "looks like" in chain
+    assert mutate.calls == 0
+    assert _counts(application_engine, principal_a) == {"workspaces": 0, "records": 0, "events": 0}
+
+
+def test_a_rejected_outbox_attribute_is_never_echoed(application_engine, principal_a):
+    """The third column governed by the same policy."""
+    from firmbatch.control_plane.db.idempotency import append_outbox_event
+
+    probe = "fbk_" + "F" * 43
+    with pytest.raises(MetadataPolicyError) as exc:
+        with auth.authenticated_transaction(application_engine, principal_a.credential) as session:
+            append_outbox_event(
+                session,
+                OutboxEventSpec(
+                    event_type="workspace.created",
+                    aggregate_type="workspace",
+                    aggregate_id=uuid.uuid4(),
+                    attributes={"note": probe},
+                ),
+            )
+    assert probe not in _chain(exc.value)

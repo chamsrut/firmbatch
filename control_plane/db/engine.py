@@ -1,41 +1,57 @@
-"""Engines, transactions, and the transaction-local tenant context.
+"""Engines, transactions, and the connection-level half of the isolation boundary.
 
 The isolation boundary in this package is enforced by PostgreSQL row-level security, not
-by remembering to write ``WHERE tenant_id = ...``. What the application supplies is the
-*context*: one PostgreSQL custom setting, ``app.tenant_id``, set with ``set_config(...,
-is_local => true)`` so it belongs to the transaction and to nothing else.
+by remembering to write ``WHERE tenant_id = ...``. Since Milestone 2.3 the *context* those
+policies read is not something the application supplies at all: it is what
+``firmbatch.auth_tenant_id()`` reports, which is the tenant recorded in a protected
+transaction-local store that only a valid credential can write. Acquiring one is
+``db/auth.py``'s job; this module owns the engines, the transactions, and the properties
+that have to hold around them.
 
-Four properties, each of which is a separate defence and each of which is tested:
+Four properties, each a separate defence and each tested:
 
-* **Absence fails closed.** With no context, ``app_current_tenant_id()`` is NULL, every
+* **Absence fails closed.** With no context, ``firmbatch.auth_tenant_id()`` is NULL, every
   policy predicate is NULL, so reads return no rows and writes are rejected. A forgotten
-  ``set`` cannot become a cross-tenant read.
+  bind cannot become a cross-tenant read.
 
-* **Context is never inherited.** Every transaction opens by clearing ``app.tenant_id``
-  to empty *before* applying whatever the caller asked for. Transaction-local is not the
-  same as absent: a ``SET`` (not ``SET LOCAL``) executed earlier on a pooled connection,
-  or an ``options=-c app.tenant_id=...`` smuggled into a URL, is a **session** value that
-  ``current_setting`` returns quite happily to a transaction that set nothing. Both were
-  reproduced against a real server before this baseline existed. The session value is also
-  cleared on connect, so the two cover each other.
+* **Context is never inherited, and nothing has to clear it.** The authenticated context
+  is a row carrying the ``xid8`` of the transaction that wrote it, and it is read back
+  only when that id equals ``pg_current_xact_id_if_assigned()``. A committed row therefore
+  grants nothing to anybody ever again, because a transaction id is never reissued, and an
+  uncommitted one is invisible outside its own transaction. There is no clearing
+  operation in this package and no clearing operation is needed.
+
+  That is a stronger arrangement than the one it replaced twice over. Milestone 2.1
+  cleared ``app.tenant_id`` at the top of every transaction because a session-level GUC
+  could arrive **with** a connection. The first version of Milestone 2.3 cleared a
+  temporary table for the same reason -- and that clearing function turned out to be a way
+  for the caller to *drop its own context and bind a second identity*. What replaces both
+  is an assertion: every transaction this module opens checks that it starts with no
+  context, rather than making that true by removing one.
 
 * **The identity map cannot outlive a context.** SQLAlchemy answers ``session.get()`` from
-  its identity map without going to the database, so a ``Session`` reused across a tenant
-  switch will hand back the previous tenant's object with PostgreSQL never consulted --
-  also reproduced. Any change of context expunges the map, forcing re-evaluation.
+  its identity map without going to the database, so a ``Session`` reused across a change
+  of context will hand back the previous tenant's object with PostgreSQL never consulted
+  -- reproduced against a real server. Any change of context expunges the map.
 
 * **The principal is verified, not assumed.** Every new pooled connection is asked who it
   authenticated as, and refused if it is a superuser, ``BYPASSRLS``, a tenant-table owner,
-  or a member of any role that is. See ``db/principal.py``.
+  a member of any role that is, or the holder of a table- **or column-level** grant on
+  protected state. See ``db/principal.py``.
 
-``set_tenant_context`` refuses to run outside a transaction. Outside one, ``SET LOCAL``
-silently applies to the current statement only -- it would appear to work and then leave
-the next statement unscoped, which is the exact failure this design exists to prevent.
+* **Authenticated work is writable-primary-only, and says so first.** Acquiring a context
+  writes a row, so a standby and a read-only transaction cannot hold one. Every entry path
+  here runs :func:`require_writable_primary` *before* any statement that references
+  ``firmbatch.auth_transaction_context`` -- which is ``UNLOGGED``, and which PostgreSQL
+  refuses to plan against during recovery, so a context read placed first meant a standby
+  never reached the deliberate diagnostic at all. Read-replica routing is Milestone 8.
 
-What this does NOT claim: the application role can set ``app.tenant_id`` to any value it
-likes. RLS bounds what a *query* can reach given a context; it does not bound a control
-plane that has been compromised into choosing the wrong context. Resolving the context
-from an authenticated credential is M2.3/M3 work, and ADR 0004 records the limit.
+What changed at Milestone 2.3, and what it is worth: the runtime role can still execute
+``set_config('app.tenant_id', <any uuid>, true)``, and it now buys **nothing** -- no
+policy reads that setting, and the function that used to has been dropped. A transaction
+acquires context by presenting a credential to ``firmbatch.bind_authenticated_context``
+and no other way. ADR 0006 records the design; ADR 0004 section 8g records what it
+replaced.
 """
 
 from __future__ import annotations
@@ -45,15 +61,15 @@ from contextlib import contextmanager
 from typing import Iterator
 
 from sqlalchemy import Connection, Engine, create_engine, event, make_url, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from .. import config
-from .base import SEARCH_PATH
+from .base import SCHEMA, SEARCH_PATH
 
-#: The PostgreSQL custom setting carrying the transaction-local tenant. The SQL function
-#: ``firmbatch.app_current_tenant_id()`` created by migration 0001 reads this and nothing
-#: else.
-TENANT_SETTING = "app.tenant_id"
+#: Reads the authenticated tenant out of the protected transaction-local context.
+#: Migration 0003 creates it; nothing but that context decides what it returns.
+TENANT_FUNCTION = f"{SCHEMA}.auth_tenant_id()"
 
 #: Where the tenant a Session was last scoped to is remembered, so a change of context can
 #: be detected and the identity map dropped.
@@ -61,11 +77,121 @@ _SESSION_TENANT_KEY = "firmbatch_tenant_context"
 
 
 class TenantContextError(RuntimeError):
-    """Raised when tenant context is missing, malformed, or set outside a transaction."""
+    """Raised when tenant context is missing, or acquired somewhere it may not be."""
 
 
 class UnsupportedSessionBindError(RuntimeError):
     """Raised when a Session is bound to an already checked-out hardened Connection."""
+
+
+class WritablePrimaryRequiredError(RuntimeError):
+    """This transaction cannot hold an authenticated context because it cannot write.
+
+    Acquiring a context writes one row of protected transaction state (ADR 0006 decision
+    2), so an authenticated transaction requires a writable primary. Two situations reach
+    here, and they are distinguished because the difference decides where an operator
+    looks:
+
+    * the transaction is **read-only** -- ``SET TRANSACTION READ ONLY``, or a
+      ``default_transaction_read_only`` inherited from a role or database default;
+    * the server is **in recovery** -- a standby.
+
+    Defined here rather than in ``db/auth.py``, and re-exported from there for the callers
+    that already name it. The reason is the preflight below: it has to run before anything
+    touches ``firmbatch.auth_transaction_context``, which means it has to run inside this
+    module's transaction machinery, and this module cannot import ``db/auth.py``.
+
+    **Read-replica routing is Milestone 8 work.** At this milestone every authenticated
+    read runs on the primary, and that limitation is stated here, in ``docs/STATE.md`` and
+    in ADR 0006 rather than discovered.
+    """
+
+
+#: The writable-primary preflight, and the one property that matters about it: it names
+#: **nothing** in the ``firmbatch`` schema.
+#:
+#: ``firmbatch.auth_transaction_context`` is ``UNLOGGED``, and PostgreSQL refuses to plan
+#: a query that references an unlogged relation while the server is in recovery -- before
+#: the query runs, so before any guard inside a function it would have called. Every
+#: authenticated entry path used to begin by reading the current context, which is exactly
+#: such a query, so on a standby the deliberate ``auth_require_writable_primary()``
+#: diagnostic was never reached and the caller got PostgreSQL's own message about an
+#: unlogged relation instead. This runs first, and it is two catalogue functions and no
+#: relation at all.
+#:
+#: ``pg_is_in_recovery()`` is selected **first**, and the order is the diagnostic rather
+#: than a detail: on a standby ``transaction_read_only`` is always ``on``, so a check that
+#: read it first would report every replica as "somebody set the transaction read-only"
+#: and send the reader looking for a ``SET`` nobody wrote.
+_WRITABLE_PRIMARY_PREFLIGHT = text(
+    "SELECT pg_catalog.pg_is_in_recovery() AS in_recovery, "
+    "pg_catalog.current_setting('transaction_read_only') = 'on' AS read_only"
+)
+
+
+def writable_primary_refusal(in_recovery: bool, read_only: bool) -> str | None:
+    """The refusal these two facts warrant, or ``None`` when the transaction may proceed.
+
+    Split out from the query so that the standby branch is reachable without a standby.
+    No PostgreSQL cluster in this repository's test environment is in recovery, so the
+    only honest way to exercise the branch that a replica would take is to call this with
+    the answer a replica would give -- which is what ``tests/test_authenticated_context.py``
+    does. That is **not** a live-standby qualification and nothing here claims it is.
+
+    Recovery is tested before read-only for the reason
+    :data:`_WRITABLE_PRIMARY_PREFLIGHT` gives.
+    """
+    if in_recovery:
+        return (
+            "this server is in recovery (a standby), so it cannot hold an authenticated context: "
+            "acquiring one writes a row of protected transaction state. Authenticated work is "
+            "primary-only at this milestone; read-replica routing is Milestone 8."
+        )
+    if read_only:
+        return (
+            "this transaction is read-only, so it cannot hold an authenticated context: acquiring "
+            "one writes a row of protected transaction state. Authenticated work is primary-only "
+            "at this milestone; read-replica routing is Milestone 8."
+        )
+    return None
+
+
+def require_writable_primary(session: Session) -> None:
+    """Refuse, before anything reads the context relation, if this cannot be a primary write.
+
+    Called at the top of every public entry path that leads to an authenticated context --
+    :func:`transaction`, and both binding functions in ``db/auth.py`` -- so the ordering
+    holds for a Session bound to an Engine and for one a caller constructed itself.
+
+    The database functions keep their own ``firmbatch.auth_require_writable_primary()``
+    guard. This does not replace it: that one is what holds when a caller writes the SQL
+    by hand, and this one is what makes the diagnostic reachable at all on a standby.
+
+    Nothing from the DBAPI is retained. The preflight carries no bound parameters, no URL
+    and no credential; a driver failure is reported by exception *type* alone, and every
+    refusal is raised outside the ``except`` block so that no driver exception is attached
+    as ``__cause__`` or ``__context__``.
+
+    Only ``DBAPIError`` is translated. This is the first statement of the transaction, so
+    it is also what triggers the pool checkout -- and a checkout refusal is
+    ``PrivilegedPrincipalError``, which must reach the caller as itself. Catching
+    everything reported "this connection cannot write" for a connection that was rejected
+    as privileged, which is the more serious finding wearing the milder name.
+    """
+    failure: str | None = None
+    try:
+        row = session.execute(_WRITABLE_PRIMARY_PREFLIGHT).one()
+        refusal = writable_primary_refusal(bool(row.in_recovery), bool(row.read_only))
+    except DBAPIError as error:
+        failure = (
+            "the writable-primary preflight could not be answered, so this transaction cannot be "
+            f"assumed able to acquire an authenticated context: {type(error).__name__}"
+        )
+        refusal = None
+    if failure is not None:
+        raise WritablePrimaryRequiredError(failure) from None
+    if refusal is not None:
+        raise WritablePrimaryRequiredError(refusal) from None
 
 
 def _expected_user(url: str) -> str | None:
@@ -93,9 +219,16 @@ def _harden_connection(dbapi_connection, validate_principal: bool) -> None:
             # search the temporary schema first, which is how a CREATE TEMP TABLE
             # workspaces shadows the real table for a connection. See db/base.py.
             cursor.execute(f"SET search_path = {SEARCH_PATH}")
-            # Clear any session-level tenant that arrived with the connection -- via URL
-            # options, a connect-time server setting, or a role default.
-            cursor.execute("SELECT set_config(%(setting)s, '', false)", {"setting": TENANT_SETTING})
+            # There is deliberately nothing to clear here. A session-level
+            # ``app.tenant_id`` could arrive *with* a connection -- through URL options, a
+            # connect-time setting, or a role default -- which is why Milestone 2.1
+            # cleared one on every connect. Authentication context cannot arrive with
+            # anything: it is a row keyed by the transaction id that wrote it, and this
+            # connection has not opened a transaction yet.
+            #
+            # Nor could a clearing call run here even if one existed: this fires on the
+            # migration engine's first connection too, which happens before the schema
+            # that would define it.
             if validate_principal:
                 from .principal import require_unprivileged_principal
 
@@ -143,7 +276,11 @@ def _revalidate_on_checkout(dbapi_connection, connection_record, policy) -> None
             )
             # Re-assert session state as well: a caller may have left a plain SET behind.
             cursor.execute(f"SET search_path = {SEARCH_PATH}")
-            cursor.execute("SELECT set_config(%(setting)s, '', false)", {"setting": TENANT_SETTING})
+            # Nothing to clear. The authenticated context belongs to a transaction id, and
+            # a connection returning to the pool has ended its transaction one way or the
+            # other -- so the next holder's transaction has a different id and the previous
+            # row is unreadable by construction. ``transaction()`` asserts that rather than
+            # trusting it.
         dbapi_connection.commit()
     except BaseException:
         try:
@@ -263,40 +400,33 @@ def create_application_engine(
     return install_connect_hardening(engine, policy=policy)
 
 
-def _coerce_tenant_id(tenant_id: uuid.UUID | str) -> uuid.UUID:
-    if isinstance(tenant_id, uuid.UUID):
-        return tenant_id
-    try:
-        return uuid.UUID(str(tenant_id))
-    except (ValueError, AttributeError, TypeError):
-        raise TenantContextError(f"tenant context must be a UUID; got {tenant_id!r}") from None
+def refuse_inside_savepoint(session: Session, action: str) -> None:
+    """One authenticated context per outer transaction. Nothing acquired inside a savepoint.
 
+    Two reasons, and they survive the change of mechanism.
 
-def _apply_setting(session: Session, value: str) -> None:
-    session.execute(
-        text("SELECT set_config(:setting, :value, true)"),
-        {"setting": TENANT_SETTING, "value": value},
-    )
+    The first is the identity map. A nested transaction that changed tenant and then
+    rolled back left PostgreSQL correct and Python wrong: the map still held the other
+    tenant's object, and ``session.get()`` returned it without the policy being evaluated
+    again. Verified against a real server.
 
+    The second is what a savepoint does to the context itself. The context is a row, so a
+    savepoint rollback removes one written inside it while a savepoint *release* keeps it
+    -- meaning a bind inside a nested transaction would sometimes survive and sometimes
+    not, decided by how the caller happened to end the savepoint. A context whose
+    lifetime depends on that is not a context anybody can reason about.
 
-def _refuse_inside_savepoint(session: Session, action: str) -> None:
-    """One tenant context per outer transaction. No switching inside a savepoint.
-
-    A nested transaction that switched tenant and then rolled back left PostgreSQL correct
-    -- the outer ``SET LOCAL`` value is restored by the savepoint rollback -- and Python
-    wrong: the identity map still held the other tenant's object, and ``session.get()``
-    returned it without the policy being evaluated again. Verified against a real server.
-
-    Rather than trying to unwind that bookkeeping correctly, the context is fixed for the
-    life of an outer transaction. A caller that needs a different tenant opens a different
-    transaction, which is what the isolation model means anyway.
+    So it is fixed for the life of an outer transaction. A caller that needs a different
+    identity opens a different transaction, which is what the isolation model means
+    anyway.
     """
     if session.in_nested_transaction():
         raise TenantContextError(
-            f"refusing to {action} inside a SAVEPOINT: the tenant context is fixed for the lifetime "
-            "of an outer transaction. A savepoint rollback restores the PostgreSQL setting but not "
-            "the ORM identity map, so a switch here can leave another tenant's rows cached. Open a "
-            "separate transaction for the other tenant."
+            f"refusing to {action} inside a SAVEPOINT: the authenticated context is fixed for the "
+            "lifetime of an outer transaction. A savepoint rollback removes a context written "
+            "inside it while a release keeps one, and neither restores the ORM identity map, so a "
+            "change here can leave another tenant's rows cached or leave the transaction running "
+            "as an identity the caller thinks it abandoned. Open a separate transaction."
         )
 
 
@@ -406,7 +536,7 @@ def _clear_at_transaction_boundaries(session: Session, transaction) -> None:
 #: The earlier design tried to *support* this form by teaching the identity-map guard to
 #: recognise it. That closed the identity-map half and left the session-state half open,
 #: which is the worse outcome: a bind form that looks supported and is not. Refusing it is
-#: both simpler and honest, and nothing in this package needs it -- ``tenant_transaction``
+#: both simpler and honest, and nothing in this package needs it -- ``authenticated_transaction``
 #: and ``transaction`` take an Engine and check out their own connection.
 #:
 #: Unrelated Connection-bound Sessions on engines this package did not build are
@@ -431,7 +561,7 @@ def _refuse_connection_bound_session(session: Session) -> None:
         "re-verification, the pinned search_path, and the cleared session-level app.tenant_id all "
         "run there -- and binding an existing Connection skips all of it while inheriting whatever "
         "session state the previous holder left behind. Bind the Session to the Engine instead, or "
-        "use tenant_transaction()/transaction(), which check out their own connection."
+        "use authenticated_transaction()/transaction(), which check out their own connection."
     )
 
 
@@ -459,68 +589,58 @@ def _install_session_guards(session: Session) -> Session:
     return session
 
 
-def _note_context(session: Session, value: uuid.UUID | None) -> None:
+def note_context_change(session: Session, value: uuid.UUID | None) -> None:
     """Record the context and drop the identity map when it changes.
 
-    Expunging is what makes a tenant switch safe on a reused ``Session``. Without it,
+    Expunging is what makes a change of context safe on a reused ``Session``. Without it,
     ``session.get()`` answers from the identity map and PostgreSQL never re-evaluates the
     policy -- the object loaded under tenant A comes back under tenant B. Objects the
     caller still holds become detached with their loaded attributes intact; what they lose
     is the ability to be served again without a query, which is exactly the point.
+
+    Public because ``db/auth.py`` is what changes the context now, and this bookkeeping
+    belongs with the engines and the session guards rather than with the credential logic.
     """
     if session.info.get(_SESSION_TENANT_KEY) != value:
         session.expunge_all()
         session.info[_SESSION_TENANT_KEY] = value
 
 
-def reset_tenant_context(session: Session) -> None:
-    """Establish an empty transaction-local baseline. Called at the top of every transaction.
+def require_no_inherited_context(session: Session) -> None:
+    """Assert this transaction starts unauthenticated, and drop the ORM identity map.
 
-    This is what stops a session-level ``app.tenant_id`` -- from a reused connection, a URL
-    option, or an earlier plain ``SET`` -- from becoming the effective tenant of a
-    transaction that never asked for one.
+    Called at the top of every transaction this module opens. It **asserts** rather than
+    clears, and that difference is the correction: a function that could remove an
+    established context was a function the caller could use to drop its own identity and
+    bind another one inside the same transaction. There is no such function any more.
+
+    What makes the assertion cheap to keep true is the mechanism rather than this call: a
+    context row carries the transaction id that wrote it, so a new transaction cannot read
+    an old one's. A failure here would mean that property had broken, which is why it
+    raises rather than repairing anything.
     """
     if not session.in_transaction():
-        raise TenantContextError("reset_tenant_context requires an open transaction")
-    _refuse_inside_savepoint(session, "reset the tenant context")
-    _apply_setting(session, "")
-    _note_context(session, None)
-
-
-def set_tenant_context(session: Session, tenant_id: uuid.UUID | str) -> uuid.UUID:
-    """Set ``app.tenant_id`` for the remainder of the current transaction.
-
-    ``set_config`` rather than ``SET LOCAL`` because it takes a bind parameter; the value
-    is additionally parsed as a UUID first, so nothing but a UUID ever reaches the
-    setting.
-    """
-    if not session.in_transaction():
+        raise TenantContextError("require_no_inherited_context requires an open transaction")
+    inherited = current_tenant_context(session)
+    if inherited is not None:  # pragma: no cover - would mean the xid scoping had failed
         raise TenantContextError(
-            "set_tenant_context requires an open transaction: SET LOCAL outside one applies to a "
-            "single statement and then silently disappears."
+            f"this transaction began with an authenticated context for tenant {inherited}, which "
+            "should not be reachable: a context row is readable only by the transaction whose id "
+            "it carries. Treat this as a corrupted isolation boundary, not as a caller error."
         )
-    _refuse_inside_savepoint(session, "change the tenant context")
-    value = _coerce_tenant_id(tenant_id)
-    _note_context(session, value)
-    _apply_setting(session, str(value))
-    return value
+    note_context_change(session, None)
 
 
 def current_tenant_context(session: Session) -> uuid.UUID | None:
-    """The tenant context PostgreSQL currently sees, or ``None`` when unset."""
-    raw = session.execute(text("SELECT current_setting(:setting, true)"), {"setting": TENANT_SETTING}).scalar()
-    if raw is None or raw == "":
+    """The tenant PostgreSQL says this transaction authenticated as, or ``None``.
+
+    Read from the database rather than remembered in Python: what matters is the value the
+    policies will evaluate against, and the only authority for that is the server.
+    """
+    raw = session.execute(text(f"SELECT {TENANT_FUNCTION}")).scalar()
+    if raw is None:
         return None
-    return uuid.UUID(raw)
-
-
-def clear_tenant_context(session: Session) -> None:
-    """Drop the tenant context inside the current transaction, and the identity map with it."""
-    if not session.in_transaction():
-        raise TenantContextError("clear_tenant_context requires an open transaction")
-    _refuse_inside_savepoint(session, "clear the tenant context")
-    _note_context(session, None)
-    _apply_setting(session, "")
+    return raw if isinstance(raw, uuid.UUID) else uuid.UUID(str(raw))
 
 
 def _require_engine(engine, function: str) -> Engine:
@@ -540,35 +660,33 @@ def _require_engine(engine, function: str) -> Engine:
 
 
 @contextmanager
-def tenant_transaction(engine: Engine, tenant_id: uuid.UUID | str) -> Iterator[Session]:
-    """One transaction scoped to one tenant. Commits on success, rolls back on error."""
-    # Reject a malformed tenant before opening anything, so the caller gets the real error
-    # rather than a rollback of an empty transaction.
-    value = _coerce_tenant_id(tenant_id)
-    engine = _require_engine(engine, "tenant_transaction")
-    session = _install_session_guards(Session(bind=engine, expire_on_commit=False))
-    try:
-        with session.begin():
-            reset_tenant_context(session)
-            set_tenant_context(session, value)
-            yield session
-    finally:
-        session.close()
-
-
-@contextmanager
 def transaction(engine: Engine) -> Iterator[Session]:
-    """One transaction with **no** tenant context.
+    """One transaction with **no** authenticated context.
 
-    For privileged provisioning and for tests that assert the fail-closed behaviour.
     Every tenant-scoped read through this session returns nothing and every tenant-scoped
-    write is rejected -- that is the point, not a limitation.
+    write is rejected -- that is the point, not a limitation. It is the starting state for
+    a request that has not presented a credential yet, and the state the fail-closed tests
+    assert against.
+
+    There is deliberately no ``tenant_transaction(engine, tenant_id)`` any more. A
+    transaction that could be handed a tenant id was the whole of
+    ``AUTH-BOUND-TENANT-CONTEXT``: it made the runtime a trusted setter of context. What
+    replaces it is ``db/auth.py``'s ``authenticated_transaction(engine, credential)``,
+    which opens one of these and then presents a credential to PostgreSQL.
     """
     engine = _require_engine(engine, "transaction")
     session = _install_session_guards(Session(bind=engine, expire_on_commit=False))
     try:
         with session.begin():
-            reset_tenant_context(session)
+            # Before ``require_no_inherited_context``, and that order is load-bearing
+            # rather than tidy: the inherited-context assertion reads
+            # ``firmbatch.auth_transaction_context``, which is UNLOGGED, and PostgreSQL
+            # refuses to plan a query against an unlogged relation during recovery. On a
+            # standby that refusal arrived before the deliberate guard could speak, so the
+            # caller got a message about an unlogged relation instead of "this is a
+            # replica". The preflight names no relation at all.
+            require_writable_primary(session)
+            require_no_inherited_context(session)
             yield session
     finally:
         session.close()

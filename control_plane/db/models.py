@@ -1,9 +1,13 @@
-"""The tenant/workspace spine, plus the idempotency and outbox tables of M2.2.
+"""The tenant/workspace spine, the M2.2 idempotency and outbox tables, and M2.3's
+authentication registry and audit trail.
 
-Four tables, all tenant-scoped, all under forced row-level security. They exist to
-carry the isolation boundary that every later Milestone 2 table inherits, not to model
-the product: there are no accounts, memberships, credentials, jobs, quotes, or ledgers
-here, and adding one before its milestone would be later-milestone work.
+Six tables. Five are tenant-scoped and under forced row-level security; the sixth --
+``auth_bindings`` -- is **protected**, which is a different and stronger thing: no role
+but the schema owner holds any privilege on it at all, and the only way in is a hardened
+``SECURITY DEFINER`` function. They exist to carry the isolation and authorization
+boundary that every later Milestone 2 table inherits, not to model the product: there are
+no accounts, memberships, jobs, quotes, or ledgers here, and adding one before its
+milestone would be later-milestone work.
 
 Conventions established here and binding on every tenant-owned table that follows
 (target architecture 3.1 and invariant 2):
@@ -43,6 +47,23 @@ M2.2 adds two more, and one further convention with them:
   column makes storing bytes inconvenient rather than impossible. The data-flow proof
   that payload never enters the API process (target architecture invariant 3) is
   Milestone 5's presigned S3 path, and is not claimed here.
+
+M2.3 adds two more, and with them the convention that matters most:
+
+* **Tenant context is not a column value the caller supplies; it is what the database
+  says the caller authenticated as.** The isolation predicates no longer read a
+  caller-settable ``app.tenant_id`` setting. They read
+  ``firmbatch.auth_tenant_id()``, which returns the tenant recorded in a protected
+  transaction-local context that only a valid credential can write. Migration ``0003``
+  replaces every policy and drops the old helper.
+* **``auth_bindings`` is protected rather than policed.** A policy constrains a role that
+  holds privileges; this table grants none, to anybody, so there is nothing for a policy
+  to constrain. It is therefore absent from :data:`TENANT_SCOPED_TABLES` and present in
+  ``security.authorization.PROTECTED_TABLES`` -- two different mechanisms, named
+  differently on purpose.
+* **``audit_events`` derives its tenant and its actor from the authenticated context**,
+  by column default *and* by policy check, so a caller cannot write an event attributing
+  an action to somebody else. It is append-only in the same two ways the M2.2 tables are.
 """
 
 from __future__ import annotations
@@ -52,9 +73,11 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import CheckConstraint, ForeignKey, ForeignKeyConstraint, Index, Text, UniqueConstraint, text
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from ..security.authorization import KNOWN_SCOPES, MAX_SCOPES_PER_BINDING
+from ..security.authorization import PROTECTED_TABLES as _CATALOGUE_PROTECTED_TABLES
 from .base import SCHEMA, Base
 
 #: Lowercase DNS-safe slugs. Slugs appear in URLs and object-store keys, so the shape is
@@ -86,6 +109,28 @@ IDEMPOTENCY_STATUS_COMPLETED = "completed"
 #: Upper bound on a stored ``jsonb`` document, in bytes of its text rendering. Small on
 #: purpose: these columns carry identifiers and counts, never content.
 MAX_METADATA_BYTES = 4096
+
+#: A hex SHA-256 digest again, this time of a bearer credential. The same shape as a
+#: request fingerprint and a different meaning, so it has its own name: this one is the
+#: **only** thing PostgreSQL ever holds of a credential, and it is computed by the
+#: database (see migration ``0003``), never by the application.
+CREDENTIAL_FINGERPRINT_REGEX = FINGERPRINT_REGEX
+
+#: ``domain:action``. The closed catalogue of values lives in
+#: ``security/authorization.py``; this is the shape the column enforces underneath it, so
+#: that a malformed scope is refused even by a writer that reached the table another way.
+SCOPE_REGEX = r"^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$"
+
+#: What an audit event says happened to the action it records. A closed set: "attempted"
+#: and "denied" are as important as "succeeded", because an audit trail that only records
+#: successes cannot answer the question it exists for.
+AUDIT_OUTCOMES: tuple[str, ...] = ("attempted", "succeeded", "failed", "denied")
+
+#: What kind of identity acted. ``credential`` is a bearer credential resolved through
+#: ``firmbatch.bind_authenticated_context``; ``provisioning`` is the internal path that
+#: creates a tenant, which by construction has no credential yet -- see
+#: ``firmbatch.begin_tenant_provisioning()``.
+AUDIT_ACTOR_KINDS: tuple[str, ...] = ("credential", "provisioning")
 
 _UUID_PK = UUID(as_uuid=True)
 _TIMESTAMPTZ = TIMESTAMP(timezone=True)
@@ -283,19 +328,203 @@ class OutboxEvent(Base):
     )
 
 
+class AuthBinding(Base):
+    """One authentication binding: a credential fingerprint, and what it authorises.
+
+    **This table is protected, not policed.** No role but the schema owner holds any
+    privilege on it -- not the application role, not the provisioning role, not PUBLIC --
+    so there is no query any runtime connection can run against it, with or without a
+    tenant context. It carries no row-level security policy for that reason: a policy
+    bounds what a role with privileges may reach, and here no role has any.
+
+    The only ways in are the ``SECURITY DEFINER`` functions migration ``0003`` creates:
+    ``register_auth_binding`` (writes one, in the tenant of the current context),
+    ``revoke_auth_binding`` (marks one revoked, in the tenant of the current context) and
+    ``bind_authenticated_context`` (reads one by fingerprint, and returns nothing about
+    it except the context it establishes). None of them takes a tenant, a binding id, a
+    fingerprint or a scope from the caller as the thing that selects a row: the first two
+    derive the tenant from the context, and the third selects on a digest of the secret
+    the caller presented.
+
+    ``fingerprint`` is a hex SHA-256 digest computed **in PostgreSQL**. The credential
+    itself is never stored, never returned, and never logged by this package. The digest
+    is globally unique rather than tenant-unique: the fingerprint space is global, a
+    cross-tenant collision would be a SHA-256 collision, and nothing can observe the
+    constraint anyway because nothing can query the table.
+
+    ``scopes`` is bounded by a check constraint against the closed catalogue in
+    ``security/authorization.py``, so an unknown capability cannot be stored and then
+    become meaningful when somebody later adds a policy for it.
+    """
+
+    __tablename__ = "auth_bindings"
+
+    id: Mapped[uuid.UUID] = mapped_column(_UUID_PK, primary_key=True, server_default=text("gen_random_uuid()"))
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        _UUID_PK,
+        ForeignKey(f"{SCHEMA}.tenants.id", ondelete="CASCADE", name="fk_auth_bindings_tenant_id_tenants"),
+        nullable=False,
+    )
+    #: The identity acting through this credential. Milestone 3 gives principals their own
+    #: table (users, service identities, memberships); until then it is an opaque
+    #: identifier the credential carries, which is what audit needs to answer "who".
+    principal_id: Mapped[uuid.UUID] = mapped_column(_UUID_PK, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    scopes: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False, server_default=text("now()"))
+    #: ``NULL`` means "does not expire". An expired binding fails closed at bind time.
+    expires_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ, nullable=True)
+    #: Set by ``revoke_auth_binding``. Revocation is a state, not a deletion: a deleted
+    #: binding would take the audit trail's foreign key with it.
+    revoked_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("fingerprint", name="uq_auth_bindings_fingerprint"),
+        UniqueConstraint("id", "tenant_id", name="uq_auth_bindings_id_tenant_id"),
+        CheckConstraint(f"fingerprint ~ '{CREDENTIAL_FINGERPRINT_REGEX}'", name="fingerprint_format"),
+        # One dimension, no NULL elements, bounded, and every element in the catalogue.
+        CheckConstraint("array_ndims(scopes) = 1", name="scopes_one_dimension"),
+        CheckConstraint(f"cardinality(scopes) <= {MAX_SCOPES_PER_BINDING}", name="scopes_bounded"),
+        CheckConstraint("array_position(scopes, NULL) IS NULL", name="scopes_not_null"),
+        CheckConstraint(
+            "scopes <@ ARRAY[" + ", ".join(f"'{scope}'" for scope in KNOWN_SCOPES) + "]::text[]",
+            name="scopes_known",
+        ),
+        CheckConstraint(
+            "expires_at IS NULL OR expires_at > created_at", name="expiry_after_creation"
+        ),
+        Index("ix_auth_bindings_tenant_id", "tenant_id"),
+    )
+
+
+class AuditEvent(Base):
+    """One durable record of something a principal did, or tried to do, in one tenant.
+
+    Distinct from an outbox event, and the distinction is worth keeping sharp because the
+    two look similar and answer different questions. An **outbox event** is intent to tell
+    somebody that state changed; it is addressed outward, a dispatcher will one day read
+    it, and its content is chosen by the state machine that emitted it. An **audit event**
+    is a record of *who did what*; it is addressed inward, nothing dispatches it, and its
+    actor and tenant are not chosen by anyone -- they are taken from the authenticated
+    context by column default and re-checked by the insert policy.
+
+    Neither is derivable from the other. An action that changes no state still belongs in
+    the audit trail (a denied attempt, most obviously), and an internal state transition
+    with no actor still belongs in the outbox.
+
+    Append-only in the same two independent ways as the M2.2 tables: no ``UPDATE`` or
+    ``DELETE`` privilege for any runtime role, and no ``UPDATE`` or ``DELETE`` policy at
+    all, so those commands reach no row even for the owner under ``FORCE``.
+
+    There is deliberately **no hash chain and no external delivery**. The canonical
+    architecture asks for audit events, not for a tamper-evident log or an audit shipper,
+    and building either here would be machinery invented ahead of a requirement. What
+    makes these rows trustworthy at this milestone is that no role can change one and no
+    role can write one about another tenant or another actor.
+    """
+
+    __tablename__ = "audit_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(_UUID_PK, primary_key=True, server_default=text("gen_random_uuid()"))
+    #: Derived, not supplied. The server default reads the authenticated context, and the
+    #: insert policy refuses any value that disagrees with it -- so a caller that sets the
+    #: column explicitly is refused rather than silently corrected.
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        _UUID_PK,
+        ForeignKey(f"{SCHEMA}.tenants.id", ondelete="CASCADE", name="fk_audit_events_tenant_id_tenants"),
+        nullable=False,
+        server_default=text(f"{SCHEMA}.auth_tenant_id()"),
+    )
+    actor_kind: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text(f"{SCHEMA}.auth_actor_kind()")
+    )
+    actor_principal_id: Mapped[uuid.UUID | None] = mapped_column(
+        _UUID_PK, nullable=True, server_default=text(f"{SCHEMA}.auth_principal_id()")
+    )
+    actor_binding_id: Mapped[uuid.UUID | None] = mapped_column(
+        _UUID_PK, nullable=True, server_default=text(f"{SCHEMA}.auth_binding_id()")
+    )
+    #: What was done -- ``workspace.create``, ``auth.binding_registered``.
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Whether it was attempted, completed, failed, or refused.
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    resource_type: Mapped[str] = mapped_column(Text, nullable=False)
+    #: ``NULL`` where the action has no resource yet -- a refused creation, for instance.
+    resource_id: Mapped[uuid.UUID | None] = mapped_column(_UUID_PK, nullable=True)
+    #: The request or correlation this action belonged to. Caller-supplied, because
+    #: correlation is the caller's fact about its own request; it carries no authority and
+    #: nothing is decided from it.
+    correlation_id: Mapped[uuid.UUID | None] = mapped_column(_UUID_PK, nullable=True)
+    #: Bounded metadata, validated before the insert. Never a payload, never a credential.
+    details: Mapped[dict[str, Any]] = mapped_column(_JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    #: Server-generated, by a ``BEFORE INSERT`` trigger that overwrites whatever arrives
+    #: with ``clock_timestamp()``. Not ``now()``, which is transaction-*start* time: a
+    #: caller that opened its transaction an hour ago could otherwise date an event an hour
+    #: into the past without supplying anything at all. And a trigger rather than a
+    #: default, because a default only applies when the column is omitted.
+    occurred_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=text("clock_timestamp()")
+    )
+
+    __table_args__ = (
+        # The actor is a real binding in this tenant, or there is no binding at all
+        # (the provisioning path). Composite, because referential integrity is checked
+        # with row security bypassed and a single-column reference would reach across
+        # tenants. MATCH SIMPLE exempts the NULL case rather than dangling on it.
+        ForeignKeyConstraint(
+            ["actor_binding_id", "tenant_id"],
+            [f"{SCHEMA}.auth_bindings.id", f"{SCHEMA}.auth_bindings.tenant_id"],
+            name="fk_audit_events_actor_binding_id_tenant_id",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("id", "tenant_id", name="uq_audit_events_id_tenant_id"),
+        CheckConstraint(f"action ~ '{DOTTED_NAME_REGEX}'", name="action_format"),
+        CheckConstraint(f"resource_type ~ '{SIMPLE_NAME_REGEX}'", name="resource_type_format"),
+        CheckConstraint(
+            "outcome IN (" + ", ".join(f"'{value}'" for value in AUDIT_OUTCOMES) + ")",
+            name="outcome_known",
+        ),
+        CheckConstraint(
+            "actor_kind IN (" + ", ".join(f"'{value}'" for value in AUDIT_ACTOR_KINDS) + ")",
+            name="actor_kind_known",
+        ),
+        # A credential actor has both identifiers; a provisioning actor has neither. A
+        # half-filled actor would be a record nobody could interpret.
+        CheckConstraint(
+            "(actor_kind = 'credential' AND actor_principal_id IS NOT NULL AND actor_binding_id IS NOT NULL)"
+            " OR (actor_kind = 'provisioning' AND actor_principal_id IS NULL AND actor_binding_id IS NULL)",
+            name="actor_shape",
+        ),
+        *_metadata_constraints("details", "details"),
+        Index("ix_audit_events_tenant_id_occurred_at", "tenant_id", "occurred_at"),
+    )
+
+
 #: Tables that carry tenant data and must therefore be under forced row-level security,
-#: mapped to the column the isolation policy compares against the transaction-local
-#: tenant context. ``tenants`` is scoped by its own primary key -- a tenant row is
-#: visible to exactly the tenant it is.
+#: mapped to the column the isolation policy compares against the **authenticated** tenant
+#: context. ``tenants`` is scoped by its own primary key -- a tenant row is visible to
+#: exactly the tenant it is.
 #:
 #: The migration and the tests both read this mapping, so a tenant-owned table added
 #: without a policy fails the suite instead of quietly becoming readable across tenants.
+#:
+#: ``auth_bindings`` is deliberately **not** here. It is protected by having no grants
+#: rather than policed by having a policy; see :data:`PROTECTED_TABLES` and the class
+#: docstring.
 TENANT_SCOPED_TABLES: dict[str, str] = {
     Tenant.__tablename__: "id",
     Workspace.__tablename__: "tenant_id",
     IdempotencyRecord.__tablename__: "tenant_id",
     OutboxEvent.__tablename__: "tenant_id",
+    AuditEvent.__tablename__: "tenant_id",
 }
+
+#: Tenant-owned tables that no runtime role may reach at all. Re-exported from the
+#: permission catalogue so that ``db/`` has one import for it and the two cannot disagree.
+#:
+#: The distinction from :data:`TENANT_SCOPED_TABLES` is the whole point: a policed table
+#: is one a role may query under a predicate; a protected table is one no role may query.
+PROTECTED_TABLES: frozenset[str] = _CATALOGUE_PROTECTED_TABLES
 
 #: Tenant-scoped tables that are also **append-only**: they get a ``SELECT`` policy and
 #: an ``INSERT`` policy and no others, so ``UPDATE`` and ``DELETE`` match no row for any
@@ -313,5 +542,5 @@ TENANT_SCOPED_TABLES: dict[str, str] = {
 #: provisioning role holds ``DELETE`` on ``tenants`` -- and erasing a tenant's records
 #: along with the tenant is the behaviour you want anyway.
 APPEND_ONLY_TABLES: frozenset[str] = frozenset(
-    {IdempotencyRecord.__tablename__, OutboxEvent.__tablename__}
+    {IdempotencyRecord.__tablename__, OutboxEvent.__tablename__, AuditEvent.__tablename__}
 )

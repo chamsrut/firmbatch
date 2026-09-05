@@ -33,7 +33,7 @@ import uuid
 import pytest
 from sqlalchemy import func, select, text
 
-from firmbatch.control_plane.db import engine as db_engine
+from firmbatch.control_plane.db import auth
 from firmbatch.control_plane.db.idempotency import (
     IdempotencyConflict,
     MutationOutcome,
@@ -54,8 +54,8 @@ def _key() -> str:
     return f"race-{uuid.uuid4().hex}"
 
 
-def _counts(engine, tenant_id) -> dict[str, int]:
-    with db_engine.tenant_transaction(engine, tenant_id) as session:
+def _counts(engine, principal) -> dict[str, int]:
+    with auth.authenticated_transaction(engine, principal.credential) as session:
         return {
             "workspaces": session.scalar(select(func.count()).select_from(Workspace)),
             "records": session.scalar(select(func.count()).select_from(IdempotencyRecord)),
@@ -79,7 +79,7 @@ def _mutation(slug: str):
     return mutate
 
 
-def _caller(engine, tenant_id, *, key, request_identity, mutate, into, label, before=None, after=None):
+def _caller(engine, principal, *, key, request_identity, mutate, into, label, before=None, after=None):
     """One idempotent mutation on its own thread, with hooks either side of the primitive.
 
     ``after`` runs **inside** the transaction, after the claim has been written and before
@@ -91,7 +91,7 @@ def _caller(engine, tenant_id, *, key, request_identity, mutate, into, label, be
         try:
             if before is not None:
                 before()
-            with db_engine.tenant_transaction(engine, tenant_id) as session:
+            with auth.authenticated_transaction(engine, principal.credential) as session:
                 outcome = execute_idempotent_mutation(
                     session,
                     operation=OPERATION,
@@ -175,13 +175,13 @@ def _hold_after_claim(state: dict):
     return after
 
 
-def test_two_concurrent_callers_produce_one_effect_and_one_event(application_engine, tenant_a):
+def test_two_concurrent_callers_produce_one_effect_and_one_event(application_engine, principal_a):
     key, request_identity = _key(), {"workspace_slug": "raced-workspace"}
     results = _choreography()
 
     winner = _caller(
         application_engine,
-        tenant_a,
+        principal_a,
         key=key,
         request_identity=request_identity,
         mutate=_mutation("raced-workspace"),
@@ -191,7 +191,7 @@ def test_two_concurrent_callers_produce_one_effect_and_one_event(application_eng
     )
     loser = _caller(
         application_engine,
-        tenant_a,
+        principal_a,
         key=key,
         request_identity=request_identity,
         mutate=_mutation("raced-workspace"),
@@ -213,10 +213,10 @@ def test_two_concurrent_callers_produce_one_effect_and_one_event(application_eng
     assert second.event_id == first.event_id
     assert second.result == first.result
 
-    assert _counts(application_engine, tenant_a) == {"workspaces": 1, "records": 1, "events": 1}
+    assert _counts(application_engine, principal_a) == {"workspaces": 1, "records": 1, "events": 1}
 
 
-def test_a_concurrent_conflicting_reuse_is_rejected(application_engine, tenant_a):
+def test_a_concurrent_conflicting_reuse_is_rejected(application_engine, principal_a):
     """Losing the race does not turn a conflicting reuse into a replay.
 
     Here the two callers write *different* workspaces, so the loser reaches the claim
@@ -229,7 +229,7 @@ def test_a_concurrent_conflicting_reuse_is_rejected(application_engine, tenant_a
 
     winner = _caller(
         application_engine,
-        tenant_a,
+        principal_a,
         key=key,
         request_identity={"workspace_slug": "settled-workspace"},
         mutate=_mutation("settled-workspace"),
@@ -239,7 +239,7 @@ def test_a_concurrent_conflicting_reuse_is_rejected(application_engine, tenant_a
     )
     loser = _caller(
         application_engine,
-        tenant_a,
+        principal_a,
         key=key,
         request_identity={"workspace_slug": "other-workspace"},
         mutate=_mutation("other-workspace"),
@@ -254,12 +254,12 @@ def test_a_concurrent_conflicting_reuse_is_rejected(application_engine, tenant_a
     assert isinstance(results["loser"], IdempotencyConflict), results["loser"]
 
     # The refused caller's workspace went back with its transaction.
-    assert _counts(application_engine, tenant_a) == {"workspaces": 1, "records": 1, "events": 1}
-    with db_engine.tenant_transaction(application_engine, tenant_a) as session:
+    assert _counts(application_engine, principal_a) == {"workspaces": 1, "records": 1, "events": 1}
+    with auth.authenticated_transaction(application_engine, principal_a.credential) as session:
         assert [w.slug for w in WorkspaceRepository(session).list()] == ["settled-workspace"]
 
 
-def test_a_field_of_callers_still_produces_one_effect(application_engine, tenant_a):
+def test_a_field_of_callers_still_produces_one_effect(application_engine, principal_a):
     """The same property with no choreography at all, under whatever order happens.
 
     Four threads released together. Whichever interleaving occurs -- contended, or so
@@ -273,7 +273,7 @@ def test_a_field_of_callers_still_produces_one_effect(application_engine, tenant
     threads = [
         _caller(
             application_engine,
-            tenant_a,
+            principal_a,
             key=key,
             request_identity=request_identity,
             mutate=_mutation("crowded-workspace"),
@@ -293,10 +293,10 @@ def test_a_field_of_callers_still_produces_one_effect(application_engine, tenant
     assert sum(1 for o in outcomes if not o.replayed) == 1, "exactly one mutation may commit"
     assert len({o.record_id for o in outcomes}) == 1
     assert len({o.event_id for o in outcomes}) == 1
-    assert _counts(application_engine, tenant_a) == {"workspaces": 1, "records": 1, "events": 1}
+    assert _counts(application_engine, principal_a) == {"workspaces": 1, "records": 1, "events": 1}
 
 
-def test_concurrent_callers_in_different_tenants_do_not_collide(application_engine, tenant_a, tenant_b):
+def test_concurrent_callers_in_different_tenants_do_not_collide(application_engine, principal_a, principal_b):
     """The same key in two tenants is two claims, even simultaneously.
 
     A globally scoped key would make one of these callers replay the other tenant's
@@ -317,7 +317,7 @@ def test_concurrent_callers_in_different_tenants_do_not_collide(application_engi
             label=label,
             before=lambda: start.wait(timeout=BLOCK_TIMEOUT_SECONDS),
         )
-        for tenant, label in ((tenant_a, "alpha"), (tenant_b, "beta"))
+        for tenant, label in ((principal_a, "alpha"), (principal_b, "beta"))
     ]
     for thread in threads:
         thread.start()
@@ -328,12 +328,12 @@ def test_concurrent_callers_in_different_tenants_do_not_collide(application_engi
     assert alpha.replayed is False and beta.replayed is False
     assert alpha.record_id != beta.record_id
     assert alpha.result["workspace_id"] != beta.result["workspace_id"]
-    assert _counts(application_engine, tenant_a) == {"workspaces": 1, "records": 1, "events": 1}
-    assert _counts(application_engine, tenant_b) == {"workspaces": 1, "records": 1, "events": 1}
+    assert _counts(application_engine, principal_a) == {"workspaces": 1, "records": 1, "events": 1}
+    assert _counts(application_engine, principal_b) == {"workspaces": 1, "records": 1, "events": 1}
 
 
 @pytest.mark.parametrize("repeat", range(3))
-def test_the_race_result_is_stable_across_repeats(application_engine, tenant_a, repeat):
+def test_the_race_result_is_stable_across_repeats(application_engine, principal_a, repeat):
     """A concurrency property that only holds sometimes is not a property.
 
     Cheap enough to run more than once, and a lost effect or a second event would show up
@@ -346,7 +346,7 @@ def test_the_race_result_is_stable_across_repeats(application_engine, tenant_a, 
     threads = [
         _caller(
             application_engine,
-            tenant_a,
+            principal_a,
             key=key,
             request_identity=request_identity,
             mutate=_mutation(f"repeated-workspace-{repeat}"),
@@ -362,4 +362,4 @@ def test_the_race_result_is_stable_across_repeats(application_engine, tenant_a, 
 
     outcomes = [_unwrap(results[f"caller-{i}"]) for i in range(2)]
     assert sum(1 for o in outcomes if not o.replayed) == 1
-    assert _counts(application_engine, tenant_a) == {"workspaces": 1, "records": 1, "events": 1}
+    assert _counts(application_engine, principal_a) == {"workspaces": 1, "records": 1, "events": 1}
