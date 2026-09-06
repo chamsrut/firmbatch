@@ -15,19 +15,27 @@ Five labels, kept strictly apart:
   Documentation, comments, and passing-in-the-moment are not evidence.
 
 Last updated: 2026-09-06, at `main` merge commit `dca2d49` (Milestone 2.3, PR #6), plus
-Milestone 2.4 on `feat/milestone-2-4-lifecycle-state-machines`, **implemented and tested in
-the working tree, awaiting review**, after two independent reviews whose six and five
-findings are all corrected (see the two M2.4 correction-pass sections below). Milestone 1 merged at `6b4f341`; M2.1 merged at
+Milestone 2.4 on `feat/milestone-2-4-lifecycle-state-machines`, **reviewed and awaiting
+merge** at implementation commit `d91e4f2`, after three independent reviews whose six, five
+and two findings are all corrected (see the three M2.4 correction-pass sections below). Milestone 1 merged at `6b4f341`; M2.1 merged at
 `712b51a` (implementation commit `521870b`, with the bootstrap trust-boundary correction
 `78eae1d` — see the CI correction section below); M2.2 merged at `b028f21` (implementation
 commit `d362717`); M2.3 merged at `dca2d49` (implementation commit `89fbdd9`), after four
 independent security reviews whose twenty-three findings are all corrected (see the four
 correction-pass sections below).
 
-**M2.4 has no commit hash.** It is uncommitted work in the tree on
-`feat/milestone-2-4-lifecycle-state-machines`; nothing has been staged, committed, pushed or
-merged, and the human does all four. Wherever this document says "at M2.3", it means the
-state of commit `89fbdd9`.
+**M2.4 is committed, and neither pushed nor merged.** Its implementation commit is `d91e4f2`
+on `feat/milestone-2-4-lifecycle-state-machines`; the human pushes, opens the pull request
+and merges. Wherever this document says "at M2.3", it means the state of commit `89fbdd9`.
+
+**Milestone 2 status.** Its four slices — **M2.1, M2.2, M2.3 and M2.4 — are implemented and
+tested**. Milestone 2 is **not deployed and not VERIFIED LIVE**: **no evidence artifact has
+been captured** for any of the four. The last verification pass was **14 gates passed, 0
+failed**, with **97** required files in the layout gate and the PostgreSQL foundation suite
+at **1,746 collected — 1,745 passed, 1 skipped**. Every actionable M2.4 review finding is
+corrected; migration `0003` remains unchanged, with no diff against `main`; and the operator
+capacity agent remains separate operator-side software, owned by Milestone 6. **Milestone 3 —
+customer accounts and the customer-only portal foundation — is next.**
 
 ---
 
@@ -806,10 +814,10 @@ captures it, nothing is deployed, and the test count is not deployment proof.
 ## CURRENT — Milestone 2.4 persisted, race-safe lifecycle state machines
 
 The fourth and last declared slice of Milestone 2, on
-`feat/milestone-2-4-lifecycle-state-machines`. **Implemented and tested in the working tree,
-awaiting review, after three independent review passes. There is no commit hash: the earlier
-work is staged and the third correction pass is unstaged; nothing has been committed or
-pushed.** Not deployed, and **not VERIFIED LIVE** — no evidence artifact has been captured
+`feat/milestone-2-4-lifecycle-state-machines` at implementation commit `d91e4f2`.
+**Implemented and tested, reviewed, and awaiting merge, after three independent review
+passes whose six, five and two findings are all corrected.** Nothing has been pushed or
+merged. Not deployed, and **not VERIFIED LIVE** — no evidence artifact has been captured
 for this slice.
 
 Everything M2.1, M2.2 and M2.3 established is preserved and re-run unchanged: forced
@@ -1178,7 +1186,7 @@ Established by the repository-initialization pass and its R0 remediation (see
 | Item | State |
 | --- | --- |
 | `AGENTS.md` | Canonical instructions. `CLAUDE.md` imports it and adds Claude-only surfaces. Carries the guardrail's scope limits and the approval-required file list. |
-| `scripts/verify-repository.sh` | The one verification entry point. **Fourteen** gates since M2.1, unchanged by M2.2, M2.3 and M2.4 — the thirteenth checks that production code imports nothing outside the runtime lock, and the fourteenth runs the PostgreSQL foundation suite. Invoked identically by the human, the `verify` skill, and CI. No longer side-effect free: the last gate creates and drops one disposable database and **four** per-run roles (owner, application, provisioning, and the `NOLOGIN` lifecycle writer), and leaves the persistent `firmbatch_disposable_test_cluster` attestation marker in place. M2.4's third correction pass changed it in two approved, narrow ways: its header comment describes the four-role lifecycle, and **two more entries in `REQUIRED_FILES`** register the pass's two test modules. No gate was added, removed, reordered or weakened. M2.4 changed it in one way only: **nine more entries in `REQUIRED_FILES`**, so deleting one of its files fails the layout gate. No gate was added, removed, reordered or weakened. |
+| `scripts/verify-repository.sh` | The one verification entry point. **Fourteen** gates since M2.1, unchanged by M2.2, M2.3 and M2.4 — the thirteenth checks that production code imports nothing outside the runtime lock, and the fourteenth runs the PostgreSQL foundation suite. Invoked identically by the human, the `verify` skill, and CI. No longer side-effect free: the last gate creates and drops one disposable database and **four** per-run roles (owner, application, provisioning, and the `NOLOGIN` lifecycle writer), and leaves the persistent `firmbatch_disposable_test_cluster` attestation marker in place. M2.4 changed it in two approved, narrow ways: **eleven more entries in `REQUIRED_FILES`** — nine with the milestone and two more with its third correction pass, taking the manifest to **97** files, so deleting any one of them fails the layout gate — and a header comment that describes the four-role test lifecycle. No gate was added, removed, reordered or weakened. |
 | `.agents/skills/` | `verify`, `record-evidence`, `milestone`. Symlinked into `.claude/skills/`; single body each. |
 | `.agents/policy/guard.py` | Shared deterministic policy engine, `--adapter claude` and `--adapter codex`. An accident-prevention guardrail, **not** a sandbox or security boundary. |
 | `.agents/policy/test_guard.py` | 247 synthetic checks. |
@@ -1233,11 +1241,11 @@ capture new artifacts with provenance matching the committed tree.
 
 | Claim | How to settle it |
 | --- | --- |
-| All **fourteen** gates in `scripts/verify-repository.sh` pass — **14 passed, 0 failed**: layout (**97** required files since Milestone 2.4 registered eleven more), agent configuration, hygiene, v0 property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 247/247, the runtime import closure check, and the PostgreSQL foundation suite **1,745 passed, 1 skipped** locally — the one skip is the pre-existing REPLICATION skip (granting REPLICATION needs a superuser admin, which CI has and the developer cluster does not. On CI that test runs and two others skip instead -- the owner-only-refusal assertions, which have no meaning for a superuser bootstrap administrator). Observed locally on 2026-09-06, after all three correction passes, against PostgreSQL 16.15 on the developer's WSL machine, in the uncommitted Milestone 2.4 working tree. **None of M2.2, M2.3 or M2.4 added a gate**; the foundation-suite gate already runs the whole `control_plane/tests` directory, so the new modules run inside it. | `/record-evidence` → `docs/evidence/r0/gates.txt` (and a Milestone 2 artifact for the foundation suite). Not yet captured. |
+| All **fourteen** gates in `scripts/verify-repository.sh` pass — **14 passed, 0 failed**: layout (**97** required files since Milestone 2.4 registered eleven more), agent configuration, hygiene, v0 property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 247/247, the runtime import closure check, and the PostgreSQL foundation suite **1,746 collected — 1,745 passed, 1 skipped** locally — the one skip is the pre-existing REPLICATION skip (granting REPLICATION needs a superuser admin, which CI has and the developer cluster does not. On CI that test runs and two others skip instead -- the owner-only-refusal assertions, which have no meaning for a superuser bootstrap administrator). Observed locally on 2026-09-06, after all three correction passes, against PostgreSQL 16.15 on the developer's WSL machine, at Milestone 2.4 implementation commit `d91e4f2`. **None of M2.2, M2.3 or M2.4 added a gate**; the foundation-suite gate already runs the whole `control_plane/tests` directory, so the new modules run inside it. | `/record-evidence` → `docs/evidence/r0/gates.txt` (and a Milestone 2 artifact for the foundation suite). Not yet captured. |
 | The M2.1 tenant-isolation properties hold in PostgreSQL: absent context reads nothing and writes nothing; tenant A cannot read, insert, update or delete tenant B's rows; a fabricated cross-tenant or dangling foreign key is rejected; tenant context is not inherited from a session value, a pooled connection, or a URL option; a reused ORM `Session` cannot serve a previous tenant's object; a temporary relation cannot shadow a Firmbatch table; the application role is non-owner, `NOSUPERUSER`, `NOBYPASSRLS`, is refused at connect time if it were any of those, cannot disable a policy, cannot create tables or temporary tables, cannot read the schema history, and cannot create a tenant even with matching context; workspace uniqueness is tenant-local. | `/record-evidence` → `docs/evidence/m2/tenant-isolation-suite.txt`, after the Milestone 2.1 commit. Until then this is a re-runnable claim with no captured artifact. |
 | The M2.2 idempotency and outbox properties hold in PostgreSQL: an identical retry returns the stored result and invokes the mutation once; four identical calls leave one workspace, one claim and one linked event; a conflicting reuse is rejected; two callers observed contending on a real lock commit one effect and one event, and the loser replays; a failure before commit leaves nothing and does not block the retry; a mutation callback cannot commit or roll back the primitive's transaction and an escape by any other route is detected; unflushed ORM state at entry is rejected; malformed operations and keys are refused before the mutation runs; the same key is independent between tenants; cross-tenant reads and writes on both new tables fail closed; missing context fails closed; a committed event is immutable to the application role and matches zero rows even for the owner; an internal state change appends an event with no idempotency record and a rollback removes both; and no value of the request identity reaches a row. **At M2.2 this was 511 passing checks with 1 skipped, of which 130 were new; the same properties are asserted at M2.3 inside a suite of 806.** | `/record-evidence` → `docs/evidence/m2/idempotency-outbox-suite.txt`, at or after Milestone 2.2 implementation commit `d362717`. Until then this is a re-runnable claim with no captured artifact, and M2.2 is **not** VERIFIED LIVE. |
 | The M2.3 authenticated-context, authorization, audit and secrets properties hold in PostgreSQL: a forged `app.tenant_id` or any fabricated setting grants nothing; a fabricated tenant, binding id, fingerprint, actor or scope grants nothing; the function that writes a context is executable by nobody; a relation forged where the context lives is ignored because it is not owned by the schema owner; unknown, malformed, revoked and expired credentials fail closed with one indistinguishable message; binding twice or switching identity is refused; context survives no commit, rollback, failed statement, pool reuse or `Session` reuse, and a Connection-bound `Session` is refused; a valid credential reaches its own tenant and no other; the credential is never stored; authorization is deny-by-default with read/write scope distinctions, minimal framework capabilities and no non-customer scope; every `SECURITY DEFINER` function is owned, path-pinned, `PUBLIC`-revoked, minimally granted and free of dynamic SQL; the registry has no grants and no policy; audit events derive tenant and actor, refuse a supplied alternative, cannot be backdated, are immutable, roll back with their action and reject secret-shaped metadata; secrets never render themselves and production fails closed; and the migration reverses to the M2.2 shape and back. **1,314 pytest checks pass, 1 skipped**, a net increase of 803 collected checks over M2.2's 512 -- five new modules, plus every existing module moved onto the authenticated mechanism, plus a handful of M2.1 tests replaced by the stronger property that superseded them. | `/record-evidence` → `docs/evidence/m2/authenticated-context-suite.txt`, at or after Milestone 2.3 implementation commit `89fbdd9`. No evidence artifact has been captured, so this remains a re-runnable claim and M2.3 is **implemented and tested**, **not** VERIFIED LIVE. |
-| The M2.4 lifecycle properties hold in PostgreSQL: a malformed definition is refused in Python and again by the schema; a registered version is immutable for the owner too; migration `0004` seeds no machine; an instance starts at revision zero in its machine's initial state and cannot be created elsewhere; its tenant, machine and version are immutable and its revision advances by exactly one; cross-tenant reads, writes and moves fail closed and produce the same refusal an invented id does; the required capability is read from the protected definition and a caller cannot name, lower or manufacture one; every declared edge can be taken and an undeclared one, a terminal source, a stale state and a stale revision each change nothing; one transition writes exactly one revision, history row, audit event and outbox intent, and a rollback removes all four; two callers racing from one revision with different idempotency keys produce one move, with the contention observed on `pg_stat_activity`; an identical retry replays and moves nothing; no runtime role may write either lifecycle table directly, register a machine, add an edge or call an internal reader; a grant or column grant on a definition table refuses the connection at connect time; and `0004` upgrades, downgrades and re-upgrades with exact role wiring at each revision. And, after the six-finding correction pass: a definition is invisible and unusable until it is published, cannot be published unless every one of its rows was written by the publishing transaction, and cannot be revised, unpublished or extended afterwards; a raw-SQL caller cannot commit a lifecycle move without its history row, audit event and outbox intent, and neither can a caller that catches the database's refusal; `mutation:execute` alone reads no lifecycle claim or event; two identical concurrent requests produce one move and two replays while a stale, cross-tenant or wrong-identity conflict still conflicts; a stale revision gets the common conflict rather than a graph diagnosis; and no unit-of-work method can be redirected to another `Session` operation. And, after the five-finding second pass: a replay is refused unless the protected provenance linking the claim, the transition, the instance, the revisions and the event checks out, so a fabricated generic claim carrying a plausible lifecycle result replays nothing; the operation name and the request fingerprint are derived inside PostgreSQL, so raw SQL cannot bind a claim to a request it did not make; `audit:read` alone reads no lifecycle audit row, its resource identifiers or its details; a hand-written `UPDATE` publishing a machine runs exactly the validation the supported function runs, a pre-published `INSERT` is refused, and publication and every child mutation serialise on one machine-row lock with the contention observed on `pg_stat_activity` and no deadlock; and a chosen primary key and a reserved-namespace claim are both refused before any index could answer whether a hidden row exists. **1,720 pytest checks pass and 1 is skipped**, a net increase of 406 collected checks over M2.3's 1,315 — six new modules plus new migration, rollback, catalogue, append-only, column-privilege and unit-of-work assertions in the existing ones. | `/record-evidence` → `docs/evidence/m2/lifecycle-state-machine-suite.txt`, **at or after a Milestone 2.4 implementation commit, which does not exist yet**. No evidence artifact has been captured, so this remains a re-runnable claim and M2.4 is **implemented and tested**, **not** VERIFIED LIVE. |
+| The M2.4 lifecycle properties hold in PostgreSQL: a malformed definition is refused in Python and again by the schema; a registered version is immutable for the owner too; migration `0004` seeds no machine; an instance starts at revision zero in its machine's initial state and cannot be created elsewhere; its tenant, machine and version are immutable and its revision advances by exactly one; cross-tenant reads, writes and moves fail closed and produce the same refusal an invented id does; the required capability is read from the protected definition and a caller cannot name, lower or manufacture one; every declared edge can be taken and an undeclared one, a terminal source, a stale state and a stale revision each change nothing; one transition writes exactly one revision, history row, audit event and outbox intent, and a rollback removes all four; two callers racing from one revision with different idempotency keys produce one move, with the contention observed on `pg_stat_activity`; an identical retry replays and moves nothing; no runtime role may write either lifecycle table directly, register a machine, add an edge or call an internal reader; a grant or column grant on a definition table refuses the connection at connect time; and `0004` upgrades, downgrades and re-upgrades with exact role wiring at each revision. And, after the six-finding correction pass: a definition is invisible and unusable until it is published, cannot be published unless every one of its rows was written by the publishing transaction, and cannot be revised, unpublished or extended afterwards; a raw-SQL caller cannot commit a lifecycle move without its history row, audit event and outbox intent, and neither can a caller that catches the database's refusal; `mutation:execute` alone reads no lifecycle claim or event; two identical concurrent requests produce one move and two replays while a stale, cross-tenant or wrong-identity conflict still conflicts; a stale revision gets the common conflict rather than a graph diagnosis; and no unit-of-work method can be redirected to another `Session` operation. And, after the five-finding second pass: a replay is refused unless the protected provenance linking the claim, the transition, the instance, the revisions and the event checks out, so a fabricated generic claim carrying a plausible lifecycle result replays nothing; the operation name and the request fingerprint are derived inside PostgreSQL, so raw SQL cannot bind a claim to a request it did not make; `audit:read` alone reads no lifecycle audit row, its resource identifiers or its details; a hand-written `UPDATE` publishing a machine runs exactly the validation the supported function runs, a pre-published `INSERT` is refused, and publication and every child mutation serialise on one machine-row lock with the contention observed on `pg_stat_activity` and no deadlock; and a chosen primary key and a reserved-namespace claim are both refused before any index could answer whether a hidden row exists. And, after the two-finding third pass: a generic outbox link naming a hidden lifecycle claim and one naming an absent identifier are refused identically, before the foreign key, the one-event-per-claim index and the `ON CONFLICT` arbiter, in the plain and the `ON CONFLICT` forms; and every lifecycle-derived write — the three machine tags, the provenance row and the lifecycle outbox link — is refused to every identity but the dedicated `NOLOGIN` lifecycle writer, the schema owner's own DML and its own definer functions included, while migration `0003` stays untouched history and a database taken from head down to `0003` is catalogue-for-catalogue identical to one migrated freshly to it. **1,746 pytest checks are collected — 1,745 pass and 1 is skipped**, a net increase of 431 collected checks over M2.3's 1,315 — eight new modules plus new migration, rollback, catalogue, append-only, column-privilege, ownership, role-count and unit-of-work assertions in the existing ones. | `/record-evidence` → `docs/evidence/m2/lifecycle-state-machine-suite.txt`, **at or after Milestone 2.4 implementation commit `d91e4f2`**. No evidence artifact has been captured, so this remains a re-runnable claim and M2.4 is **implemented and tested**, **not** VERIFIED LIVE. |
 | The destructive-safety properties hold: a forged, altered, cross-server, or foreign-cluster teardown handle is refused and the database survives; an unattested server refuses both creation and teardown; a failure after creation removes the database and both roles; a generated password never reaches exception text, stdout, or stderr. Covered by `control_plane/tests/test_bootstrap_safety.py`. | Same artifact as the row above. |
 | The shared policy engine denies the R0 accident classes across both adapter protocols — multi-line blocks classified line by line, `git -C`/`git -c`, `gh` and `aws` global options, `env`/`timeout` prefixes, `cd`/`cd -`/`pushd`/`popd`/`||` sequences, subshell grouping, argparse-abbreviated provider selection, evidence-tree ancestors including glob and `mv` forms, source and destination operands, in-place archivers, `git restore`/`checkout` over a path, credential reads on every surface including the `.env.*` family, wrapper- and prefix-depth exhaustion, unparseable input, unknown tool names carrying a payload, and engine exceptions. 247 synthetic checks pass. | `/record-evidence` → `docs/evidence/r0/policy-tests.txt`, after the R0 commit. |
 
@@ -1301,20 +1309,20 @@ The canonical roadmap is `docs/firmbatch-v1-roadmap.md`; the pilot roadmap is su
 
 Milestone 0 and Milestone 1 are complete (Milestone 1 merged at `6b4f341`). Milestone 2 is
 active. Its first slice, M2.1, is merged at `712b51a`; its second, M2.2, at `b028f21`; its
-third, M2.3, at `dca2d49`; its fourth and last, M2.4, is **implemented and tested in the
-working tree above, awaiting review**, with no commit hash.
+third, M2.3, at `dca2d49`; its fourth and last, M2.4, is **implemented, tested, reviewed and
+awaiting merge** at implementation commit `d91e4f2`.
 
-**Milestone 2's declared implementation scope is now complete, subject to review and
-merge.** Every item the canonical roadmap lists under Milestone 2 — PostgreSQL migrations,
+**Milestone 2's declared implementation scope is now complete, subject to merge.** Every
+item the canonical roadmap lists under Milestone 2 — PostgreSQL migrations,
 tenant and workspace records, the transactional outbox, audit events, tenant-scoped
 authorization, the secrets and encryption model, the test and production configuration
 boundaries, the idempotent API mutation framework, and explicit lifecycle state machines — is
 built. The completion gate was met by M2.1 and M2.2 and re-established by M2.3; what remained
 was scope rather than gate, and M2.4 closes it.
 
-That is a statement about the working tree, not about a merge or a deployment. **Nothing in
-Milestone 2 is VERIFIED LIVE**: no evidence artifact has been captured for any of its four
-slices.
+That is a statement about the branch, not about a merge or a deployment. Milestone 2 is
+**not deployed**, and **nothing in Milestone 2 is VERIFIED LIVE**: no evidence artifact has
+been captured for any of its four slices.
 
 ### PLANNED — `AUTH-MEMBERSHIP-BOUND-IDENTITY` (Milestone 3), and it blocks launch
 
@@ -1347,8 +1355,18 @@ milestone's declared scope is wider than its gate, and the last item of it — e
 lifecycle state machines — is what M2.4 built. Milestone 2 is complete when its scope is, not
 when the gate sentence is quotable.
 
-**Next is Milestone 3: customer accounts, workspaces, permissions, credentials, and the
-portal shell.** Then, following the canonical sequence:
+**Next is Milestone 3: customer accounts and the customer-only portal foundation** —
+identity, workspaces, memberships, permissions, API credentials, and the authenticated
+customer application shell.
+
+**The portal Milestone 3 builds is the customer application and nothing else.** The
+**operator capacity agent remains separate operator-side software**: a static Rust or Go
+binary installed in an operator's own cluster (target architecture §2 and §4), whose
+language decision and implementation belong to Milestone 6. It is not part of the customer
+portal, and §17 invariant 11 — customer, internal-operator and supplier permissions and
+interfaces remain separate — is why the two are not built as one surface.
+
+Then, following the canonical sequence:
 
 - Milestone 4: quotes, commercial records, payment projection, and billing interface.
 - Milestone 5: native JobSpec and tenant-scoped S3 payload path — and the **actual job
@@ -1356,7 +1374,8 @@ portal shell.** Then, following the canonical sequence:
   describes. M2.4 registered none.
 - Milestone 6: fenced attempts, validator/canonicalizer, providers, routing, spend, and
   ledgers — and **window offers, attempts, leases and execution state**, whose machine
-  definitions are registered there for the same reason.
+  definitions are registered there for the same reason. The **operator capacity agent** is
+  Milestone 6's too, behind its own Rust-versus-Go ADR, and it stays operator-side software.
 - Milestone 8: deployment, and read-replica routing, which is what would lift the
   writable-primary-only limitation M2.3 named and M2.4 inherits.
 

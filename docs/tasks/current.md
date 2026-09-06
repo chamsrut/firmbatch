@@ -3,28 +3,38 @@
 Active work and open questions. Updated at the end of each task, alongside `docs/STATE.md`.
 
 Last updated: 2026-09-06, `main` merge commit `dca2d49` (Milestone 2.3, PR #6), plus
-Milestone 2.4 on `feat/milestone-2-4-lifecycle-state-machines`, **implemented and tested in
-the working tree, awaiting review**, after two review correction passes closing six and five
-findings. Milestone 1 merged at `6b4f341`; M2.1 merged at
+Milestone 2.4 on `feat/milestone-2-4-lifecycle-state-machines`, **reviewed and awaiting
+merge** at implementation commit `d91e4f2`, after three review correction passes closing six,
+five and two findings. Milestone 1 merged at `6b4f341`; M2.1 merged at
 `712b51a` (implementation commit `521870b`, plus the bootstrap trust-boundary correction
 `78eae1d`); M2.2 merged at `b028f21` (implementation commit `d362717`); M2.3 merged at
 `dca2d49` (implementation commit `89fbdd9`), after a fourth security correction pass.
 
-**M2.4 has no commit hash.** Nothing has been staged, committed, pushed or merged; the human
-does all four.
+**M2.4 is committed, and neither pushed nor merged.** Its implementation commit is `d91e4f2`;
+the human pushes, opens the pull request and merges.
+
+**Milestone 2 status.** Its four slices — **M2.1, M2.2, M2.3 and M2.4 — are implemented and
+tested**. Milestone 2 is **not deployed and not VERIFIED LIVE**, and **no evidence artifact
+has been captured** for any of the four. Verification stands at **14 gates passed, 0 failed**,
+with **97** required files in the layout gate and the PostgreSQL foundation suite at **1,746
+collected — 1,745 passed, 1 skipped**. Every actionable M2.4 review finding is corrected;
+migration `0003` remains unchanged; and the operator capacity agent remains separate
+operator-side software. **Milestone 3 — customer accounts and the customer-only portal
+foundation — is next.**
 
 ---
 
 ## Active — Milestone 2, shared product foundation
 
 Milestones 0 and 1 are complete; Milestone 1 merged at `6b4f341`. Milestone 2 is the active
-milestone. It has four slices; the first three are merged, and the fourth is **implemented
-and tested in the working tree, uncommitted, awaiting review**.
+milestone. It has four slices; the first three are merged, and the fourth is **committed at
+`d91e4f2`, reviewed, and awaiting merge**.
 
-**Milestone 2's declared implementation scope is now complete, subject to review and
-merge** -- every item the canonical roadmap lists under it is built. That is a statement
-about the working tree and not about a merge or a deployment: nothing in Milestone 2 is
-VERIFIED LIVE, because no evidence artifact has been captured for any of its four slices.
+**Milestone 2's declared implementation scope is now complete, subject to merge** -- every
+item the canonical roadmap lists under it is built, and all four slices are implemented and
+tested. That is a statement about the branch and not about a merge or a deployment:
+Milestone 2 is not deployed and nothing in it is VERIFIED LIVE, because no evidence artifact
+has been captured for any of its four slices.
 
 ### M2.1 — PostgreSQL and tenant-isolation spine — **merged at `712b51a` (PR #4)**
 
@@ -578,10 +588,10 @@ building a partial one here would be the half-built capability ADR 0004 §8g arg
 **Customer-facing deployment remains blocked** until Milestone 3 supplies identity,
 membership and credential lifecycle together.
 
-### M2.4 — explicit lifecycle state machines — **implemented and tested, uncommitted, awaiting review**
+### M2.4 — explicit lifecycle state machines — **reviewed and awaiting merge, at `d91e4f2`**
 
-On `feat/milestone-2-4-lifecycle-state-machines`, **with no commit hash**: the earlier work
-is staged, the third correction pass is unstaged, and nothing has been committed, pushed or
+On `feat/milestone-2-4-lifecycle-state-machines`, **implementation commit `d91e4f2`**: the
+milestone and all three correction passes are committed, and nothing has been pushed or
 merged. `docs/STATE.md` has what it does and the property-to-test map;
 `docs/adr/0007-persisted-race-safe-lifecycle-transitions.md` has why.
 
@@ -796,14 +806,37 @@ Twelve things worth a reviewer's attention, in descending order of consequence:
   server where that view is restricted it fails rather than silently degrading.
 
 **Where it stands.** `./scripts/verify-repository.sh` on 2026-09-06, after the third
-correction pass: **14 gates passed, 0 failed**, with the PostgreSQL foundation suite at
+correction pass and at implementation commit `d91e4f2`: **14 gates passed, 0 failed**, the
+layout gate over **97** required files, and the PostgreSQL foundation suite at
 **1,746 collected — 1,745 passed, 1 skipped** (the pre-existing local `REPLICATION`
 skip), up from 1,315 at M2.3, from 1,512 before the first correction pass, from 1,640
 before the second and from 1,721 before the third. `ruff check .` clean, `git diff --check`
 clean, one Alembic head, `0004` upgrading, downgrading and re-upgrading from `0001` with
-exact role wiring -- the lifecycle writer's included -- at each revision. M2.4 stays
-**implemented and tested** — not deployed, not VERIFIED LIVE, and no evidence artifact has
-been captured.
+exact role wiring -- the lifecycle writer's included -- at each revision, and **migration
+`0003` unchanged**, with no diff against `main`. **All actionable M2.4 review findings are
+corrected.** M2.4 stays **implemented and tested** — reviewed and awaiting merge, not
+deployed, not VERIFIED LIVE, and no evidence artifact has been captured.
+
+Order for the human, from here:
+
+1. Commit this documentation change — `docs/STATE.md` and `docs/tasks/current.md`, on top of
+   implementation commit `d91e4f2`.
+2. Push `feat/milestone-2-4-lifecycle-state-machines`.
+3. Open the pull request.
+4. Wait for CI. Expect the same **14 gates, 0 failed**; the foundation suite's skip count
+   differs by cluster shape, because CI's bootstrap administrator is a superuser — see the
+   M2.1 CI correction above.
+5. Merge after all required checks pass.
+6. Optionally, later: capture live evidence with `/record-evidence` under `docs/evidence/m2/`
+   to promote Milestone 2 to **VERIFIED LIVE**. Until then the **implemented and tested**
+   classification stands, for all four slices.
+
+**What is next.** **Milestone 3 — customer accounts and the customer-only portal
+foundation**: identity, workspaces, memberships, permissions, API credentials, and the
+authenticated customer application shell, with `AUTH-MEMBERSHIP-BOUND-IDENTITY` above as its
+launch-blocking task. The portal it builds is the **customer** application and nothing else;
+the **operator capacity agent remains separate operator-side software**, a Milestone 6 binary
+in the operator's own cluster, kept apart by §17 invariant 11.
 
 **Do not** implement execution, customer billing, jobs, window offers or the portal
 opportunistically on top of this. The kernel is the mechanism those milestones express part
