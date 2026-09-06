@@ -40,6 +40,18 @@ appear in this catalogue, and a test asserts that none of them has.
 The operator capacity agent is separate software with its own identity, credential and
 protocol (ADR 0003 decision 8). It is not a scope in this catalogue and must not become
 one.
+
+Scopes a lifecycle machine requires
+-----------------------------------
+
+Milestone 2.4 adds tables whose required scope is **not** a constant of the table: a
+lifecycle machine version declares which capability its instances take, and the policies
+read it from the protected definition through ``firmbatch.lifecycle_required_scope()``.
+That looks like an exception to "the catalogue decides" and is not one. A definition may
+name only a scope that already exists here (:data:`LIFECYCLE_ELIGIBLE_SCOPES`), enforced by
+a check constraint; there is no ``lifecycle:*`` capability, and M2.4 adds no scope at all.
+A machine reuses an existing customer scope, which keeps "who may move this job" the same
+question as "who may write this job" rather than making it a second, parallel one.
 """
 
 from __future__ import annotations
@@ -150,22 +162,39 @@ class ResourceRule:
     table: str
     #: ``customer`` -- a resource the customer owns and asks about.
     #: ``framework`` -- machinery the platform writes on the customer's behalf.
+    #: ``lifecycle`` -- a tenant-owned table whose required scope is a property of the
+    #: *row*, read from protected machine-definition data rather than fixed here.
     #: ``protected`` -- state no runtime role may reach at all.
     kind: str
     #: The column the isolation predicate compares against the authenticated tenant.
     #: ``None`` for a protected table, which has no policy because it has no grants.
     tenant_column: str | None
     #: Scopes, any one of which permits ``SELECT``. Empty means "a valid context is
-    #: enough"; ``None`` means there is no read path at all.
+    #: enough"; ``None`` means the scope is not fixed here -- either because there is no
+    #: read path at all (``protected``) or because it is read from the machine definition
+    #: (``lifecycle``). :attr:`scope_source` is what distinguishes those two.
     read: tuple[Scope, ...] | None
     #: Scopes, any one of which permits a write. Empty means "a valid context is enough";
-    #: ``None`` means there is no write path at all.
+    #: ``None`` carries the same two meanings as :attr:`read`.
     write: tuple[Scope, ...] | None
     #: ``True`` when the table carries no ``UPDATE`` and no ``DELETE`` policy, so a
     #: committed row cannot be changed or removed by any role, the owner included.
     append_only: bool
     #: Why the rule is what it is. Read this before changing one.
     note: str
+    #: Where the required scope comes from.
+    #:
+    #: ``catalogue`` -- the :attr:`read`/:attr:`write` tuples above, which is every rule
+    #: this catalogue could state as a constant.
+    #:
+    #: ``definition`` -- protected per-machine-version data, read by
+    #: ``firmbatch.lifecycle_required_scope()``. A lifecycle machine declares which
+    #: capability its instances take, so the scope is a property of the row and not of
+    #: the table; the *catalogue* still bounds it, because a definition may only name a
+    #: scope in :data:`LIFECYCLE_ELIGIBLE_SCOPES`.
+    #:
+    #: ``none`` -- protected. There is no scope that reaches it, by construction.
+    scope_source: str = "catalogue"
 
 
 #: The catalogue. Every tenant-owned table in the schema appears exactly once, and
@@ -247,6 +276,7 @@ RESOURCE_RULES: tuple[ResourceRule, ...] = (
         read=None,
         write=None,
         append_only=False,
+        scope_source="none",
         note=(
             "The credential-fingerprint registry. No role but the schema owner holds any "
             "privilege on it, and the only paths in are the hardened SECURITY DEFINER functions "
@@ -261,6 +291,7 @@ RESOURCE_RULES: tuple[ResourceRule, ...] = (
         read=None,
         write=None,
         append_only=False,
+        scope_source="none",
         note=(
             "One transaction's authenticated identity, keyed by backend pid and carrying the "
             "xid8 of the transaction that wrote it. It is the mechanism, not a record of it: a "
@@ -269,6 +300,112 @@ RESOURCE_RULES: tuple[ResourceRule, ...] = (
             "else in the same transaction. It is listed beside auth_bindings rather than treated "
             "as a special case, because an inventory with one entry is an inventory that gets a "
             "second object added next to it without being updated."
+        ),
+    ),
+    # --------------------------------------------------------------- Milestone 2.4
+    #
+    # The lifecycle definition tables are **global** rather than tenant-owned: a machine
+    # version is one immutable graph shared by every tenant, in the same way the target
+    # architecture's certification registry is explicitly global (section 3.1). They are
+    # listed here because this catalogue is the one inventory of "what may a runtime role
+    # reach", and a table that is global is not thereby unprotected -- a role that could
+    # write one could add an edge to every tenant's state machine at once.
+    ResourceRule(
+        table="lifecycle_machines",
+        kind="protected",
+        tenant_column=None,
+        read=None,
+        write=None,
+        append_only=False,
+        scope_source="none",
+        note=(
+            "One row per (machine key, version): the initial-state marker's home, and the three "
+            "scopes an instance of that version requires. Protected rather than policed, for the "
+            "same reason auth_bindings is: the required scope is derived from this row, so a role "
+            "that could write one could lower the capability its own instances demand. Registration "
+            "is an owner-run admin action outside Alembic, like db/roles.py; a registered version is "
+            "immutable and a change is a new version."
+        ),
+    ),
+    ResourceRule(
+        table="lifecycle_states",
+        kind="protected",
+        tenant_column=None,
+        read=None,
+        write=None,
+        append_only=False,
+        scope_source="none",
+        note=(
+            "The explicit state set of one machine version, with the initial marker and the "
+            "terminal marker. A role that could write here could mark a terminal state "
+            "non-terminal, or move the initial state, which is the graph itself."
+        ),
+    ),
+    ResourceRule(
+        table="lifecycle_transition_edges",
+        kind="protected",
+        tenant_column=None,
+        read=None,
+        write=None,
+        append_only=False,
+        scope_source="none",
+        note=(
+            "The allowed edges of one machine version. A role that could insert one could make "
+            "any transition legal, including out of a terminal state -- which is the whole of what "
+            "a lifecycle kernel exists to prevent."
+        ),
+    ),
+    ResourceRule(
+        table="lifecycle_instances",
+        kind="lifecycle",
+        tenant_column="tenant_id",
+        read=None,
+        write=None,
+        append_only=False,
+        scope_source="definition",
+        note=(
+            "One tenant-owned instance of one pinned machine version. The scope its policies "
+            "require is not a constant here: it is read from the machine definition by "
+            "firmbatch.lifecycle_required_scope(), so a machine declares the capability its own "
+            "instances take. The runtime holds SELECT and nothing else -- creating one and moving "
+            "one go through hardened SECURITY DEFINER functions, because a direct INSERT could "
+            "start an instance in any state and a direct UPDATE could move it along an edge that "
+            "does not exist."
+        ),
+    ),
+    ResourceRule(
+        table="lifecycle_transitions",
+        kind="lifecycle",
+        tenant_column="tenant_id",
+        read=None,
+        write=None,
+        append_only=True,
+        scope_source="definition",
+        note=(
+            "The append-only history of one instance's moves. Same data-driven scope as the "
+            "instance it belongs to: reading a machine's history is reading that machine. The "
+            "actor comes from the authenticated context like an audit event's, and the runtime "
+            "holds SELECT and not INSERT, so a row cannot be composed by hand."
+        ),
+    ),
+    ResourceRule(
+        table="lifecycle_claim_provenance",
+        kind="protected",
+        tenant_column=None,
+        read=None,
+        write=None,
+        append_only=False,
+        scope_source="none",
+        note=(
+            "What ties one idempotency claim to the exact lifecycle transition, instance, "
+            "revisions and outbox event it stands for. A replay hands back the result a claim "
+            "stored, so a claim with no verifiable transition behind it must never replay -- and "
+            "a machine tag alone is not that link, because it says which machine a row belongs to "
+            "and not which move it records. Written only by firmbatch.transition_lifecycle_instance(), "
+            "which runs as the schema owner; no role holds any privilege on it, and a trigger "
+            "refuses every UPDATE and DELETE including the owner's. It carries a tenant column but "
+            "no policy of its own: nothing reaches it except through the four FORCE-RLS tables its "
+            "foreign keys point at, and those apply the tenant filter."
         ),
     ),
 )
@@ -293,12 +430,37 @@ DELEGABLE_SCOPES: tuple[str, ...] = tuple(
     value for value in KNOWN_SCOPES if value != Scope.TENANT_PROVISION.value
 )
 
+#: The scopes a lifecycle machine definition may name as its read, create or transition
+#: capability.
+#:
+#: Everything except :attr:`Scope.TENANT_PROVISION`, and the reason is that a machine gated
+#: on it would be unreachable rather than protected: ``tenant:provision`` is acquired from
+#: ``firmbatch.begin_tenant_provisioning()``, is held only by a context that has just
+#: created a tenant, and cannot be placed on any credential at all (see
+#: :data:`DELEGABLE_SCOPES`). A definition naming it is therefore a definition mistake, and
+#: catching it at registration is cheaper than discovering it when the first transition is
+#: refused for a reason nobody can act on.
+#:
+#: This is a *bound*, not a vocabulary: M2.4 adds no scope, and there is deliberately no
+#: ``lifecycle:*`` capability. A machine reuses an existing customer scope, which is what
+#: keeps "who may move this job" the same question as "who may write this job".
+LIFECYCLE_ELIGIBLE_SCOPES: tuple[str, ...] = tuple(
+    value for value in KNOWN_SCOPES if value != Scope.TENANT_PROVISION.value
+)
+
 #: table -> rule, for the places that look one up by name.
 RULES_BY_TABLE: dict[str, ResourceRule] = {rule.table: rule for rule in RESOURCE_RULES}
 
 #: The tables that carry no grant and no policy, reachable only through definer functions.
 PROTECTED_TABLES: frozenset[str] = frozenset(
     rule.table for rule in RESOURCE_RULES if rule.kind == "protected"
+)
+
+#: Tenant-owned tables whose required scope is read from protected machine-definition data
+#: rather than fixed in this catalogue. Named so that a test can walk them, and so that
+#: adding a third is a decision somebody writes down here.
+DEFINITION_SCOPED_TABLES: frozenset[str] = frozenset(
+    rule.table for rule in RESOURCE_RULES if rule.scope_source == "definition"
 )
 
 

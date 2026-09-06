@@ -67,6 +67,13 @@ Disqualifying conditions, each checked against the live catalogue:
    delete from it can clear the context and bind again as somebody else inside one
    transaction; one that can call the context writer can do the first of those directly.
 
+   Milestone 2.4 adds three protected relations and eight internal functions to the same
+   inventory, without adding a special case: a role that could write
+   ``firmbatch.lifecycle_transition_edges`` could make any state transition legal for every
+   tenant at once, and one that could call ``firmbatch.lifecycle_edge_exists`` could
+   enumerate every registered machine. Both are covered because both catalogues --
+   ``PROTECTED_TABLES`` and ``INTERNAL_FUNCTIONS`` -- are read from one place.
+
    The privilege test is run **per reachable role**, and that is the correction rather
    than a detail. ``has_table_privilege`` and ``has_function_privilege`` answer about
    *inherited* privilege, so ``GRANT other TO app WITH INHERIT FALSE, SET TRUE`` makes
@@ -121,7 +128,7 @@ from dataclasses import dataclass
 from ..config import PrivilegedPrincipalError
 from .base import SCHEMA
 from .models import PROTECTED_TABLES, TENANT_SCOPED_TABLES
-from .roles import INTERNAL_AUTH_FUNCTIONS
+from .roles import INTERNAL_FUNCTIONS
 
 #: The complete runtime profile ADR 0004 promises: NOSUPERUSER, NOBYPASSRLS, NOCREATEDB,
 #: NOCREATEROLE, NOREPLICATION. Every one of them is disqualifying, on either identity or
@@ -345,7 +352,7 @@ def _protected_acl_sql() -> str:
     with no bind parameters to get wrong in the raw-cursor context this runs in.
     """
     functions = ", ".join(
-        f"('{SCHEMA}.{name}({signature})')" for name, signature in INTERNAL_AUTH_FUNCTIONS
+        f"('{SCHEMA}.{name}({signature})')" for name, signature in INTERNAL_FUNCTIONS
     )
     return _PROTECTED_ACL_SQL % {
         "relations": _protected_relations_values(),

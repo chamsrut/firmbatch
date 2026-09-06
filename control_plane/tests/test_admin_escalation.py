@@ -222,7 +222,7 @@ def test_no_membership_path_carries_set_or_inherit(disposable_database, environm
 
 
 def test_the_per_run_roles_hold_no_administrative_attribute(disposable_database, environment):
-    """None of the three roles is an administrator, whatever created them.
+    """None of the four roles is an administrator, whatever created them.
 
     A superuser bootstrap administrator is accepted; a superuser *runtime* role would make
     forced row-level security decorative, which is the thing Milestone 2.1 actually sells.
@@ -241,13 +241,14 @@ def test_the_per_run_roles_hold_no_administrative_attribute(disposable_database,
                         disposable_database.owner_role,
                         disposable_database.application_role,
                         disposable_database.provisioning_role,
+                        disposable_database.lifecycle_writer_role,
                     ]
                 },
             ).all()
     finally:
         engine.dispose()
 
-    assert len(rows) == 3, f"expected all three per-run roles, saw {[row[0] for row in rows]}"
+    assert len(rows) == 4, f"expected all four per-run roles, saw {[row[0] for row in rows]}"
     for row in rows:
         assert tuple(row[1:]) == (False, False, False, False, False), (
             f"{row[0]} holds an administrative attribute: "

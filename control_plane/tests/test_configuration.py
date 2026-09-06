@@ -105,6 +105,8 @@ def test_only_unmistakably_disposable_databases_are_accepted():
 def test_only_disposable_roles_are_accepted():
     assert config.require_disposable_role("firmbatch_test_app_0123456789ab")
     assert config.require_disposable_role("firmbatch_test_prov_0123456789ab")
+    assert config.require_disposable_role("firmbatch_test_own_0123456789ab")
+    assert config.require_disposable_role("firmbatch_test_lcw_0123456789ab")
     for role in ("postgres", "firmbatch_app", "firmbatch_test_app_", "app"):
         with pytest.raises(config.UnsafeTestDatabaseError):
             config.require_disposable_role(role)

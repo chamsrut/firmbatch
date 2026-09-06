@@ -32,20 +32,41 @@ Three roles, three jobs:
     no privilege whatsoever on tenant data. Since Milestone 2.3 it cannot even name the
     tenant it is creating: ``firmbatch.begin_tenant_provisioning()`` generates the id.
 
-Both runtime roles remain under RLS. Nothing here hands out ``BYPASSRLS``, and nothing
-may: the point of forcing row security is that no runtime role can turn it off.
+``lifecycle writer``
+    **A fourth role, and not a runtime one.** ``NOLOGIN``, no credential, no membership,
+    ``NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS NOINHERIT``, and nobody
+    -- not the application role, not provisioning, not the schema owner -- may ``SET ROLE``
+    to it. It owns exactly two objects: the ``SECURITY DEFINER`` lifecycle entry points,
+    which therefore *execute as it*. That is the whole of its purpose. The guards on the
+    lifecycle tags, on ``lifecycle_claim_provenance`` and on linking an outbox event to a
+    lifecycle claim require ``current_user`` to be this role, so "this row was written by
+    the lifecycle boundary" is a fact about who is executing rather than a convention about
+    who owns the schema. See :func:`install_lifecycle_writer`.
+
+    It holds the minimum the two entry points need and nothing more: ``USAGE`` on the
+    schema, ``EXECUTE`` on the helpers the bodies and the policies call, ``SELECT`` where the
+    replay reads, and column-level ``INSERT``/``UPDATE`` on exactly the columns the bodies
+    write. It owns no table and no schema, and row security stays ``FORCE``d against it.
+
+Every one of those roles remains under RLS. Nothing here hands out ``BYPASSRLS``, and
+nothing may: the point of forcing row security is that no role can turn it off.
 
 **Neither runtime role holds anything at all on the protected tables.** The credential
-registry ``auth_bindings`` and the transaction-context relation
-``auth_transaction_context`` are protected by the absence of grants rather than by a
-policy, so "the runtime cannot enumerate credential fingerprints or their tenant mappings"
-and "the runtime cannot write itself a context" are privilege facts rather than predicates
-that have to be got right. The same applies to every internal function, ``auth_context_begin``
-above all: it is granted to nobody, because a role that could call it could name any tenant
-it liked.
+registry ``auth_bindings``, the transaction-context relation ``auth_transaction_context``
+and Milestone 2.4's three lifecycle definition tables are protected by the absence of
+grants rather than by a policy, so "the runtime cannot enumerate credential fingerprints or
+their tenant mappings", "the runtime cannot write itself a context" and "the runtime cannot
+add an edge to a state machine" are privilege facts rather than predicates that have to be
+got right. The same applies to every internal function, ``auth_context_begin`` above all:
+it is granted to nobody, because a role that could call it could name any tenant it liked.
+
+**And the two runtime roles are no longer symmetric.** Milestone 2.4's lifecycle functions
+are granted to the application role and **not** to provisioning, which receives no lifecycle
+authority of any kind. Provisioning creates a tenant and mints its first credential; moving
+a job through its lifecycle is not that, and no documented requirement asks for it.
 
 **And the wiring is revision-aware.** Every statement below names a table or a function,
-and which of those exist depends on the schema revision. See ``RevisionPlan``: two
+and which of those exist depends on the schema revision. See ``RevisionPlan``: three
 supported revisions, an explicit plan for each, and a refusal for anything else.
 
 **Nothing is inherited from a PostgreSQL default.** PUBLIC loses ``CREATE`` on every
@@ -63,7 +84,6 @@ from dataclasses import dataclass
 from sqlalchemy import Connection, text
 
 from .base import SCHEMA, VERSION_TABLE
-from .models import PROTECTED_TABLES
 
 _IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 
@@ -141,6 +161,152 @@ ALL_AUTH_FUNCTIONS: tuple[tuple[str, str], ...] = (
     RUNTIME_AUTH_FUNCTIONS + PROVISIONING_AUTH_FUNCTIONS + INTERNAL_AUTH_FUNCTIONS
 )
 
+#: Milestone 2.4's lifecycle kernel, granted to the **application role only**.
+#:
+#: Not to provisioning, and the omission is a decision rather than an oversight: the
+#: provisioning role exists to create a tenant and mint that tenant's first credential.
+#: Moving a job through its lifecycle is not a provisioning act, no documented requirement
+#: asks for one, and a role that could do both would be a second path into tenant data.
+#:
+#: ``lifecycle_required_scope`` is here because **every policy on both tenant-owned
+#: lifecycle tables calls it**: a policy is evaluated with the querying role's privileges,
+#: so a role without ``EXECUTE`` here could not read its own instances at all. What it
+#: discloses is which capability a global, immutable machine version requires -- a fact
+#: about the closed scope catalogue, not about any tenant.
+APPLICATION_LIFECYCLE_FUNCTIONS: tuple[tuple[str, str], ...] = (
+    ("lifecycle_required_scope", "text, integer, text"),
+    # Answers which role is the lifecycle writer, from the catalogue. The outbox-link guard
+    # calls it while running as whoever inserted the event, and for a generic event that is
+    # the application role. It discloses a role name ``pg_proc`` and ``pg_roles`` already
+    # show to every role, and knowing the name confers nothing: nobody can SET ROLE to it.
+    ("lifecycle_writer_role", ""),
+)
+
+#: **Owned by the lifecycle writer**, and granted to the application role *by the writer*.
+#:
+#: The migration creates these owned by the schema owner, like everything it creates, and
+#: :func:`install_lifecycle_writer` hands them over. From then on they execute as the writer,
+#: which is what every lifecycle-derived guard checks for -- and the schema owner can no
+#: longer ``GRANT`` or ``REVOKE`` on them (PostgreSQL requires the owner or a grant option
+#: for either), so their ``EXECUTE`` grant is written under ``SET ROLE`` to the writer.
+#:
+#: Seven parameters on the transition, not nine: the operation name and the request
+#: fingerprint are derived inside the function, from the machine the instance pins and from
+#: the arguments the call executed. A caller that could supply either could bind a claim to
+#: a request it did not make.
+LIFECYCLE_WRITER_FUNCTIONS: tuple[tuple[str, str], ...] = (
+    ("create_lifecycle_instance", "text, integer"),
+    (
+        "transition_lifecycle_instance",
+        "uuid, text, integer, text, text, jsonb, text",
+    ),
+)
+
+#: What the two entry points call while executing as the writer, and therefore what the
+#: writer must hold ``EXECUTE`` on. Enumerated from the bodies rather than granted as "all
+#: functions": the writer receives no ``bind_authenticated_context``, no credential
+#: registration or revocation, no generic audit append and no provisioning, because the
+#: bodies call none of them.
+#:
+#: The policies are in here too. A policy is evaluated with the querying role's privileges,
+#: and every lifecycle-table policy calls the context accessors and
+#: ``lifecycle_required_scope``; the framework-table policies the writer's inserts meet call
+#: ``auth_has_scope`` and the tag-aware reader. The trigger functions are not here: PostgreSQL
+#: checks no ``EXECUTE`` when firing a trigger, and the functions *those* call
+#: (``lifecycle_initial_state``, ``lifecycle_state_is_terminal``, ``lifecycle_edge_exists``,
+#: ``lifecycle_writer_role``) are.
+LIFECYCLE_WRITER_HELPER_FUNCTIONS: tuple[tuple[str, str], ...] = (
+    ("auth_context", ""),
+    ("auth_tenant_id", ""),
+    ("auth_principal_id", ""),
+    ("auth_binding_id", ""),
+    ("auth_actor_kind", ""),
+    ("auth_has_scope", "text"),
+    ("auth_require_read_committed", ""),
+    ("secret_shape", "text"),
+    ("audit_require_acceptable_details", "jsonb"),
+    ("lifecycle_required_scope", "text, integer, text"),
+    ("lifecycle_writer_role", ""),
+    ("lifecycle_initial_state", "text, integer"),
+    ("lifecycle_state_is_terminal", "text, integer, text"),
+    ("lifecycle_edge_exists", "text, integer, text, text"),
+    (
+        "lifecycle_request_fingerprint",
+        "uuid, text, uuid, text, integer, text, integer, text, text, jsonb",
+    ),
+    ("lifecycle_replay_claim", "text, text, text, integer, text"),
+    ("append_lifecycle_audit_event", "text, text, text, uuid, jsonb, text, integer"),
+)
+
+#: Executable by **nobody**.
+#:
+#: The three definition readers, because a role that could call them could enumerate every
+#: registered machine and its scopes, and nothing needs to; ``publish_lifecycle_machine``,
+#: because publication is the last step of registration and registration is an owner action,
+#: and a runtime role that could publish could make a half-built graph consumable; and the
+#: seven trigger functions, because PostgreSQL does not check ``EXECUTE`` when firing a
+#: trigger, so granting one would only make it callable as an ordinary function.
+#: ``lifecycle_definition_is_immutable`` in particular exists to raise, and a role that could
+#: call it directly would gain nothing but a confusing error.
+#: ``lifecycle_request_fingerprint`` and ``lifecycle_replay_claim`` are internal for the
+#: same reason ``secret_shape`` is: the fingerprint is what a claim is matched on, so a role
+#: that could compute one outside a transition could work out which request a stored claim
+#: was for by guessing candidates against it; and the replay reader answers "is this key
+#: taken, and by what" for an operation namespace the caller would otherwise have to be
+#: authorised for a machine to reach. ``append_lifecycle_audit_event`` is internal because it
+#: is the only writer permitted to tag an audit row, and a role that could call it could tag
+#: a row of its own -- or, worse, write a ``lifecycle.`` action about an instance it invented.
+INTERNAL_LIFECYCLE_FUNCTIONS: tuple[tuple[str, str], ...] = (
+    ("lifecycle_initial_state", "text, integer"),
+    ("lifecycle_state_is_terminal", "text, integer, text"),
+    ("lifecycle_edge_exists", "text, integer, text, text"),
+    (
+        "lifecycle_request_fingerprint",
+        "uuid, text, uuid, text, integer, text, integer, text, text, jsonb",
+    ),
+    ("lifecycle_replay_claim", "text, text, text, integer, text"),
+    ("append_lifecycle_audit_event", "text, text, text, uuid, jsonb, text, integer"),
+    ("publish_lifecycle_machine", "text, integer"),
+    ("lifecycle_definition_is_immutable", ""),
+    ("lifecycle_machines_before_insert", ""),
+    ("lifecycle_machines_before_update", ""),
+    ("lifecycle_definition_rows_before_insert", ""),
+    ("lifecycle_edges_check_source", ""),
+    ("lifecycle_instances_before_insert", ""),
+    ("lifecycle_instances_before_update", ""),
+    ("lifecycle_transitions_before_insert", ""),
+    ("lifecycle_framework_tag_is_derived", ""),
+    ("lifecycle_claim_provenance_guard", ""),
+    # The outbox-link guard: a trigger function, so it needs no grant to fire, and it fires
+    # as whoever inserted the event -- which is how a generic writer's link is checked under
+    # that writer's own row-security view of the claims.
+    ("outbox_events_link_is_authorized", ""),
+)
+
+ALL_LIFECYCLE_FUNCTIONS: tuple[tuple[str, str], ...] = (
+    APPLICATION_LIFECYCLE_FUNCTIONS + LIFECYCLE_WRITER_FUNCTIONS + INTERNAL_LIFECYCLE_FUNCTIONS
+)
+
+#: Executable by **nobody**: the ownership-aware ACL sanitiser ``0004`` installs, whose body is
+#: :data:`SCHEMA_ACL_SANITIZER_BODY`. Called by the migration that creates it and by any later
+#: migration, which then carries no fourth copy; the runtime runs the same body as a ``DO``
+#: block. Kept out of the lifecycle inventory because it is maintenance rather than lifecycle
+#: -- and because it builds statements by design, from catalogue names only, which the
+#: lifecycle functions are asserted never to do.
+INTERNAL_MAINTENANCE_FUNCTIONS: tuple[tuple[str, str], ...] = (
+    ("sanitize_schema_privileges", ""),
+)
+
+#: Every function this package's schema defines at head, and every one that no role may
+#: execute. Two inventories rather than five, so that the ACL sanitisation, the principal
+#: check and the hardening tests all walk the same list.
+ALL_FUNCTIONS: tuple[tuple[str, str], ...] = (
+    ALL_AUTH_FUNCTIONS + ALL_LIFECYCLE_FUNCTIONS + INTERNAL_MAINTENANCE_FUNCTIONS
+)
+INTERNAL_FUNCTIONS: tuple[tuple[str, str], ...] = (
+    INTERNAL_AUTH_FUNCTIONS + INTERNAL_LIFECYCLE_FUNCTIONS + INTERNAL_MAINTENANCE_FUNCTIONS
+)
+
 
 # ------------------------------------------------------------------ revision awareness
 #
@@ -163,6 +329,166 @@ ALL_AUTH_FUNCTIONS: tuple[tuple[str, str], ...] = (
 
 M2_2_REVISION = "0002_idempotency_and_outbox"
 M2_3_REVISION = "0003_auth_context_and_audit"
+M2_4_REVISION = "0004_lifecycle_state_machines"
+
+#: The protected relations each revision actually has. Written out per revision rather than
+#: derived from :data:`PROTECTED_TABLES`, which describes **head**: deriving it is what made
+#: the ``0002`` plan name ``auth_bindings`` and fail after a rollback, and deriving it again
+#: would make the ``0003`` plan name the lifecycle definition tables that ``0003`` does not
+#: create. A test asserts the head list equals the catalogue.
+_M2_3_PROTECTED_TABLES: tuple[str, ...] = ("auth_bindings", "auth_transaction_context")
+_M2_4_PROTECTED_TABLES: tuple[str, ...] = _M2_3_PROTECTED_TABLES + (
+    "lifecycle_machines",
+    "lifecycle_states",
+    "lifecycle_transition_edges",
+    "lifecycle_claim_provenance",
+)
+
+#: The columns of a framework table the application role may write, at ``0004`` and not
+#: before.
+#:
+#: **The identifier is not among them, and that is the point.** A caller that could name a
+#: row's primary key could submit one it had guessed or read elsewhere and learn from the
+#: uniqueness conflict whether it exists -- an existence oracle over rows the read policies
+#: hide. A column-level ``INSERT`` grant is refused at permission-check time, before the
+#: executor inserts anything, so naming an id that exists and naming one that does not fail
+#: **identically** and neither reaches an index. The ids these tables carry are generated by
+#: ``gen_random_uuid()`` as a column default, or by the trusted database code that writes the
+#: row, so nothing legitimate needs the privilege.
+#:
+#: The derived lifecycle tag is excluded for the same reason it has a trigger: it is written
+#: by the lifecycle entry points, which run as the schema owner. So is every server-generated
+#: timestamp. ``audit_events`` is absent because the application role holds no ``INSERT`` on
+#: it at all -- appending goes through ``firmbatch.append_audit_event()``.
+_M2_4_APPLICATION_COLUMN_GRANTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    (
+        "idempotency_records",
+        "INSERT",
+        ("tenant_id", "operation", "idempotency_key", "request_fingerprint", "status", "result"),
+    ),
+    (
+        "outbox_events",
+        "INSERT",
+        (
+            "tenant_id",
+            "idempotency_record_id",
+            "event_type",
+            "aggregate_type",
+            "aggregate_id",
+            "attributes",
+        ),
+    ),
+)
+
+#: What the lifecycle writer reads, table-level. ``SELECT`` and nothing else here: the
+#: transition resolves the instance, re-reads the revision it wrote, and the replay walks
+#: the claim, the provenance, the history, the instance and the event. ``audit_events`` is
+#: absent -- the writer appends to the trail and never reads it back.
+_M2_4_LIFECYCLE_WRITER_GRANTS: tuple[tuple[str, str], ...] = (
+    ("lifecycle_instances", "SELECT"),
+    ("lifecycle_transitions", "SELECT"),
+    ("idempotency_records", "SELECT"),
+    ("outbox_events", "SELECT"),
+    ("lifecycle_claim_provenance", "SELECT"),
+)
+
+#: What the lifecycle writer writes, column by column: exactly the columns the two entry
+#: points name in their ``INSERT`` and ``UPDATE`` statements. Server-derived columns that a
+#: ``BEFORE`` trigger overwrites -- ``occurred_at``, ``created_at``, ``updated_at``,
+#: ``revision`` at creation -- are not here, because a trigger assignment needs no
+#: privilege and a grant would only make them nameable.
+_M2_4_LIFECYCLE_WRITER_COLUMN_GRANTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    (
+        "lifecycle_instances",
+        "INSERT",
+        ("id", "tenant_id", "machine_key", "machine_version", "current_state"),
+    ),
+    ("lifecycle_instances", "UPDATE", ("current_state", "revision")),
+    (
+        "lifecycle_transitions",
+        "INSERT",
+        (
+            "id",
+            "tenant_id",
+            "lifecycle_instance_id",
+            "machine_key",
+            "machine_version",
+            "from_state",
+            "to_state",
+            "from_revision",
+            "to_revision",
+            "actor_kind",
+            "actor_principal_id",
+            "actor_binding_id",
+            "reason",
+            "details",
+        ),
+    ),
+    (
+        "idempotency_records",
+        "INSERT",
+        (
+            "id",
+            "tenant_id",
+            "operation",
+            "idempotency_key",
+            "request_fingerprint",
+            "status",
+            "result",
+            "lifecycle_machine_key",
+            "lifecycle_machine_version",
+        ),
+    ),
+    (
+        "outbox_events",
+        "INSERT",
+        (
+            "id",
+            "tenant_id",
+            "idempotency_record_id",
+            "event_type",
+            "aggregate_type",
+            "aggregate_id",
+            "attributes",
+            "lifecycle_machine_key",
+            "lifecycle_machine_version",
+        ),
+    ),
+    (
+        "audit_events",
+        "INSERT",
+        (
+            "id",
+            "tenant_id",
+            "actor_kind",
+            "actor_principal_id",
+            "actor_binding_id",
+            "action",
+            "outcome",
+            "resource_type",
+            "resource_id",
+            "correlation_id",
+            "details",
+            "lifecycle_machine_key",
+            "lifecycle_machine_version",
+        ),
+    ),
+    (
+        "lifecycle_claim_provenance",
+        "INSERT",
+        (
+            "idempotency_record_id",
+            "tenant_id",
+            "lifecycle_transition_id",
+            "lifecycle_instance_id",
+            "machine_key",
+            "machine_version",
+            "from_revision",
+            "to_revision",
+            "outbox_event_id",
+        ),
+    ),
+)
 
 #: The one function the ``0001``/``0002`` policies called: the caller-set tenant setting
 #: that Milestone 2.3 removed. Named here only so the ``0002`` grant set can be reproduced
@@ -192,6 +518,29 @@ class RevisionPlan:
     application_grants: tuple[tuple[str, str], ...]
     #: ``(table, privileges)`` for the provisioning role.
     provisioning_grants: tuple[tuple[str, str], ...]
+    #: Functions granted to the **application** role alone. Milestone 2.4's lifecycle
+    #: kernel, which provisioning deliberately receives no part of. Defaulted so the two
+    #: earlier plans stay exactly what they were.
+    application_functions: tuple[tuple[str, str], ...] = ()
+    #: ``(table, privileges, columns)`` for the application role, applied after
+    #: :attr:`application_grants`. Column-level rather than table-level so that the columns
+    #: *not* named are unwritable -- primary keys above all. Defaulted empty, so ``0002``
+    #: and ``0003`` keep exactly the table-level grants they had.
+    application_column_grants: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
+    #: The ``SECURITY DEFINER`` entry points the **lifecycle writer** owns at this revision,
+    #: and grants ``EXECUTE`` on to the application role. Empty before ``0004``, where the
+    #: writer owns nothing and holds nothing -- which :func:`install_lifecycle_writer`
+    #: enforces by revoking rather than by assuming.
+    lifecycle_writer_functions: tuple[tuple[str, str], ...] = ()
+    #: Functions the writer needs ``EXECUTE`` on, because the entry-point bodies, the
+    #: triggers they fire and the policies they meet call them.
+    lifecycle_writer_helper_functions: tuple[tuple[str, str], ...] = ()
+    #: ``(table, privileges)`` for the writer, table-level -- ``SELECT`` only, where the
+    #: entry points or the replay read.
+    lifecycle_writer_grants: tuple[tuple[str, str], ...] = ()
+    #: ``(table, privileges, columns)`` for the writer: exactly the columns the bodies
+    #: write, so a column they do not name stays unwritable even for the boundary itself.
+    lifecycle_writer_column_grants: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
 
 
 _M2_2_PLAN = RevisionPlan(
@@ -217,7 +566,7 @@ _M2_3_PLAN = RevisionPlan(
         "idempotency_records",
         "outbox_events",
         "audit_events",
-        *sorted(PROTECTED_TABLES),
+        *_M2_3_PROTECTED_TABLES,
     ),
     common_functions=RUNTIME_AUTH_FUNCTIONS,
     provisioning_functions=PROVISIONING_AUTH_FUNCTIONS,
@@ -247,12 +596,64 @@ _M2_3_PLAN = RevisionPlan(
     provisioning_grants=(("tenants", "SELECT, INSERT, UPDATE"),),
 )
 
+_M2_4_PLAN = RevisionPlan(
+    revision=M2_4_REVISION,
+    tables=(
+        "tenants",
+        "workspaces",
+        "idempotency_records",
+        "outbox_events",
+        "audit_events",
+        "lifecycle_instances",
+        "lifecycle_transitions",
+        *_M2_4_PROTECTED_TABLES,
+    ),
+    # NOTE: _M2_4_PROTECTED_TABLES now includes lifecycle_claim_provenance, which is
+    # protected for the same reason the definition tables are: no role holds anything on
+    # it, so "a generic writer cannot forge the link a replay rests on" is a privilege fact.
+    common_functions=RUNTIME_AUTH_FUNCTIONS,
+    provisioning_functions=PROVISIONING_AUTH_FUNCTIONS,
+    application_functions=APPLICATION_LIFECYCLE_FUNCTIONS,
+    internal_functions=(
+        INTERNAL_AUTH_FUNCTIONS + INTERNAL_LIFECYCLE_FUNCTIONS + INTERNAL_MAINTENANCE_FUNCTIONS
+    ),
+    application_grants=(
+        ("tenants", "SELECT"),
+        ("workspaces", "SELECT, INSERT, UPDATE, DELETE"),
+        # **SELECT at table level, and INSERT only on named columns** -- see
+        # _M2_4_APPLICATION_COLUMN_GRANTS. The privilege set is otherwise exactly Milestone
+        # 2.2's: what changed is that the row's identifier is no longer among the columns a
+        # caller may name, so a chosen primary key is refused before any index sees it.
+        ("idempotency_records", "SELECT"),
+        ("outbox_events", "SELECT"),
+        ("audit_events", "SELECT"),
+        # **SELECT and nothing else, on both.** A direct INSERT on lifecycle_instances
+        # could start an instance in any state; a direct UPDATE could move it to any state
+        # at any revision, which is the compare-and-swap gone. A direct INSERT on
+        # lifecycle_transitions could record a move that never happened, or attribute a
+        # real one to somebody else. Both go through hardened SECURITY DEFINER functions
+        # instead, and reading is what is left.
+        ("lifecycle_instances", "SELECT"),
+        ("lifecycle_transitions", "SELECT"),
+    ),
+    application_column_grants=_M2_4_APPLICATION_COLUMN_GRANTS,
+    # Unchanged, deliberately: provisioning gains no lifecycle authority at all -- no table
+    # privilege, and none of the lifecycle functions.
+    provisioning_grants=(("tenants", "SELECT, INSERT, UPDATE"),),
+    # The lifecycle writer: owns the two entry points, holds exactly what their bodies need.
+    lifecycle_writer_functions=LIFECYCLE_WRITER_FUNCTIONS,
+    lifecycle_writer_helper_functions=LIFECYCLE_WRITER_HELPER_FUNCTIONS,
+    lifecycle_writer_grants=_M2_4_LIFECYCLE_WRITER_GRANTS,
+    lifecycle_writer_column_grants=_M2_4_LIFECYCLE_WRITER_COLUMN_GRANTS,
+)
+
 #: The revisions this module can wire. Anything else -- an older one, a newer one, a
 #: database with no version table, or a version table carrying more than one row -- is
 #: refused rather than guessed at.
 REVISION_PLANS: dict[str, RevisionPlan] = {
     _M2_2_PLAN.revision: _M2_2_PLAN,
     _M2_3_PLAN.revision: _M2_3_PLAN,
+    _M2_4_PLAN.revision: _M2_4_PLAN,
 }
 
 SUPPORTED_REVISIONS: tuple[str, ...] = tuple(sorted(REVISION_PLANS))
@@ -311,7 +712,14 @@ def revision_plan(connection: Connection) -> RevisionPlan:
             {"name": f"{SCHEMA}.{table}"},
         ).scalar_one():
             missing.append(f"table {table}")
-    functions = plan.common_functions + plan.provisioning_functions + plan.internal_functions
+    functions = (
+        plan.common_functions
+        + plan.provisioning_functions
+        + plan.application_functions
+        + plan.lifecycle_writer_functions
+        + plan.lifecycle_writer_helper_functions
+        + plan.internal_functions
+    )
     for name, signature in functions:
         if not connection.execute(
             text("SELECT pg_catalog.to_regprocedure(:name) IS NOT NULL"),
@@ -382,11 +790,32 @@ def quote_identifier(name: str) -> str:
 #: sufficient alone: default-privilege rules outlive a migration, and a database can be
 #: migrated without being wired.
 #:
+#: **The two function loops touch only functions the schema owner owns.** PostgreSQL lets
+#: an object's owner, or a holder of a grant option, ``REVOKE`` on it, and nobody else: the
+#: schema owner running ``REVOKE ALL ON FUNCTION ... FROM PUBLIC`` against a function the
+#: lifecycle writer owns gets ``permission denied`` -- measured. At wiring time the two
+#: writer-owned entry points are skipped here and sanitised by
+#: :func:`install_lifecycle_writer` under ``SET ROLE`` to their owner, which is the one
+#: identity that may. Relations and types carry no such predicate: nothing but the owner is
+#: ever meant to own one, and a foreign-owned relation failing loudly here is the right
+#: outcome.
+#:
+#: **Where the copies live now.** Migration ``0003`` carries the original text, without the
+#: ownership predicate, and is history: it is not edited to suit objects ``0004`` introduced.
+#: Migration ``0004`` installs this body as ``firmbatch.sanitize_schema_privileges()`` --
+#: the ownership-aware sanitiser a database needs while writer-owned functions exist -- calls
+#: it, and drops it again on downgrade after the writer's functions and grants are gone, so a
+#: ``0003`` database has exactly what ``0003`` installed. This module carries the same body for
+#: the runtime, and ``test_the_sanitiser_is_the_same_statement_everywhere`` asserts that the
+#: two live copies are identical and that ``0003``'s differs from them by the predicate alone.
+#:
 #: Every identifier comes from ``pg_catalog`` and is rendered by ``format('%I')`` or by a
 #: ``regclass``/``regprocedure``/``regtype`` cast, all of which quote. No name here comes
 #: from a caller, and no environment's role names are written down.
-SCHEMA_ACL_SANITIZER_SQL = """
-DO $sanitize$
+#: The plpgsql body: what migration ``0004`` installs as ``firmbatch.sanitize_schema_privileges()``
+#: and what :func:`sanitize_schema_privileges` runs as a ``DO`` block. One text, two carriers,
+#: and a test that compares them.
+SCHEMA_ACL_SANITIZER_BODY = """
 DECLARE
     entry record;
 BEGIN
@@ -474,6 +903,7 @@ BEGIN
         FROM pg_catalog.pg_proc p
         JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
         WHERE n.nspname = 'firmbatch'
+          AND p.proowner = n.nspowner
     LOOP
         EXECUTE pg_catalog.format('REVOKE ALL ON FUNCTION %s FROM PUBLIC', entry.obj);
     END LOOP;
@@ -485,6 +915,7 @@ BEGIN
         JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
         CROSS JOIN LATERAL pg_catalog.aclexplode(p.proacl) acl
         WHERE n.nspname = 'firmbatch'
+          AND p.proowner = n.nspowner
           AND acl.grantee <> 0
           AND acl.grantee <> p.proowner
     LOOP
@@ -514,8 +945,11 @@ BEGIN
         EXECUTE pg_catalog.format('REVOKE ALL ON TYPE %s FROM %I', entry.obj, entry.grantee);
     END LOOP;
 END;
-$sanitize$
 """
+
+#: The runtime form: the body wrapped as an anonymous block, so it runs at every supported
+#: revision without depending on an object only ``0004`` creates.
+SCHEMA_ACL_SANITIZER_SQL = f"DO $sanitize$\n{SCHEMA_ACL_SANITIZER_BODY}\n$sanitize$\n"
 
 
 def sanitize_schema_privileges(connection: Connection) -> None:
@@ -595,6 +1029,24 @@ def _grant_tables(connection: Connection, quoted: str, grants) -> None:
         )
 
 
+def _grant_columns(connection: Connection, quoted: str, grants) -> None:
+    """Grant a privilege on named columns, so the ones not named stay unwritable.
+
+    A table-level ``GRANT INSERT`` would supersede this, so the plans that use it grant
+    ``SELECT`` at table level and nothing more. Every column name is validated and quoted
+    the same way a role name is: ``GRANT`` takes no bind parameters.
+    """
+    schema = quote_identifier(SCHEMA)
+    for table, privileges, columns in grants:
+        column_list = ", ".join(quote_identifier(column) for column in columns)
+        connection.execute(
+            text(
+                f"GRANT {privileges} ({column_list}) "
+                f"ON TABLE {schema}.{quote_identifier(table)} TO {quoted}"
+            )
+        )
+
+
 def grant_application_role(connection: Connection, role: str) -> None:
     """Give ``role`` exactly what a tenant-scoped application needs, and nothing more.
 
@@ -605,7 +1057,17 @@ def grant_application_role(connection: Connection, role: str) -> None:
     quoted = quote_identifier(role)
     plan = revision_plan(connection)
     _grant_common(connection, quoted, plan)
+    # The application-only functions, which provisioning does not receive. Milestone 2.4's
+    # lifecycle kernel is the first thing in this schema that one runtime role may reach
+    # and the other may not, and that asymmetry is the point rather than an oversight.
+    for name, signature in plan.application_functions:
+        connection.execute(text(f"GRANT EXECUTE ON FUNCTION {_function(name, signature)} TO {quoted}"))
     _grant_tables(connection, quoted, plan.application_grants)
+    # And the column-level half, after the table-level one so nothing supersedes it. At
+    # ``0004`` this is what withholds ``INSERT`` on the identifier columns of the two
+    # framework tables: a chosen primary key is refused at permission-check time, before any
+    # unique index could answer whether that key exists.
+    _grant_columns(connection, quoted, plan.application_column_grants)
     # No privilege on alembic_version: the schema history is not application data.
     #
     # And **nothing at all** on auth_bindings or auth_transaction_context. The credential
@@ -630,3 +1092,518 @@ def grant_provisioning_role(connection: Connection, role: str) -> None:
     # events they produced, and it may not enumerate credential fingerprints or their
     # tenant mappings. It records what it did through firmbatch.append_audit_event(), the
     # same hardened path the application uses, and it cannot read the trail back.
+
+
+# --------------------------------------------------------------- the lifecycle writer
+#
+# The fourth role, and the one that turns "written by the lifecycle boundary" from a
+# convention about the schema owner into a fact about the executing identity. It owns the
+# two ``SECURITY DEFINER`` entry points and nothing else; the guards on the lifecycle tags,
+# on ``lifecycle_claim_provenance`` and on the outbox link require ``current_user`` to be it.
+#
+# Installing it is a **two-party** act, and the split is deliberate. PostgreSQL hands a
+# function to a new owner only if the current owner can ``SET ROLE`` to that owner and the
+# new owner holds ``CREATE`` on the schema (measured, both ways round). The schema owner
+# is ``NOCREATEROLE`` and holds no membership, so it cannot give itself either; the trusted
+# bootstrap administrator grants the membership ``WITH SET TRUE, INHERIT FALSE, ADMIN FALSE``
+# immediately before this runs and revokes it immediately after, exactly as it already does
+# for the per-run owner. What this function needs, then, is an owner connection that can
+# ``SET ROLE`` to the writer *for the duration of one call* -- and nothing afterwards.
+
+
+class LifecycleWriterError(RuntimeError):
+    """The lifecycle writer is not the role the boundary requires, or could not be installed.
+
+    Raised rather than worked around, for the same reason :class:`UnsupportedSchemaRevision`
+    is: a writer that holds one attribute too many, or that a runtime role can reach, is a
+    writer whose identity proves nothing, and a database wired around one would report
+    success while the guards it depends on were decorative.
+    """
+
+
+#: The attributes the writer must carry, as ``pg_roles`` reports them, and the values it
+#: must report. Six of them are what ``firmbatch.lifecycle_writer_role()`` itself checks
+#: before it will name a role; ``rolinherit`` is added here for hygiene, because a role that
+#: is never meant to be a member of anything has nothing to inherit.
+LIFECYCLE_WRITER_ATTRIBUTES: tuple[tuple[str, bool], ...] = (
+    ("rolcanlogin", False),
+    ("rolsuper", False),
+    ("rolcreaterole", False),
+    ("rolcreatedb", False),
+    ("rolreplication", False),
+    ("rolbypassrls", False),
+    ("rolinherit", False),
+)
+
+
+@dataclass(frozen=True)
+class LifecycleWriterInventory:
+    """Everything the catalogue says about the writer, read back after installation.
+
+    The report a test compares and an operator reads. Every field comes from ``pg_catalog``
+    or ``information_schema`` on the connection that asked, so it describes what the
+    database enforces rather than what this module intended.
+    """
+
+    role: str
+    #: ``pg_roles`` attributes, by column name.
+    attributes: "dict[str, bool]"
+    #: Every object in the schema the writer owns, as ``"kind name"``. At ``0004`` exactly
+    #: the two entry points; at every earlier revision nothing.
+    owned_objects: tuple[str, ...]
+    #: Privileges held directly on the schema.
+    schema_privileges: frozenset[str]
+    #: ``table -> privileges`` held at table level.
+    table_privileges: "dict[str, frozenset[str]]"
+    #: ``(table, column) -> privileges`` held at column level, from ``pg_attribute.attacl``.
+    column_privileges: "dict[tuple[str, str], frozenset[str]]"
+    #: Every function in the schema the writer may execute, as
+    #: ``schema.name(identity arguments)``, owned ones included.
+    executable_functions: frozenset[str]
+    #: Every ``pg_auth_members`` row naming the writer, as
+    #: ``(grantor, member, admin_option, inherit_option, set_option)``.
+    memberships: tuple[tuple[str, str, bool, bool, bool], ...]
+    #: Whether ``firmbatch.lifecycle_writer_role()`` answers with this role -- the one fact
+    #: every guard depends on.
+    recognised: bool
+
+
+def _role_attributes(connection: Connection, role: str) -> "dict[str, bool] | None":
+    columns = ", ".join(name for name, _expected in LIFECYCLE_WRITER_ATTRIBUTES)
+    row = connection.execute(
+        text(f"SELECT {columns} FROM pg_catalog.pg_roles WHERE rolname = :role"),
+        {"role": role},
+    ).one_or_none()
+    if row is None:
+        return None
+    return {name: bool(value) for (name, _expected), value in zip(LIFECYCLE_WRITER_ATTRIBUTES, row)}
+
+
+def _schema_owner(connection: Connection) -> str:
+    return connection.execute(
+        text(
+            "SELECT pg_catalog.pg_get_userbyid(n.nspowner) FROM pg_catalog.pg_namespace n "
+            "WHERE n.nspname = :schema"
+        ),
+        {"schema": SCHEMA},
+    ).scalar_one()
+
+
+def _owned_by(connection: Connection, role: str) -> tuple[str, ...]:
+    """Every relation, function and type in the schema owned by ``role``."""
+    rows = connection.execute(
+        text(
+            "WITH target AS (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = :role) "
+            "SELECT 'relation:' || c.relkind::text AS kind, c.relname AS name "
+            "FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = :schema AND c.relowner IN (SELECT oid FROM target) "
+            "UNION ALL "
+            "SELECT 'function', n.nspname || '.' || p.proname || '(' "
+            "       || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')' "
+            "FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace "
+            "WHERE n.nspname = :schema AND p.proowner IN (SELECT oid FROM target) "
+            "UNION ALL "
+            "SELECT 'type', t.typname "
+            "FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace "
+            "WHERE n.nspname = :schema AND t.typtype IN ('c', 'd', 'e', 'r') "
+            "  AND t.typowner IN (SELECT oid FROM target) "
+            "UNION ALL "
+            "SELECT 'schema', n.nspname FROM pg_catalog.pg_namespace n "
+            "WHERE n.nspname = :schema AND n.nspowner IN (SELECT oid FROM target) "
+            "ORDER BY 1, 2"
+        ),
+        {"role": role, "schema": SCHEMA},
+    ).all()
+    return tuple(f"{kind} {name}" for kind, name in rows)
+
+
+def _function_owner(connection: Connection, name: str, signature: str) -> "str | None":
+    return connection.execute(
+        text(
+            "SELECT pg_catalog.pg_get_userbyid(p.proowner) FROM pg_catalog.pg_proc p "
+            "WHERE p.oid = pg_catalog.to_regprocedure(:function)"
+        ),
+        {"function": _function(name, signature)},
+    ).scalar_one_or_none()
+
+
+def _function_grantees(connection: Connection, name: str, signature: str) -> "list[str]":
+    """Every non-owner grantee in one function's ACL; ``PUBLIC`` is rendered as such."""
+    rows = connection.execute(
+        text(
+            "SELECT CASE WHEN acl.grantee = 0 THEN 'PUBLIC' "
+            "            ELSE pg_catalog.pg_get_userbyid(acl.grantee) END "
+            "FROM pg_catalog.pg_proc p "
+            "CROSS JOIN LATERAL pg_catalog.aclexplode(p.proacl) acl "
+            "WHERE p.oid = pg_catalog.to_regprocedure(:function) AND acl.grantee <> p.proowner"
+        ),
+        {"function": _function(name, signature)},
+    ).scalars()
+    return sorted(set(rows))
+
+
+def _revoke_everything_from(connection: Connection, role: str) -> None:
+    """Strip every grant ``role`` holds on an object the schema owner owns.
+
+    The sanitiser does this for every non-owner grantee; this does it for one role,
+    standalone, so that installing the writer never depends on the sanitiser having run
+    first and a stale grant from an earlier wiring cannot survive into the new one.
+    Enumerated from the catalogue -- the schema, relations and their columns, functions,
+    types -- and restricted to objects the schema owner owns, because those are the ones
+    the schema owner may revoke on.
+    """
+    quoted = quote_identifier(role)
+    parameters = {"role": role, "schema": SCHEMA}
+    if connection.execute(
+        text(
+            "SELECT count(*) FROM pg_catalog.pg_namespace n "
+            "CROSS JOIN LATERAL pg_catalog.aclexplode(n.nspacl) acl "
+            "WHERE n.nspname = :schema "
+            "  AND acl.grantee = (SELECT r.oid FROM pg_catalog.pg_roles r WHERE r.rolname = :role)"
+        ),
+        parameters,
+    ).scalar_one():
+        connection.execute(text(f"REVOKE ALL ON SCHEMA {quote_identifier(SCHEMA)} FROM {quoted}"))
+    for kind, obj in connection.execute(
+        text(
+            "SELECT DISTINCT CASE WHEN c.relkind = 'S' THEN 'SEQUENCE' ELSE 'TABLE' END, "
+            "       c.oid::pg_catalog.regclass::text "
+            "FROM pg_catalog.pg_class c "
+            "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+            "LEFT JOIN pg_catalog.pg_attribute a "
+            "  ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped "
+            "CROSS JOIN LATERAL pg_catalog.aclexplode("
+            "  COALESCE(c.relacl, '{}'::aclitem[]) || COALESCE(a.attacl, '{}'::aclitem[])) acl "
+            "WHERE n.nspname = :schema AND c.relowner = n.nspowner "
+            "  AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f') "
+            "  AND acl.grantee = (SELECT r.oid FROM pg_catalog.pg_roles r WHERE r.rolname = :role) "
+            "ORDER BY 2"
+        ),
+        parameters,
+    ).all():
+        connection.execute(text(f"REVOKE ALL ON {kind} {obj} FROM {quoted}"))
+    for (obj,) in connection.execute(
+        text(
+            "SELECT p.oid::pg_catalog.regprocedure::text "
+            "FROM pg_catalog.pg_proc p "
+            "JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace "
+            "CROSS JOIN LATERAL pg_catalog.aclexplode(p.proacl) acl "
+            "WHERE n.nspname = :schema AND p.proowner = n.nspowner "
+            "  AND acl.grantee = (SELECT r.oid FROM pg_catalog.pg_roles r WHERE r.rolname = :role) "
+            "ORDER BY 1"
+        ),
+        parameters,
+    ).all():
+        connection.execute(text(f"REVOKE ALL ON FUNCTION {obj} FROM {quoted}"))
+    for (obj,) in connection.execute(
+        text(
+            "SELECT t.oid::pg_catalog.regtype::text "
+            "FROM pg_catalog.pg_type t "
+            "JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace "
+            "CROSS JOIN LATERAL pg_catalog.aclexplode(t.typacl) acl "
+            "WHERE n.nspname = :schema AND t.typtype IN ('c', 'd', 'e', 'r') "
+            "  AND t.typowner = n.nspowner "
+            "  AND acl.grantee = (SELECT r.oid FROM pg_catalog.pg_roles r WHERE r.rolname = :role) "
+            "ORDER BY 1"
+        ),
+        parameters,
+    ).all():
+        connection.execute(text(f"REVOKE ALL ON TYPE {obj} FROM {quoted}"))
+
+
+def lifecycle_writer_inventory(connection: Connection, role: str) -> LifecycleWriterInventory:
+    """What the catalogue says the writer is, owns, holds and can be reached through."""
+    attributes = _role_attributes(connection, role)
+    if attributes is None:
+        raise LifecycleWriterError(f"there is no role named {role!r} to inventory")
+    parameters = {"role": role, "schema": SCHEMA}
+    schema_privileges = frozenset(
+        connection.execute(
+            text(
+                "SELECT acl.privilege_type FROM pg_catalog.pg_namespace n "
+                "CROSS JOIN LATERAL pg_catalog.aclexplode(n.nspacl) acl "
+                "WHERE n.nspname = :schema "
+                "  AND acl.grantee = (SELECT r.oid FROM pg_catalog.pg_roles r WHERE r.rolname = :role)"
+            ),
+            parameters,
+        ).scalars()
+    )
+    table_privileges: "dict[str, set[str]]" = {}
+    for table, privilege in connection.execute(
+        text(
+            "SELECT c.relname, acl.privilege_type FROM pg_catalog.pg_class c "
+            "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+            "CROSS JOIN LATERAL pg_catalog.aclexplode(c.relacl) acl "
+            "WHERE n.nspname = :schema AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f') "
+            "  AND acl.grantee = (SELECT r.oid FROM pg_catalog.pg_roles r WHERE r.rolname = :role)"
+        ),
+        parameters,
+    ).all():
+        table_privileges.setdefault(table, set()).add(privilege)
+    column_privileges: "dict[tuple[str, str], set[str]]" = {}
+    for table, column, privilege in connection.execute(
+        text(
+            "SELECT c.relname, a.attname, acl.privilege_type FROM pg_catalog.pg_class c "
+            "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+            "JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid "
+            "CROSS JOIN LATERAL pg_catalog.aclexplode(a.attacl) acl "
+            "WHERE n.nspname = :schema AND a.attnum > 0 AND NOT a.attisdropped "
+            "  AND acl.grantee = (SELECT r.oid FROM pg_catalog.pg_roles r WHERE r.rolname = :role)"
+        ),
+        parameters,
+    ).all():
+        column_privileges.setdefault((table, column), set()).add(privilege)
+    # Rendered from the catalogue rather than through ``regprocedure::text``, which omits
+    # the schema whenever the schema is on the connection's search_path -- and a migration
+    # changes that path, so two inventories of one database would otherwise compare unequal.
+    executable = frozenset(
+        connection.execute(
+            text(
+                "SELECT n.nspname || '.' || p.proname || '(' "
+                "       || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')' "
+                "FROM pg_catalog.pg_proc p "
+                "JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace "
+                "WHERE n.nspname = :schema "
+                "  AND pg_catalog.has_function_privilege(:role, p.oid, 'EXECUTE')"
+            ),
+            parameters,
+        ).scalars()
+    )
+    memberships = tuple(
+        (grantor, member, bool(admin), bool(inherit), bool(set_option))
+        for grantor, member, admin, inherit, set_option in connection.execute(
+            text(
+                "SELECT pg_catalog.pg_get_userbyid(m.grantor), pg_catalog.pg_get_userbyid(m.member), "
+                "       m.admin_option, m.inherit_option, m.set_option "
+                "FROM pg_catalog.pg_auth_members m "
+                "JOIN pg_catalog.pg_roles r ON r.oid = m.roleid "
+                "WHERE r.rolname = :role ORDER BY 1, 2"
+            ),
+            {"role": role},
+        ).all()
+    )
+    # Only a 0004 database has the identity function; at an earlier revision the writer is
+    # recognised by nothing, which is the correct answer rather than an error.
+    recognised = False
+    if connection.execute(
+        text("SELECT pg_catalog.to_regprocedure(:name) IS NOT NULL"),
+        {"name": _function("lifecycle_writer_role", "")},
+    ).scalar_one():
+        recognised = connection.execute(
+            text(
+                f"SELECT {SCHEMA}.lifecycle_writer_role() IS NOT DISTINCT FROM CAST(:role AS name)"
+            ),
+            {"role": role},
+        ).scalar_one()
+    return LifecycleWriterInventory(
+        role=role,
+        attributes=attributes,
+        owned_objects=_owned_by(connection, role),
+        schema_privileges=schema_privileges,
+        table_privileges={table: frozenset(privileges) for table, privileges in table_privileges.items()},
+        column_privileges={
+            key: frozenset(privileges) for key, privileges in column_privileges.items()
+        },
+        executable_functions=executable,
+        memberships=memberships,
+        recognised=bool(recognised),
+    )
+
+
+def install_lifecycle_writer(
+    connection: Connection, writer_role: str, application_role: str
+) -> LifecycleWriterInventory:
+    """Reconcile the lifecycle writer to this revision's plan, on the owner connection.
+
+    At ``0004``: hand the two entry points to the writer, give the writer exactly the
+    privileges their bodies need, write the entry points' ``EXECUTE`` grant to the
+    application role as the writer, and prove that ``firmbatch.lifecycle_writer_role()``
+    now answers with it. At every earlier revision: strip everything and prove it owns
+    nothing. Idempotent, so re-wiring a database that was already wired reaches the same
+    state rather than failing on the ownership it already has.
+
+    **Requires, for the duration of this call, that the connected schema owner can
+    ``SET ROLE`` to the writer.** The ownership hand-over needs it (PostgreSQL will not
+    give a function to a role its current owner cannot become), and so does resetting the
+    entry points' ACL afterwards, which only their owner may do. The trusted bootstrap
+    administrator grants that membership ``WITH SET TRUE, INHERIT FALSE, ADMIN FALSE``
+    immediately before and revokes it immediately after -- see
+    ``testing/bootstrap.temporary_set_membership`` -- and nothing here leaves a membership
+    behind: ``RESET ROLE`` runs in a ``finally``.
+
+    Refuses, with :class:`LifecycleWriterError`, a writer that can log in, that holds any
+    privileged attribute, that is the schema owner or the application role, that any role
+    other than the connected owner can ``SET ROLE`` to or inherit from, or that owns anything
+    in the schema other than the two entry points.
+    """
+    quoted = quote_identifier(writer_role)
+    application = quote_identifier(application_role)
+    plan = revision_plan(connection)
+    owner = _schema_owner(connection)
+    current = connection.execute(text("SELECT current_user")).scalar_one()
+
+    attributes = _role_attributes(connection, writer_role)
+    if attributes is None:
+        raise LifecycleWriterError(
+            f"the lifecycle writer role {writer_role!r} does not exist. It is created by the "
+            "bootstrap administrator alongside the per-run roles; role wiring never creates one."
+        )
+    wrong = [
+        f"{name}={attributes[name]}"
+        for name, expected in LIFECYCLE_WRITER_ATTRIBUTES
+        if attributes[name] != expected
+    ]
+    if wrong:
+        raise LifecycleWriterError(
+            f"the lifecycle writer role {writer_role!r} carries {wrong}. It must be NOLOGIN, "
+            "NOSUPERUSER, NOCREATEROLE, NOCREATEDB, NOREPLICATION, NOBYPASSRLS and NOINHERIT: an "
+            "identity that can log in or reach anything on its own proves nothing about who "
+            "wrote a row."
+        )
+    if writer_role in (owner, application_role, current):
+        raise LifecycleWriterError(
+            f"the lifecycle writer role {writer_role!r} must be distinct from the schema owner, "
+            "the application role and the connected role; the whole point is that none of them "
+            "is it."
+        )
+    reachable = [
+        (member, grantor)
+        for grantor, member, _admin, inherit, set_option in lifecycle_writer_inventory(
+            connection, writer_role
+        ).memberships
+        if member != current and (inherit or set_option)
+    ]
+    if reachable:
+        raise LifecycleWriterError(
+            f"the lifecycle writer role {writer_role!r} can be reached by {sorted(reachable)} "
+            "through a membership carrying SET or INHERIT. Only the connected owner may hold "
+            "such a membership, and only for the duration of this call."
+        )
+
+    # --- what the writer held before is gone; what it holds after is exactly the plan -------
+    _revoke_everything_from(connection, writer_role)
+
+    if not plan.lifecycle_writer_functions:
+        owned = _owned_by(connection, writer_role)
+        if owned:
+            raise LifecycleWriterError(
+                f"schema revision {plan.revision!r} has no lifecycle writer, yet {writer_role!r} "
+                f"owns {sorted(owned)}. The downgrade to this revision drops the entry points; "
+                "an object it still owns was not created by this repository's migrations."
+            )
+        return lifecycle_writer_inventory(connection, writer_role)
+
+    # --- the hand-over ---------------------------------------------------------------------
+    pending = []
+    for name, signature in plan.lifecycle_writer_functions:
+        holder = _function_owner(connection, name, signature)
+        if holder == writer_role:
+            continue
+        if holder != owner:
+            raise LifecycleWriterError(
+                f"{_function(name, signature)} is owned by {holder!r}, which is neither the schema "
+                f"owner nor the lifecycle writer {writer_role!r}. The schema owner cannot hand over "
+                "a function it does not own; this is not a state the migrations produce."
+            )
+        pending.append((name, signature))
+    if pending:
+        # PostgreSQL's two conditions for ALTER ... OWNER TO: the new owner must hold CREATE
+        # on the schema (granted for these statements and revoked straight after), and the
+        # current owner must be able to SET ROLE to it (the temporary membership).
+        connection.execute(
+            text(f"GRANT CREATE ON SCHEMA {quote_identifier(SCHEMA)} TO {quoted}")
+        )
+        try:
+            for name, signature in pending:
+                try:
+                    connection.execute(
+                        text(f"ALTER FUNCTION {_function(name, signature)} OWNER TO {quoted}")
+                    )
+                except Exception as exc:
+                    raise LifecycleWriterError(
+                        f"could not hand {_function(name, signature)} to the lifecycle writer "
+                        f"{writer_role!r}: {type(exc).__name__}: {str(exc).splitlines()[0]}. "
+                        "The connected schema owner must be able to SET ROLE to the writer for "
+                        "the duration of install_lifecycle_writer(); the bootstrap administrator "
+                        "grants that membership WITH SET TRUE, INHERIT FALSE, ADMIN FALSE "
+                        "immediately before and revokes it immediately after."
+                    ) from None
+        finally:
+            connection.execute(
+                text(f"REVOKE CREATE ON SCHEMA {quote_identifier(SCHEMA)} FROM {quoted}")
+            )
+    # Compared by object identity rather than by rendered name: how a regprocedure renders
+    # depends on the connection's search_path, and what matters is which objects they are.
+    expected_owned = {
+        connection.execute(
+            text("SELECT pg_catalog.to_regprocedure(:name)::pg_catalog.oid"),
+            {"name": _function(name, signature)},
+        ).scalar_one()
+        for name, signature in plan.lifecycle_writer_functions
+    }
+    owned = set(
+        connection.execute(
+            text(
+                "SELECT p.oid FROM pg_catalog.pg_proc p "
+                "JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace "
+                "WHERE n.nspname = :schema "
+                "  AND p.proowner = (SELECT r.oid FROM pg_catalog.pg_roles r WHERE r.rolname = :role)"
+            ),
+            {"schema": SCHEMA, "role": writer_role},
+        ).scalars()
+    )
+    other = [
+        entry for entry in _owned_by(connection, writer_role) if not entry.startswith("function ")
+    ]
+    if owned != expected_owned or other:
+        raise LifecycleWriterError(
+            f"the lifecycle writer {writer_role!r} owns "
+            f"{sorted(_owned_by(connection, writer_role))} but must own exactly the two entry "
+            "points and nothing else: not a table, not a type, not the schema, not a third "
+            "function."
+        )
+
+    # --- the minimum the bodies need ------------------------------------------------------
+    connection.execute(text(f"GRANT USAGE ON SCHEMA {quote_identifier(SCHEMA)} TO {quoted}"))
+    for name, signature in plan.lifecycle_writer_helper_functions:
+        connection.execute(
+            text(f"GRANT EXECUTE ON FUNCTION {_function(name, signature)} TO {quoted}")
+        )
+    _grant_tables(connection, quoted, plan.lifecycle_writer_grants)
+    _grant_columns(connection, quoted, plan.lifecycle_writer_column_grants)
+
+    # --- the entry points' own ACL, written by their owner ---------------------------------
+    #
+    # The schema owner may neither GRANT nor REVOKE on a function it does not own, so this
+    # runs under SET ROLE to the writer: every grantee but the owner is removed, PUBLIC's
+    # default is removed, and the application role -- and only it -- is granted EXECUTE.
+    try:
+        connection.execute(text(f"SET ROLE {quoted}"))
+    except Exception as exc:
+        raise LifecycleWriterError(
+            f"the connected schema owner cannot SET ROLE to the lifecycle writer {writer_role!r} "
+            f"({type(exc).__name__}: {str(exc).splitlines()[0]}), so it cannot reset the entry "
+            "points' privileges. The bootstrap administrator grants that membership WITH SET "
+            "TRUE, INHERIT FALSE, ADMIN FALSE for the duration of install_lifecycle_writer() "
+            "and revokes it afterwards."
+        ) from None
+    try:
+        for name, signature in plan.lifecycle_writer_functions:
+            function = _function(name, signature)
+            for grantee in _function_grantees(connection, name, signature):
+                target = "PUBLIC" if grantee == "PUBLIC" else quote_identifier(grantee)
+                connection.execute(text(f"REVOKE ALL ON FUNCTION {function} FROM {target}"))
+            connection.execute(text(f"REVOKE ALL ON FUNCTION {function} FROM PUBLIC"))
+            connection.execute(text(f"GRANT EXECUTE ON FUNCTION {function} TO {application}"))
+    finally:
+        connection.execute(text("RESET ROLE"))
+
+    inventory = lifecycle_writer_inventory(connection, writer_role)
+    if not inventory.recognised:
+        raise LifecycleWriterError(
+            f"after installation firmbatch.lifecycle_writer_role() does not answer "
+            f"{writer_role!r}, so no lifecycle-derived write would be accepted. The function "
+            "requires both entry points to be SECURITY DEFINER, owned by one non-owner role "
+            "that cannot log in and holds no privileged attribute; one of those is not true."
+        )
+    return inventory

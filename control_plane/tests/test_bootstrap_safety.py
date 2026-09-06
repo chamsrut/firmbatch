@@ -282,6 +282,7 @@ def test_a_failure_after_creation_removes_the_database_and_roles(environment, mo
     assert not _database_exists(environment, database), f"{database} was left behind"
     assert not _role_exists(environment, f"firmbatch_test_app_{suffix}"), "the application role was left behind"
     assert not _role_exists(environment, f"firmbatch_test_prov_{suffix}"), "the provisioning role was left behind"
+    assert not _role_exists(environment, f"firmbatch_test_lcw_{suffix}"), "the lifecycle writer was left behind"
 
 
 def test_a_failure_during_grant_configuration_also_cleans_up(environment, monkeypatch):
@@ -309,6 +310,7 @@ def test_a_failure_during_grant_configuration_also_cleans_up(environment, monkey
     assert not _database_exists(environment, f"firmbatch_test_{suffix}"), "the database was left behind"
     assert not _role_exists(environment, f"firmbatch_test_app_{suffix}"), "the application role was left behind"
     assert not _role_exists(environment, f"firmbatch_test_prov_{suffix}"), "the provisioning role was left behind"
+    assert not _role_exists(environment, f"firmbatch_test_lcw_{suffix}"), "the lifecycle writer was left behind"
 
 
 def test_a_failure_after_creation_does_not_disclose_the_generated_password(environment, monkeypatch, capsys):
@@ -418,6 +420,7 @@ def test_created_objects_carry_an_oid_and_a_provenance_marker(disposable_databas
         disposable_database.owner_role,
         disposable_database.application_role,
         disposable_database.provisioning_role,
+        disposable_database.lifecycle_writer_role,
     }
     for recorded in disposable_database.created:
         assert recorded.oid > 0
@@ -468,7 +471,12 @@ def test_teardown_refuses_a_database_replaced_under_the_same_name(environment):
             environment,
             database=None,
             owner_role=handle.owner_role,
-            role_names=(handle.application_role, handle.provisioning_role, handle.owner_role),
+            role_names=(
+                handle.application_role,
+                handle.provisioning_role,
+                handle.owner_role,
+                handle.lifecycle_writer_role,
+            ),
         )
 
 
@@ -499,7 +507,12 @@ def test_teardown_refuses_a_role_replaced_under_the_same_name(environment):
             environment,
             database=None,
             owner_role=handle.owner_role,
-            role_names=(role, handle.provisioning_role, handle.owner_role),
+            role_names=(
+                role,
+                handle.provisioning_role,
+                handle.owner_role,
+                handle.lifecycle_writer_role,
+            ),
         )
 
 
@@ -631,5 +644,6 @@ def test_cleanup_leaves_objects_alone_when_the_attestation_is_gone(environment, 
                 f"firmbatch_test_app_{suffix}",
                 f"firmbatch_test_prov_{suffix}",
                 f"firmbatch_test_own_{suffix}",
+                f"firmbatch_test_lcw_{suffix}",
             ),
         )

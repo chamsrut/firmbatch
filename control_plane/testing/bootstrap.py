@@ -15,15 +15,20 @@ connection (``.../postgres``):
    teardown can prove it is talking to the same server it created on.
 3. Creates ``firmbatch_test_<12 random hex>`` plus **three** per-run login roles with
    random passwords -- owner, application, provisioning -- all ``NOSUPERUSER NOCREATEDB
-   NOCREATEROLE NOBYPASSRLS NOREPLICATION``, each created in its own transaction and
+   NOCREATEROLE NOBYPASSRLS NOREPLICATION``, and a **fourth, ``NOLOGIN``** role with no
+   credential at all -- the lifecycle writer -- each created in its own transaction and
    recorded with its OID and a random provenance marker.
-4. Revokes ``CONNECT`` and ``TEMPORARY`` from ``PUBLIC`` and grants ``CONNECT`` to those
-   three roles only.
+4. Revokes ``CONNECT`` and ``TEMPORARY`` from ``PUBLIC`` and grants ``CONNECT`` to the
+   three login roles only.
 5. Applies every migration as the owner, after confirming the owner connection is
    attached to the database just created.
-6. Grants the application and provisioning roles exactly the privileges in ``db/roles.py``.
+6. Grants the application and provisioning roles exactly the privileges in ``db/roles.py``,
+   then hands the two lifecycle entry points to the lifecycle writer: the administrator
+   grants the owner a ``SET``-only membership in the writer for the duration of
+   ``roles.install_lifecycle_writer()`` and revokes it immediately after, and a fresh
+   connection confirms nothing of it survived (:func:`wire_roles`).
 
-Teardown removes all four objects. The one thing it must never remove is the persistent
+Teardown removes all five objects. The one thing it must never remove is the persistent
 ``firmbatch_disposable_test_cluster`` attestation marker, which is what makes any of this
 permissible on a given server; it does not match the disposable-role pattern, so cleanup
 cannot reach it.
@@ -71,6 +76,7 @@ from __future__ import annotations
 import os
 import secrets
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Mapping
 
@@ -172,6 +178,10 @@ class DisposableDatabase:
     #: issued over this, so the permission check binds to the recorded owner identity
     #: rather than to ambient cluster-admin authority.
     owner_maintenance_url: str = ""
+    #: The lifecycle writer: ``NOLOGIN``, no credential, no URL. It owns the two lifecycle
+    #: entry points and nothing else, and nothing can ``SET ROLE`` to it once the bootstrap
+    #: has finished. Recorded so that teardown drops it and validation can name it.
+    lifecycle_writer_role: str = ""
     token: str = field(default_factory=lambda: secrets.token_hex(16))
 
     def __repr__(self) -> str:  # pragma: no cover - exercised through str()
@@ -197,6 +207,7 @@ def _identity_fields(handle: DisposableDatabase) -> dict[str, str]:
         "provisioning_role": handle.provisioning_role,
         "owner_role": handle.owner_role,
         "owner_maintenance_url": handle.owner_maintenance_url,
+        "lifecycle_writer_role": handle.lifecycle_writer_role,
         "endpoint": repr(handle.endpoint),
         "fingerprint": repr(handle.fingerprint),
         "created": repr(handle.created),
@@ -485,6 +496,52 @@ def _create_login_role(engine, role: str, password: str, marker: str, record) ->
     return identity
 
 
+def _create_nologin_role(engine, role: str, marker: str, record) -> ObjectIdentity:
+    """Create the lifecycle writer: the same transaction shape, and no way to log in.
+
+    ``NOLOGIN`` and no password, because the role has no credential by design: it exists
+    to *own* the two lifecycle entry points so that they execute as it, and the only code
+    that ever runs as it is those two function bodies. ``NOINHERIT`` because it is never
+    meant to be a member of anything. The rest of the profile is the runtime roles' --
+    ``NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION`` -- and
+    ``db/roles.py`` refuses to install a writer that carries anything more.
+
+    Recorded before the commit and refused if the name exists, for exactly the reasons
+    :func:`_create_login_role` gives.
+    """
+    from psycopg import sql
+
+    statement = sql.SQL(
+        "CREATE ROLE {role} NOLOGIN "
+        "NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION NOINHERIT"
+    ).format(role=sql.Identifier(role))
+
+    try:
+        with engine.connect() as connection:
+            with connection.begin():
+                if _role_exists(connection, role):
+                    raise DisposableDatabaseError(
+                        f"role {role!r} already exists. It was not created by this process and must "
+                        "not be adopted or removed; aborting rather than touching it."
+                    )
+                with connection.connection.driver_connection.cursor() as cursor:
+                    cursor.execute(statement)
+                _comment_on(connection, "role", role, marker)
+                identity = _read_role_identity(connection, role, marker=marker)
+                if identity is None:  # pragma: no cover - CREATE ROLE silently did nothing
+                    raise DisposableDatabaseError(
+                        f"role {role!r} is absent immediately after being created"
+                    )
+                record(identity)
+    except DisposableDatabaseError:
+        raise
+    except Exception as exc:
+        raise DisposableDatabaseError(
+            f"could not create test role {role!r}: {type(exc).__name__}: {exc}"
+        ) from None
+    return identity
+
+
 # ------------------------------------------- giving back the temporary owner membership
 
 
@@ -668,6 +725,93 @@ def _require_temporary_membership_released(admin_url: str, role: str) -> None:
                 )
     finally:
         engine.dispose()
+
+
+# ------------------------------------------------------- installing the lifecycle writer
+#
+# The writer is handed the two lifecycle entry points by the schema owner, and PostgreSQL
+# will only let an owner give a function to a role it can ``SET ROLE`` to. The per-run
+# owner is ``NOCREATEROLE`` and holds no membership, so the bootstrap administrator grants
+# one -- ``SET`` only, no ``INHERIT``, no ``ADMIN`` -- for exactly the duration of the
+# installation and revokes it in a ``finally``, the same shape as the one-statement
+# membership ``CREATE DATABASE ... OWNER`` needs. A fresh connection then confirms no row
+# carrying ``SET`` or ``INHERIT`` survived, so the writer is reachable by nobody afterwards.
+
+
+@contextmanager
+def temporary_set_membership(admin_url: str, *, role: str, member: str):
+    """Let ``member`` ``SET ROLE`` to ``role`` for the duration of the block, and no longer.
+
+    Granted and revoked by the bootstrap administrator, which holds ``ADMIN OPTION`` on
+    every role it created. The revoke is total -- the row is removed, not merely stripped
+    of options -- and is verified on a new connection afterwards, because role membership is
+    resolved per session and the session that did the revoke could answer from state a
+    fresh login would not have. A verification failure is raised, not printed: a standing
+    ``SET`` membership in the lifecycle writer is exactly the reachable-role path the writer
+    exists to rule out.
+    """
+    engine = _admin_engine(admin_url)
+    try:
+        with engine.connect() as connection:
+            connection.execute(
+                text(
+                    f"GRANT {roles.quote_identifier(role)} TO {roles.quote_identifier(member)} "
+                    "WITH SET TRUE, INHERIT FALSE, ADMIN FALSE"
+                )
+            )
+        try:
+            yield
+        finally:
+            with engine.connect() as connection:
+                connection.execute(
+                    text(f"REVOKE {roles.quote_identifier(role)} FROM {roles.quote_identifier(member)}")
+                )
+    finally:
+        engine.dispose()
+    _require_temporary_membership_released(admin_url, role)
+
+
+def wire_roles(
+    connection,
+    *,
+    admin_url: str,
+    database: str,
+    owner_role: str,
+    application_role: str,
+    provisioning_role: str,
+    lifecycle_writer_role: str,
+) -> None:
+    """The whole role wiring, in the one order it is correct in, on an owner connection.
+
+    Harden, strip, grant the two runtime roles, then install the lifecycle writer under
+    the temporary ``SET`` membership. Used by the bootstrap and by every test that re-wires
+    a database after a migration round trip, so that "what the wiring does" is one function
+    rather than four calls somebody has to keep in the right order. Commits nothing; the
+    caller's transaction is what makes the wiring durable.
+
+    The ``roles`` functions are looked up on the module at call time, deliberately: the
+    bootstrap tests replace one of them to simulate a failure part-way through, and a
+    binding captured at import would defeat that.
+    """
+    roles.harden_database(connection, database)
+    roles.revoke_public_table_privileges(connection)
+    roles.grant_application_role(connection, application_role)
+    roles.grant_provisioning_role(connection, provisioning_role)
+    with temporary_set_membership(admin_url, role=lifecycle_writer_role, member=owner_role):
+        roles.install_lifecycle_writer(connection, lifecycle_writer_role, application_role)
+
+
+def wire_handle_roles(connection, handle: "DisposableDatabase") -> None:
+    """:func:`wire_roles` for a bootstrap handle."""
+    wire_roles(
+        connection,
+        admin_url=handle.admin_url,
+        database=handle.database,
+        owner_role=handle.owner_role,
+        application_role=handle.application_role,
+        provisioning_role=handle.provisioning_role,
+        lifecycle_writer_role=handle.lifecycle_writer_role,
+    )
 
 
 def _verify_owner_authority(
@@ -989,6 +1133,10 @@ def create_disposable_database(env: Mapping[str, str] | None = None) -> Disposab
     owner_role = f"firmbatch_test_own_{suffix}"
     application_role = f"firmbatch_test_app_{suffix}"
     provisioning_role = f"firmbatch_test_prov_{suffix}"
+    # The lifecycle writer: NOLOGIN, so it has no password and no URL. It is a per-run role
+    # like the other three because roles are cluster-wide and two suites sharing a cluster
+    # must not share -- or fight over -- the role that owns their lifecycle entry points.
+    lifecycle_writer_role = f"firmbatch_test_lcw_{suffix}"
     owner_password, application_password, provisioning_password = (secrets.token_hex(16) for _ in range(3))
     passwords = (owner_password, application_password, provisioning_password)
     marker = f"firmbatch-disposable-{secrets.token_hex(16)}"
@@ -997,7 +1145,7 @@ def create_disposable_database(env: Mapping[str, str] | None = None) -> Disposab
     # drift apart, this fails before anything exists rather than at teardown, when a drop
     # would be refused and the database would be left behind.
     config.require_disposable_database(_swap_database(admin_url, database))
-    for role in (owner_role, application_role, provisioning_role):
+    for role in (owner_role, application_role, provisioning_role, lifecycle_writer_role):
         config.require_disposable_role(role)
 
     # ------------------------------------------------------------------ state machine
@@ -1060,9 +1208,11 @@ def create_disposable_database(env: Mapping[str, str] | None = None) -> Disposab
             require_supported_server_version(fingerprint.server_version_num)
             host, port = _tcp_endpoint(admin_url, connection)
 
-        # --- S0 -> S1: the three roles, each in its own transaction -------------------
+        # --- S0 -> S1: the four roles, each in its own transaction --------------------
         for role, password in zip((owner_role, application_role, provisioning_role), passwords):
             _create_login_role(transactional, role, password, marker, created.append)
+        # The lifecycle writer last, and with no credential: nothing connects as it.
+        _create_nologin_role(transactional, lifecycle_writer_role, marker, created.append)
 
         # The owner needs to be able to terminate the runtime roles' backends at teardown;
         # pg_terminate_backend allows it for a role the caller is a member of. Membership
@@ -1205,10 +1355,15 @@ def create_disposable_database(env: Mapping[str, str] | None = None) -> Disposab
                 connection.commit()
 
                 _validate(connection, "owner connection before grants")
-                roles.harden_database(connection, database)
-                roles.revoke_public_table_privileges(connection)
-                roles.grant_application_role(connection, application_role)
-                roles.grant_provisioning_role(connection, provisioning_role)
+                wire_roles(
+                    connection,
+                    admin_url=admin_url,
+                    database=database,
+                    owner_role=owner_role,
+                    application_role=application_role,
+                    provisioning_role=provisioning_role,
+                    lifecycle_writer_role=lifecycle_writer_role,
+                )
                 connection.commit()
         finally:
             owner.dispose()
@@ -1233,6 +1388,7 @@ def create_disposable_database(env: Mapping[str, str] | None = None) -> Disposab
         endpoint=endpoint,
         created=tuple(created),
         owner_maintenance_url=owner_maintenance_url,
+        lifecycle_writer_role=lifecycle_writer_role,
     )
     _PROVISIONED[handle.token] = _identity_fields(handle)
     return handle
@@ -1256,6 +1412,7 @@ def _validate_teardown_target(handle: DisposableDatabase, connection) -> None:
     config.require_disposable_role(handle.application_role)
     config.require_disposable_role(handle.provisioning_role)
     config.require_disposable_role(handle.owner_role)
+    config.require_disposable_role(handle.lifecycle_writer_role)
 
     # --- the handle must be internally consistent ------------------------------------
     migration_database = config.database_name(handle.migration_url)

@@ -230,6 +230,7 @@ def test_a_failure_during_role_creation_leaves_no_role_behind(environment, stage
         f"firmbatch_test_own_{suffix}",
         f"firmbatch_test_app_{suffix}",
         f"firmbatch_test_prov_{suffix}",
+        f"firmbatch_test_lcw_{suffix}",
     ):
         assert not _exists(environment, role=role), f"{role} survived a rolled-back creation"
     assert not _exists(environment, database=f"firmbatch_test_{suffix}")
@@ -356,6 +357,7 @@ def test_a_failure_before_the_marker_still_permits_owner_bound_cleanup(environme
         f"firmbatch_test_own_{suffix}",
         f"firmbatch_test_app_{suffix}",
         f"firmbatch_test_prov_{suffix}",
+        f"firmbatch_test_lcw_{suffix}",
     ):
         assert not _exists(environment, role=role)
 
@@ -472,6 +474,7 @@ def test_a_replacement_is_not_revoked_terminated_or_dropped(environment, admin_e
                 handle.application_role,
                 handle.provisioning_role,
                 handle.owner_role,
+                handle.lifecycle_writer_role,
                 other_owner,
             ):
                 connection.execute(text(f'DROP ROLE IF EXISTS "{role}"'))
@@ -515,7 +518,12 @@ def test_cleanup_reports_a_safe_leak_rather_than_forcing(environment, monkeypatc
             environment,
             database=handle.database,
             owner_role=handle.owner_role,
-            role_names=(handle.application_role, handle.provisioning_role, handle.owner_role),
+            role_names=(
+                handle.application_role,
+                handle.provisioning_role,
+                handle.owner_role,
+                handle.lifecycle_writer_role,
+            ),
         )
 
 
@@ -563,7 +571,7 @@ def _per_run_objects(environment) -> tuple[list[str], list[str]]:
                 for row in connection.execute(
                     text(
                         "SELECT rolname FROM pg_roles "
-                        "WHERE rolname ~ '^firmbatch_test_(own|app|prov)_[0-9a-f]{12}$' ORDER BY 1"
+                        "WHERE rolname ~ '^firmbatch_test_(own|app|prov|lcw)_[0-9a-f]{12}$' ORDER BY 1"
                     )
                 )
             ]
@@ -589,16 +597,21 @@ def _marker_present(environment) -> bool:
 def test_a_full_lifecycle_leaks_no_per_run_object_and_keeps_the_marker(environment):
     """Create, migrate, drop -- and account for every object by kind afterwards.
 
-    The three per-run roles are named individually rather than counted, so a teardown that
-    removed two of the three would fail here rather than pass a total that happened to
+    The four per-run roles are named individually rather than counted, so a teardown that
+    removed three of the four would fail here rather than pass a total that happened to
     match.
     """
     assert _marker_present(environment), "the cluster is not attested; nothing else is meaningful"
 
     handle = bootstrap.create_disposable_database(environment)
-    created_roles = (handle.owner_role, handle.application_role, handle.provisioning_role)
-    assert len({role.rsplit("_", 2)[1] for role in created_roles}) == 3, (
-        "the three per-run roles must be distinguishable by kind"
+    created_roles = (
+        handle.owner_role,
+        handle.application_role,
+        handle.provisioning_role,
+        handle.lifecycle_writer_role,
+    )
+    assert len({role.rsplit("_", 2)[1] for role in created_roles}) == 4, (
+        "the four per-run roles must be distinguishable by kind"
     )
 
     databases, roles = _per_run_objects(environment)

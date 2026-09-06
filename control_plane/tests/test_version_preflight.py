@@ -159,7 +159,7 @@ def test_an_unsupported_server_provisions_nothing(environment, monkeypatch, labe
     assert after_databases == before_databases, f"{label}: a database was created"
     assert after_roles == before_roles, f"{label}: roles were created"
     assert f"firmbatch_test_{suffix}" not in after_databases
-    for kind in ("own", "app", "prov"):
+    for kind in ("own", "app", "prov", "lcw"):
         assert f"firmbatch_test_{kind}_{suffix}" not in after_roles, f"{label}: {kind} role created"
     assert marker_after, f"{label}: the attestation marker was altered"
 

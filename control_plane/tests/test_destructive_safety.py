@@ -155,10 +155,11 @@ def test_the_runtime_roles_carry_the_documented_profile(owner_engine, disposable
                     disposable_database.application_role,
                     disposable_database.provisioning_role,
                     disposable_database.owner_role,
+                    disposable_database.lifecycle_writer_role,
                 ]
             },
         ).all()
-    assert len(rows) == 3
+    assert len(rows) == 4
     for row in rows:
         assert tuple(row[1:]) == (False, False, False, False, False), row[0]
 
@@ -300,6 +301,7 @@ def test_a_replacement_database_owned_by_another_identity_is_not_dropped(environ
                 handle.application_role,
                 handle.provisioning_role,
                 handle.owner_role,
+                handle.lifecycle_writer_role,
                 other_owner,
             ):
                 connection.execute(text(f'DROP ROLE IF EXISTS "{role}"'))
@@ -359,5 +361,10 @@ def test_a_role_replaced_under_the_same_name_is_not_dropped(environment, admin_e
         assert still == replacement_oid, "the replacement role was destroyed"
     finally:
         with admin_engine.connect() as connection:
-            for name in (handle.application_role, handle.provisioning_role, handle.owner_role):
+            for name in (
+                handle.application_role,
+                handle.provisioning_role,
+                handle.owner_role,
+                handle.lifecycle_writer_role,
+            ):
                 connection.execute(text(f'DROP ROLE IF EXISTS "{name}"'))

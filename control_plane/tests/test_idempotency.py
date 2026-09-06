@@ -29,9 +29,11 @@ import uuid
 import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError, ProgrammingError
+from sqlalchemy.orm import Session
 
 from firmbatch.control_plane.db import auth
 from firmbatch.control_plane.db import engine as db_engine
+from firmbatch.control_plane.db import idempotency
 from firmbatch.control_plane.db.base import SCHEMA
 from firmbatch.control_plane.db.idempotency import (
     IdempotencyConflict,
@@ -445,6 +447,147 @@ def test_the_unit_of_work_refuses_every_transaction_control_operation(operation)
         getattr(unit_of_work, operation)()
     assert operation in str(exc.value)
     assert "rollback-safe transactional DML" in str(exc.value)
+
+
+# ------------------------------------------------------- the forwarders name nothing
+#
+# Every forwarding method on the unit of work was built as
+#
+#     def forward(self, *args, _name=name, **kwargs):
+#         return getattr(self.__session, _name)(*args, **kwargs)
+#
+# which captures the loop variable correctly and makes ``_name`` a keyword the **caller**
+# can supply. So every one of them was a way to call any method on the underlying
+# ``Session``: ``unit_of_work.add(row, _name="connection")`` returned the raw connection
+# this class exists to withhold, and the same trick reached ``rollback``,
+# ``get_transaction`` and every refusal in ``_REFUSED_OPERATIONS``. The name is closed over
+# now, and these are what would notice it coming back.
+
+
+class _RecordingSession:
+    """Answers any attribute with a callable that records how it was reached.
+
+    Deliberately permissive about its arguments. A strict double would raise ``TypeError``
+    for ``_name=`` by itself and the test would then be asserting the double's signature
+    rather than the unit of work's behaviour. What this one can show is the thing that
+    matters: which method was actually reached.
+    """
+
+    def __init__(self) -> None:
+        self.reached: list[str] = []
+
+    def __getattr__(self, name):
+        def call(*args, **kwargs):
+            self.reached.append(name)
+            return name
+
+        return call
+
+
+@pytest.mark.parametrize(
+    "target", ["connection", "get_transaction", "rollback", "commit", "get_bind", "close"]
+)
+@pytest.mark.parametrize("forwarded", sorted(idempotency._FORWARDED_OPERATIONS))
+def test_a_forwarded_method_cannot_be_told_to_call_a_different_one(forwarded, target):
+    """``_name=`` does not redirect, and against a real ``Session`` it does not parse.
+
+    The grid is the point: every forwarded method against every operation the unit of work
+    refuses. One of them accepting ``_name`` would be the whole boundary gone, so the test
+    enumerates rather than samples.
+
+    Two assertions, because they establish different halves. Against the recorder, the call
+    reaches the method it names and no other -- so the keyword is inert rather than a
+    redirection. Against a **real** unbound ``Session``, it raises ``TypeError``, because no
+    ``Session`` method has a ``_name`` parameter and neither does the forwarder any more.
+    """
+    recorder = _RecordingSession()
+    getattr(MutationUnitOfWork(recorder), forwarded)(_name=target)
+    assert recorder.reached == [forwarded], (
+        f"{forwarded}(_name={target!r}) reached {recorder.reached}"
+    )
+
+    real = Session()
+    try:
+        with pytest.raises(TypeError):
+            getattr(MutationUnitOfWork(real), forwarded)(_name=target)
+    finally:
+        real.close()
+
+
+@pytest.mark.parametrize("forwarded", sorted(idempotency._FORWARDED_OPERATIONS))
+def test_a_forwarded_method_takes_only_what_it_forwards(forwarded):
+    """A positional attempt at the same trick, and a control that forwarding still works.
+
+    Positional arguments cannot name a method -- there is no parameter left to bind one to
+    -- so they are passed through to the target, which is the behaviour the unit of work is
+    for. The control asserts that: ``add("connection")`` calls ``Session.add``, not
+    ``Session.connection``.
+    """
+    session = _RecordingSession()
+    unit_of_work = MutationUnitOfWork(session)
+    assert getattr(unit_of_work, forwarded)("connection") == forwarded
+    assert session.reached == [forwarded]
+
+
+def test_in_transaction_is_a_zero_argument_boolean_and_nothing_else():
+    """Written out on the class rather than generated, so it has nothing to forward.
+
+    It answers a boolean about the transaction and reaches no other method. Anything passed
+    to it is a ``TypeError`` from Python itself, which is the cheapest enforcement there is
+    and the one nobody has to maintain.
+    """
+
+    class _Open:
+        def in_transaction(self):
+            return "truthy, and not a bool"
+
+    unit_of_work = MutationUnitOfWork(_Open())
+    result = unit_of_work.in_transaction()
+    assert result is True, "it must coerce to a real bool rather than leak what it was given"
+
+    for attempt in (
+        lambda: unit_of_work.in_transaction("connection"),
+        lambda: unit_of_work.in_transaction(_name="connection"),
+        lambda: unit_of_work.in_transaction(anything=1),
+    ):
+        with pytest.raises(TypeError):
+            attempt()
+
+
+def test_no_forwarded_or_refused_method_declares_a_caller_settable_name():
+    """The rule, asserted on the signatures rather than on one exploit.
+
+    A parameter whose *value* selects which ``Session`` method runs is the defect; this
+    refuses any parameter that could become one, on every method the class exposes.
+    """
+    import inspect
+
+    names = set(idempotency._FORWARDED_OPERATIONS) | set(idempotency._REFUSED_OPERATIONS)
+    for name in names | {"in_transaction"}:
+        signature = inspect.signature(getattr(MutationUnitOfWork, name))
+        for parameter in signature.parameters.values():
+            assert parameter.default is inspect.Parameter.empty or parameter.name == "self", (
+                f"MutationUnitOfWork.{name} declares {parameter.name!r} with a default, which a "
+                "caller can supply"
+            )
+
+
+def test_the_unit_of_work_hands_back_no_session_or_connection():
+    """Nothing on the public surface returns the thing it wraps.
+
+    The private reference is name-mangled, every route out is refused, and the forwarded
+    methods return whatever the ORM operation returns -- never the session itself.
+    """
+    session = _RecordingSession()
+    unit_of_work = MutationUnitOfWork(session)
+    public = [name for name in dir(unit_of_work) if not name.startswith("_")]
+    assert set(public) == set(idempotency._FORWARDED_OPERATIONS) | set(
+        idempotency._REFUSED_OPERATIONS
+    ) | {"in_transaction"}
+    for name in idempotency._REFUSED_OPERATIONS:
+        with pytest.raises(MutationContractError):
+            getattr(unit_of_work, name)()
+    assert session.reached == []
 
 
 def test_the_transaction_boundary_survives_the_callback(application_engine, principal_a):
