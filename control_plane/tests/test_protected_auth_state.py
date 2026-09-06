@@ -214,24 +214,44 @@ def test_the_context_writer_and_its_guard_are_granted_to_nobody(owner_engine, di
     current user is the schema owner and the privilege is implicit.
     """
     functions = _functions(owner_engine)
+    writer_helpers = {name for name, _signature in roles.LIFECYCLE_WRITER_HELPER_FUNCTIONS}
     for name, _signature in roles.INTERNAL_AUTH_FUNCTIONS:
         grantees = _grantees(functions[name]["acl"])
-        assert grantees <= {disposable_database.owner_role}, f"{name} is executable by {grantees}"
+        # Since Milestone 2.4's third correction the lifecycle writer -- NOLOGIN, and a role
+        # nobody can SET ROLE to -- holds EXECUTE on the three guards the two lifecycle
+        # entry-point bodies call. No runtime role does, and the context writer stays
+        # executable by nobody at all.
+        permitted = {disposable_database.owner_role}
+        if name in writer_helpers:
+            permitted.add(disposable_database.lifecycle_writer_role)
+        assert grantees <= permitted, f"{name} is executable by {grantees}"
+    assert _grantees(functions["auth_context_begin"]["acl"]) <= {disposable_database.owner_role}
+    assert _grantees(functions["auth_require_writable_primary"]["acl"]) <= {
+        disposable_database.owner_role
+    }
 
 
 def test_the_runtime_functions_are_granted_to_exactly_the_runtime_roles(
     owner_engine, disposable_database
 ):
     functions = _functions(owner_engine)
+    writer_helpers = {name for name, _signature in roles.LIFECYCLE_WRITER_HELPER_FUNCTIONS}
     for name, _signature in roles.RUNTIME_AUTH_FUNCTIONS:
         grantees = _grantees(functions[name]["acl"])
         assert disposable_database.application_role in grantees, name
         assert disposable_database.provisioning_role in grantees, name
-        assert grantees <= {
+        permitted = {
             disposable_database.owner_role,
             disposable_database.application_role,
             disposable_database.provisioning_role,
-        }, f"{name} is executable by {grantees}"
+        }
+        # The lifecycle writer holds the context accessors the policies and the entry-point
+        # bodies call, and none of the credential, binding or generic audit functions.
+        if name in writer_helpers:
+            permitted.add(disposable_database.lifecycle_writer_role)
+        assert grantees <= permitted, f"{name} is executable by {grantees}"
+        if name not in writer_helpers:
+            assert disposable_database.lifecycle_writer_role not in grantees, name
 
 
 def test_provisioning_only_functions_are_not_granted_to_the_application_role(
@@ -330,6 +350,47 @@ _PROTECTED_WRITES = {
         "'credential', ARRAY['workspace:write'], now())",
         "UPDATE {schema}.auth_transaction_context SET tenant_id = gen_random_uuid()",
     ),
+    # --------------------------------------------------------------- Milestone 2.4
+    #
+    # The three definition tables. Each statement is the exploit that table would permit,
+    # written out rather than genericised, because what makes these worth refusing is
+    # different in each case.
+    "lifecycle_machines": (
+        # A machine whose instances require the weakest capability the caller happens to
+        # hold. The scopes live here, so a writer here decides who may move what.
+        "INSERT INTO {schema}.lifecycle_machines "
+        "(machine_key, version, read_scope, create_scope, transition_scope) "
+        "VALUES ('forged', 1, 'workspace:read', 'workspace:read', 'workspace:read')",
+        "UPDATE {schema}.lifecycle_machines SET transition_scope = 'workspace:read'",
+    ),
+    "lifecycle_states": (
+        # A state added to somebody else's machine version, or a terminal marker removed
+        # from one -- which is how a finished job becomes movable again.
+        "INSERT INTO {schema}.lifecycle_states "
+        "(machine_key, machine_version, state, is_initial, is_terminal) "
+        "VALUES ('forged', 1, 'anything', false, false)",
+        "UPDATE {schema}.lifecycle_states SET is_terminal = false",
+    ),
+    "lifecycle_transition_edges": (
+        # The one that matters most: an edge inserted here makes a transition legal for
+        # every tenant running that machine version, at once.
+        "INSERT INTO {schema}.lifecycle_transition_edges "
+        "(machine_key, machine_version, from_state, to_state) "
+        "VALUES ('forged', 1, 'anything', 'anything')",
+        "UPDATE {schema}.lifecycle_transition_edges SET to_state = to_state",
+    ),
+    "lifecycle_claim_provenance": (
+        # The forged provenance: a row saying that some idempotency claim stands for some
+        # transition. If this statement ever succeeded, a caller could point a claim it had
+        # written at a transition it liked and make the replay hand that back -- which is
+        # the whole of what the relation exists to make impossible.
+        "INSERT INTO {schema}.lifecycle_claim_provenance "
+        "(idempotency_record_id, tenant_id, lifecycle_transition_id, lifecycle_instance_id, "
+        "machine_key, machine_version, from_revision, to_revision, outbox_event_id) "
+        "VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), "
+        "'forged', 1, 0, 1, gen_random_uuid())",
+        "UPDATE {schema}.lifecycle_claim_provenance SET lifecycle_transition_id = gen_random_uuid()",
+    ),
 }
 
 
@@ -374,7 +435,18 @@ def test_no_role_holds_any_privilege_on_protected_state(owner_engine, disposable
     assert disposable_database.application_role not in grantees, grants
     assert disposable_database.provisioning_role not in grantees, grants
     assert "PUBLIC" not in grantees, grants
-    assert grantees <= {disposable_database.owner_role}, grants
+    if table == "lifecycle_claim_provenance":
+        # The one exception, and it is not a runtime role: the lifecycle writer -- NOLOGIN,
+        # unreachable by SET ROLE -- reads the provenance to verify a replay and inserts it
+        # in the same call that produces the transition. SELECT at table level; INSERT is
+        # column-level and does not appear here.
+        assert grantees <= {disposable_database.owner_role, disposable_database.lifecycle_writer_role}
+        assert {
+            privilege for grantee, privilege in grants
+            if grantee == disposable_database.lifecycle_writer_role
+        } == {"SELECT"}, grants
+    else:
+        assert grantees <= {disposable_database.owner_role}, grants
 
 
 @pytest.mark.parametrize("table", sorted(PROTECTED_TABLES))
@@ -705,13 +777,23 @@ def test_execute_on_the_context_writer_also_refuses_the_connection(environment):
         drop_disposable_database(handle)
 
 
-def test_the_sanitiser_is_the_same_statement_in_both_places(owner_engine):
-    """``db/roles.py`` and migration ``0003`` run the identical block, deliberately.
+def test_the_sanitiser_is_the_same_statement_everywhere(owner_engine, disposable_database):
+    """The two live copies are one text, and the historical one differs by the predicate alone.
 
-    Two copies, because neither is sufficient alone: the migration leaves a clean database
-    even if nobody wires roles, and the wiring leaves a clean database even if a later
-    migration inherits a rule ``0003`` could not have known about. Duplicated text is the
-    price, and this is what stops the copies drifting.
+    ``db/roles.py`` runs the sanitiser as a ``DO`` block at every supported revision; migration
+    ``0004`` installs the same body as ``firmbatch.sanitize_schema_privileges()`` and calls it,
+    and a later migration calls that function rather than carrying a copy. Both copies are
+    needed: the migration leaves a clean database even if nobody wires roles, and the wiring
+    leaves a clean database even if a later migration inherits a rule an earlier one could not
+    have known about. A migration must not import application code -- one that follows the
+    application stops being a record of what was applied -- so duplicated text is the price,
+    and this is what stops the two live copies drifting: the ``0004`` source, the function as
+    the database actually holds it, and the runtime block are compared here.
+
+    Migration ``0003`` is **history**. Its block is the original text, without the ownership
+    predicate ``0004`` needed once a role other than the schema owner owned functions in the
+    schema, and it is not edited to suit objects ``0004`` introduced. What is asserted about
+    it is exact: it equals the current block with that one predicate removed, and nothing else.
     """
     import importlib.util
     import pathlib
@@ -719,22 +801,42 @@ def test_the_sanitiser_is_the_same_statement_in_both_places(owner_engine):
     from firmbatch.control_plane.db import models as models_module
     from firmbatch.control_plane.db import roles as roles_module
 
-    path = (
-        pathlib.Path(models_module.__file__).parent
-        / "migrations"
-        / "versions"
-        / "0003_auth_context_and_audit.py"
-    )
-    spec = importlib.util.spec_from_file_location("firmbatch_migration_0003_acl", path)
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
+    versions = pathlib.Path(models_module.__file__).parent / "migrations" / "versions"
+
+    def attribute(revision: str, name: str) -> str:
+        path = versions / f"{revision}.py"
+        spec = importlib.util.spec_from_file_location(f"firmbatch_migration_{revision}_acl", path)
+        migration = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(migration)
+        return getattr(migration, name)
 
     def normalised(sql: str) -> str:
         return " ".join(sql.split())
 
-    assert normalised(migration._SANITIZE_SCHEMA_ACL) == normalised(
-        roles_module.SCHEMA_ACL_SANITIZER_SQL
+    body = normalised(roles_module.SCHEMA_ACL_SANITIZER_BODY)
+    assert normalised(attribute("0004_lifecycle_state_machines", "_SANITIZE_SCHEMA_ACL_BODY")) == body
+    assert normalised(roles_module.SCHEMA_ACL_SANITIZER_SQL) == normalised(
+        f"DO $sanitize$ {roles_module.SCHEMA_ACL_SANITIZER_BODY} $sanitize$"
     )
+    with owner_engine.connect() as connection:
+        installed, owner, acl = connection.execute(
+            text(
+                "SELECT p.prosrc, pg_catalog.pg_get_userbyid(p.proowner), "
+                "       coalesce(array_to_string(p.proacl, ','), '') "
+                "FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace "
+                "WHERE n.nspname = :s AND p.proname = 'sanitize_schema_privileges'"
+            ),
+            {"s": SCHEMA},
+        ).one()
+    assert normalised(installed) == body
+    assert owner == disposable_database.owner_role
+    assert _grantees(acl) <= {disposable_database.owner_role}, acl
+
+    predicate = "AND p.proowner = n.nspowner"
+    assert roles_module.SCHEMA_ACL_SANITIZER_SQL.count(predicate) == 2
+    historical = normalised(attribute("0003_auth_context_and_audit", "_SANITIZE_SCHEMA_ACL"))
+    assert historical == normalised(roles_module.SCHEMA_ACL_SANITIZER_SQL.replace(predicate, ""))
+    assert predicate not in historical
 
 
 # ------------------------------------------------------- reachable roles (SET ROLE)
@@ -1384,7 +1486,16 @@ def test_the_ordinary_application_principal_reaches_no_column_either(
     """
     with owner_engine.connect() as connection:
         for table in sorted(PROTECTED_TABLES):
-            assert _column_acl_grantees(connection, f"{SCHEMA}.{table}") == set(), table
+            present = _column_acl_grantees(connection, f"{SCHEMA}.{table}")
+            if table == "lifecycle_claim_provenance":
+                # The lifecycle writer's column-level INSERT is the one column ACL a
+                # protected relation legitimately carries, and it names no runtime role.
+                assert {grantee for grantee, _column, _privilege in present} == {
+                    disposable_database.lifecycle_writer_role
+                }, present
+                assert {privilege for _grantee, _column, privilege in present} == {"INSERT"}
+            else:
+                assert present == set(), table
 
     report, refusal = _principal_check(disposable_database)
     assert refusal is None, str(refusal)
@@ -1393,24 +1504,29 @@ def test_the_ordinary_application_principal_reaches_no_column_either(
 
 
 def test_both_sanitisers_remove_a_column_only_acl(environment):
-    """Both copies of the sanitiser, on the ACL neither of them used to reach.
+    """Every copy of the sanitiser, on the ACL none of them used to reach, at its own revision.
 
     Runs on its own disposable database, because it revokes every non-owner privilege in
     the schema and re-wires the roles afterwards -- doing that to the shared session
     database would leave every later test running against a differently wired one.
 
-    Four things are established, in order:
+    Five things are established, in order:
 
     1. a column-only grant leaves ``pg_class.relacl`` empty of that grantee, so a
        sanitiser that enumerates grantees from ``relacl`` never names the role and never
        revokes anything from it. That is the actual defect, measured here rather than
        taken from the documentation, and it is why the fix is a second enumeration rather
        than a wider ``REVOKE``;
-    2. ``db/roles.py``'s sanitiser removes the column grant;
-    3. migration ``0003``'s copy, executed verbatim from the migration file, removes it
-       too. Both copies are exercised because either one alone would leave a database
-       clean only if somebody happened to run that half;
-    4. a column grant to PUBLIC is removed as well.
+    2. ``db/roles.py``'s sanitiser removes the column grant, at head;
+    3. the function ``0004`` installs, ``firmbatch.sanitize_schema_privileges()``, removes it
+       too, at head -- with the writer-owned entry points in place, which its ownership
+       predicate is for;
+    4. a column grant to PUBLIC is removed as well;
+    5. at revision ``0003``, reached by the downgrade, migration ``0003``'s own block executed
+       verbatim from the migration file removes it, and so does the runtime copy. The
+       historical block is exercised at the revision it belongs to: at head it would meet
+       functions the schema owner cannot revoke on, which is exactly why ``0004`` installs
+       the ownership-aware one.
     """
     import importlib.util
     import pathlib
@@ -1421,6 +1537,7 @@ def test_both_sanitisers_remove_a_column_only_acl(environment):
     from firmbatch.control_plane.testing.bootstrap import (
         create_disposable_database,
         drop_disposable_database,
+        wire_handle_roles,
     )
 
     path = (
@@ -1437,10 +1554,9 @@ def test_both_sanitisers_remove_a_column_only_acl(environment):
     beneficiary = handle.application_role
     relation = f"{SCHEMA}.auth_transaction_context"
     try:
-        engine = migrate.create_migration_engine(handle.migration_url)
-        try:
+        with migrate.migration_connection(handle.migration_url) as (connection, expected):
 
-            def grant(connection):
+            def grant():
                 connection.execute(
                     text(
                         f"GRANT SELECT (backend_pid), UPDATE (tenant_id) ON {relation} "
@@ -1449,50 +1565,63 @@ def test_both_sanitisers_remove_a_column_only_acl(environment):
                 )
                 connection.commit()
 
-            expected = {
+            expected_acl = {
                 (beneficiary, "backend_pid", "SELECT"),
                 (beneficiary, "tenant_id", "UPDATE"),
             }
 
-            with engine.connect() as connection:
-                # 1. the defect itself: a column-only grantee is invisible in relacl, so
-                #    the loop that revokes from every relacl grantee never sees it.
-                grant(connection)
-                assert _column_acl_grantees(connection, relation) == expected
-                assert beneficiary not in _acl_grantees(connection, relation=relation), (
-                    "a column-only grantee appears in pg_class.relacl, so the premise of this "
-                    "correction is wrong and the relation loop would already have revoked it"
-                )
+            # 1. the defect itself: a column-only grantee is invisible in relacl, so the
+            #    loop that revokes from every relacl grantee never sees it.
+            grant()
+            assert _column_acl_grantees(connection, relation) == expected_acl
+            assert beneficiary not in _acl_grantees(connection, relation=relation), (
+                "a column-only grantee appears in pg_class.relacl, so the premise of this "
+                "correction is wrong and the relation loop would already have revoked it"
+            )
 
-                # 2. db/roles.py's sanitiser.
-                roles_module.sanitize_schema_privileges(connection)
-                connection.commit()
-                assert _column_acl_grantees(connection, relation) == set()
+            # 2. db/roles.py's sanitiser, at head.
+            roles_module.sanitize_schema_privileges(connection)
+            connection.commit()
+            assert _column_acl_grantees(connection, relation) == set()
 
-                # 3. and migration 0003's copy, run verbatim from the migration file.
-                grant(connection)
-                assert _column_acl_grantees(connection, relation) == expected
-                connection.execute(text(migration._SANITIZE_SCHEMA_ACL))
-                connection.commit()
-                assert _column_acl_grantees(connection, relation) == set()
+            # 3. the function 0004 installed, at head, run as the owner.
+            grant()
+            assert _column_acl_grantees(connection, relation) == expected_acl
+            connection.execute(text(f"SELECT {SCHEMA}.sanitize_schema_privileges()"))
+            connection.commit()
+            assert _column_acl_grantees(connection, relation) == set()
 
-                # And a column grant to PUBLIC, which is a separate pass.
-                connection.execute(text(f"GRANT SELECT (tenant_id) ON {relation} TO PUBLIC"))
-                connection.commit()
-                assert _column_acl_grantees(connection, relation) != set()
-                roles_module.sanitize_schema_privileges(connection)
-                connection.commit()
-                assert _column_acl_grantees(connection, relation) == set()
+            # 4. and a column grant to PUBLIC, which is a separate pass.
+            connection.execute(text(f"GRANT SELECT (tenant_id) ON {relation} TO PUBLIC"))
+            connection.commit()
+            assert _column_acl_grantees(connection, relation) != set()
+            roles_module.sanitize_schema_privileges(connection)
+            connection.commit()
+            assert _column_acl_grantees(connection, relation) == set()
 
-                # The wiring is restored, so the database is left the way the sanitiser's
-                # callers always leave it: stripped, then granted exactly the allowlist.
-                roles_module.harden_database(connection, handle.database)
-                roles_module.revoke_public_table_privileges(connection)
-                roles_module.grant_application_role(connection, handle.application_role)
-                roles_module.grant_provisioning_role(connection, handle.provisioning_role)
-                connection.commit()
-        finally:
-            engine.dispose()
+            # 5. migration 0003's copy, verbatim, at the revision it was written for.
+            migrate.downgrade_to(connection, roles_module.M2_3_REVISION, expected=expected)
+            connection.commit()
+            assert connection.execute(
+                text("SELECT pg_catalog.to_regprocedure(:f) IS NULL"),
+                {"f": f"{SCHEMA}.sanitize_schema_privileges()"},
+            ).scalar_one(), "0003 installs no sanitiser object, and the downgrade must leave none"
+            grant()
+            assert _column_acl_grantees(connection, relation) == expected_acl
+            connection.execute(text(migration._SANITIZE_SCHEMA_ACL))
+            connection.commit()
+            assert _column_acl_grantees(connection, relation) == set()
+            grant()
+            roles_module.sanitize_schema_privileges(connection)
+            connection.commit()
+            assert _column_acl_grantees(connection, relation) == set()
+
+            # Back to head, and the wiring is restored, so the database is left the way the
+            # sanitiser's callers always leave it: stripped, then granted exactly the allowlist.
+            migrate.upgrade_to_head(connection, expected=expected)
+            connection.commit()
+            wire_handle_roles(connection, handle)
+            connection.commit()
 
         # And an application engine connects cleanly against the re-wired database, which
         # is what says the sanitiser removed the column ACL without removing anything the

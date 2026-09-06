@@ -16,7 +16,9 @@
 #
 # It is NOT side-effect free any more. Since Milestone 2.1 the last gate runs the v1
 # foundation suite against a real PostgreSQL 16 server, where it creates a disposable
-# `firmbatch_test_<random>` database and three throwaway roles and drops them again. It
+# `firmbatch_test_<random>` database and four throwaway roles -- the per-run owner,
+# application and provisioning login roles, and since Milestone 2.4 a NOLOGIN lifecycle
+# writer that owns the two lifecycle entry points -- and drops them again. It
 # touches nothing else: the helpers in control_plane/testing/bootstrap.py refuse any
 # database whose name does not match that pattern, refuse to run at all unless
 # FIRMBATCH_ENV=test, and issue the final DROP as the per-run database owner so that a
@@ -267,6 +269,23 @@ REQUIRED_FILES=(
   control_plane/tests/test_protected_auth_state.py
   control_plane/tests/test_audit_events.py
   control_plane/tests/test_secrets_model.py
+  # --- persisted, race-safe lifecycle state machines (Milestone 2.4) ---------------
+  # Still no new gate, for the same reason as M2.2 and M2.3: the foundation-suite gate
+  # below runs the whole control_plane/tests directory, so these run with everything
+  # else. What is registered here is their existence, so that deleting one fails the
+  # layout gate instead of quietly shrinking the suite.
+  docs/adr/0007-persisted-race-safe-lifecycle-transitions.md
+  control_plane/db/lifecycle.py
+  control_plane/db/migrations/versions/0004_lifecycle_state_machines.py
+  control_plane/tests/test_lifecycle_definitions.py
+  control_plane/tests/test_lifecycle_persistence.py
+  control_plane/tests/test_lifecycle_transitions.py
+  control_plane/tests/test_lifecycle_concurrency.py
+  control_plane/tests/test_lifecycle_idempotency.py
+  control_plane/tests/test_lifecycle_security.py
+  # The third M2.4 correction pass: the outbox-link guard and the lifecycle writer role.
+  control_plane/tests/test_outbox_linkage.py
+  control_plane/tests/test_lifecycle_writer.py
 )
 missing=()
 for f in "${REQUIRED_FILES[@]}"; do

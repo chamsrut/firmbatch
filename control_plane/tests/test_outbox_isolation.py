@@ -33,6 +33,7 @@ from firmbatch.control_plane.db import auth
 from firmbatch.control_plane.db import engine as db_engine
 from firmbatch.control_plane.db.base import SCHEMA
 from firmbatch.control_plane.db.idempotency import (
+    OUTBOX_LINK_SQLSTATE,
     MutationOutcome,
     OutboxEventSpec,
     append_outbox_event,
@@ -102,10 +103,52 @@ def test_without_tenant_context_neither_table_is_readable(application_engine, pr
 #: table's check constraints bound a details document's size and shape and say nothing at
 #: all about its content, so a role holding ``INSERT`` could write a bearer credential into
 #: the trail simply by composing the statement itself.
+#: Milestone 2.4's ``lifecycle_transitions`` takes ``SELECT`` for the same reason
+#: ``audit_events`` does, one step further on. Appending goes through
+#: ``firmbatch.transition_lifecycle_instance()``, which writes the history row in the same
+#: statement sequence that moves the instance -- so a row cannot record a move that did not
+#: happen, cannot attribute a real one to somebody else, and cannot exist without the
+#: revision increment it describes. An ``INSERT`` privilege here would make all three of
+#: those properties advisory.
+#:
+#: Since the Milestone 2.4 correction the two Milestone 2.2 tables hold ``SELECT`` at
+#: **table** level and their ``INSERT`` at **column** level -- see
+#: :data:`APPLICATION_COLUMN_INSERTS`. The reach is the same for every legitimate write and
+#: strictly narrower for one thing: the row's identifier. A caller that could name a primary
+#: key could submit one it had guessed or read elsewhere and learn from the uniqueness
+#: conflict whether it exists, which is an existence oracle over rows the read policies hide.
 APPLICATION_PRIVILEGES = {
-    "idempotency_records": {"SELECT", "INSERT"},
-    "outbox_events": {"SELECT", "INSERT"},
+    "idempotency_records": {"SELECT"},
+    "outbox_events": {"SELECT"},
     "audit_events": {"SELECT"},
+    "lifecycle_transitions": {"SELECT"},
+}
+
+#: The columns the application role may write on each append-only table, exactly.
+#:
+#: Absent from both: ``id`` (a chosen primary key is an existence oracle), ``created_at`` /
+#: ``occurred_at`` (server-generated), and ``lifecycle_machine_key`` /
+#: ``lifecycle_machine_version`` (derived by the lifecycle entry points, which run as the
+#: schema owner). The two tables with no entry hold no ``INSERT`` of any kind.
+APPLICATION_COLUMN_INSERTS = {
+    "idempotency_records": {
+        "tenant_id",
+        "operation",
+        "idempotency_key",
+        "request_fingerprint",
+        "status",
+        "result",
+    },
+    "outbox_events": {
+        "tenant_id",
+        "idempotency_record_id",
+        "event_type",
+        "aggregate_type",
+        "aggregate_id",
+        "attributes",
+    },
+    "audit_events": set(),
+    "lifecycle_transitions": set(),
 }
 
 #: Nothing at all for provisioning. Not on the M2.2 tables -- it creates tenants and has no
@@ -117,6 +160,9 @@ PROVISIONING_PRIVILEGES = {
     "idempotency_records": set(),
     "outbox_events": set(),
     "audit_events": set(),
+    # And nothing on the lifecycle history either -- provisioning receives no lifecycle
+    # authority of any kind, not even to read one.
+    "lifecycle_transitions": set(),
 }
 
 #: The append-only tables a runtime role can attempt an ``INSERT`` on at all, with a
@@ -141,6 +187,24 @@ DIRECT_APPENDS = {
 }
 
 
+#: The append-only tables no runtime role may ``INSERT`` into at all, with a statement that
+#: names real columns -- so the refusal is the privilege system's and not the column list's,
+#: and so the test would start passing for the wrong reason if the privilege were ever
+#: granted.
+UNGRANTED_APPENDS = {
+    "audit_events": (
+        f"INSERT INTO {SCHEMA}.audit_events (action, outcome, resource_type) "
+        "VALUES ('a.b', 'succeeded', 'thing')"
+    ),
+    "lifecycle_transitions": (
+        f"INSERT INTO {SCHEMA}.lifecycle_transitions "
+        "(tenant_id, lifecycle_instance_id, machine_key, machine_version, from_state, to_state, "
+        "from_revision, to_revision, actor_kind) "
+        "VALUES (gen_random_uuid(), gen_random_uuid(), 'forged', 1, 'a', 'b', 0, 1, 'provisioning')"
+    ),
+}
+
+
 def test_every_append_only_table_is_either_insertable_or_privilege_protected():
     """The split above is data, so this is what keeps it honest.
 
@@ -149,14 +213,23 @@ def test_every_append_only_table_is_either_insertable_or_privilege_protected():
     attempt one at all. A table that fell out of both would be silently untested.
     """
     covered = set(DIRECT_APPENDS)
-    protected = {table for table, held in APPLICATION_PRIVILEGES.items() if "INSERT" not in held}
+    protected = {table for table, columns in APPLICATION_COLUMN_INSERTS.items() if not columns}
     assert covered | protected == set(APPEND_ONLY_TABLES)
     assert covered & protected == set()
+    # And every privilege-protected table has a statement written for it, so none of them
+    # is silently skipped by the parametrisation below.
+    assert set(UNGRANTED_APPENDS) == protected
 
 
 @pytest.mark.parametrize("table", sorted(DIRECT_APPENDS))
 def test_without_tenant_context_an_append_is_rejected(application_engine, principal_a, table):
-    """The INSERT policy's predicate is NULL with no context, so the write is refused."""
+    """The INSERT policy's predicate is NULL with no context, so the write is refused.
+
+    A **linked** outbox event meets the link guard first: it runs before the policy, and
+    with no context no claim is visible to it, so the refusal is the guard's rather than
+    the policy's. The policy is still what refuses an *unlinked* event, and that is asserted
+    alongside so the property this test was written for is not lost behind the new one.
+    """
     record_id, _ = _claim(application_engine, principal_a, f"closed-append-{table.replace('_', '-')}")
     with pytest.raises(DBAPIError) as exc:
         with db_engine.transaction(application_engine) as session:
@@ -164,12 +237,24 @@ def test_without_tenant_context_an_append_is_rejected(application_engine, princi
                 text(DIRECT_APPENDS[table]),
                 {"t": principal_a.id, "f": "0" * 64, "r": record_id, "a": uuid.uuid4()},
             )
-    assert "row-level security" in str(exc.value).lower()
+    if table == "outbox_events":
+        assert exc.value.orig.sqlstate == OUTBOX_LINK_SQLSTATE
+        with pytest.raises(DBAPIError) as unlinked:
+            with db_engine.transaction(application_engine) as session:
+                session.execute(
+                    text(
+                        f"INSERT INTO {SCHEMA}.outbox_events "
+                        "(tenant_id, event_type, aggregate_type, aggregate_id) "
+                        "VALUES (:t, 'workspace.created', 'workspace', :a)"
+                    ),
+                    {"t": principal_a.id, "a": uuid.uuid4()},
+                )
+        assert "row-level security" in str(unlinked.value).lower()
+    else:
+        assert "row-level security" in str(exc.value).lower()
 
 
-@pytest.mark.parametrize(
-    "table", sorted(t for t, held in APPLICATION_PRIVILEGES.items() if "INSERT" not in held)
-)
+@pytest.mark.parametrize("table", sorted(UNGRANTED_APPENDS))
 def test_an_append_only_table_without_an_insert_grant_refuses_earlier(
     application_engine, principal_a, table
 ):
@@ -180,12 +265,7 @@ def test_an_append_only_table_without_an_insert_grant_refuses_earlier(
     """
     with pytest.raises(DBAPIError) as exc:
         with auth.authenticated_transaction(application_engine, principal_a.credential) as session:
-            session.execute(
-                text(
-                    f"INSERT INTO {SCHEMA}.{table} (action, outcome, resource_type) "
-                    "VALUES ('a.b', 'succeeded', 'thing')"
-                )
-            )
+            session.execute(text(UNGRANTED_APPENDS[table]))
     assert "permission denied" in str(exc.value).lower()
 
 
@@ -216,6 +296,9 @@ def test_tenant_a_cannot_append_into_tenant_b(application_engine, principal_a, p
             )
     assert "row-level security" in str(exc.value).lower()
 
+    # A linked event naming tenant B meets the link guard before the policy: B's claim is
+    # not visible to A's context, so the refusal is the guard's. An unlinked one naming
+    # tenant B is the policy's to refuse, and still is.
     with pytest.raises(DBAPIError) as exc:
         with auth.authenticated_transaction(application_engine, principal_a.credential) as session:
             session.execute(
@@ -226,30 +309,49 @@ def test_tenant_a_cannot_append_into_tenant_b(application_engine, principal_a, p
                 ),
                 {"t": principal_b.id, "r": b_record, "a": uuid.uuid4()},
             )
-    assert "row-level security" in str(exc.value).lower()
-
-
-def test_an_event_cannot_be_attached_to_another_tenants_claim(application_engine, principal_a, principal_b):
-    """The composite foreign key, which referential integrity checks with RLS bypassed.
-
-    A single-column ``REFERENCES idempotency_records(id)`` would have accepted this: the
-    check runs with row security off, so tenant B's claim id is perfectly valid there.
-    Referencing ``(id, tenant_id)`` is what makes tenant consistency a database fact.
-    """
-    b_record, _ = _claim(application_engine, principal_b, "beta-anchor")
-    a_record, _ = _claim(application_engine, principal_a, "alpha-anchor")
-
-    with pytest.raises(IntegrityError) as exc:
+    assert exc.value.orig.sqlstate == OUTBOX_LINK_SQLSTATE
+    with pytest.raises(DBAPIError) as exc:
         with auth.authenticated_transaction(application_engine, principal_a.credential) as session:
             session.execute(
                 text(
                     f"INSERT INTO {SCHEMA}.outbox_events "
-                    "(tenant_id, idempotency_record_id, event_type, aggregate_type, aggregate_id) "
-                    "VALUES (:t, :r, 'workspace.created', 'workspace', :a)"
+                    "(tenant_id, event_type, aggregate_type, aggregate_id) "
+                    "VALUES (:t, 'workspace.created', 'workspace', :a)"
                 ),
-                {"t": principal_a.id, "r": b_record, "a": uuid.uuid4()},
+                {"t": principal_b.id, "a": uuid.uuid4()},
             )
-    assert "foreign key" in str(exc.value).lower()
+    assert "row-level security" in str(exc.value).lower()
+
+
+def test_an_event_cannot_be_attached_to_another_tenants_claim(application_engine, principal_a, principal_b):
+    """Refused before the foreign key, and identically to a claim that does not exist.
+
+    The composite foreign key -- ``(idempotency_record_id, tenant_id)`` rather than the id
+    alone -- is still what makes tenant consistency a database fact for any writer that
+    reaches it. Since the third M2.4 correction a generic writer never does: the link guard
+    runs first and refuses another tenant's claim with the same message an absent claim
+    gets, because a foreign-key violation for a real row and a different one for an absent
+    row was the existence oracle ``test_outbox_linkage.py`` closes.
+    """
+    b_record, _ = _claim(application_engine, principal_b, "beta-anchor")
+    a_record, _ = _claim(application_engine, principal_a, "alpha-anchor")
+
+    refusals = []
+    for target in (b_record, uuid.uuid4()):
+        with pytest.raises(DBAPIError) as exc:
+            with auth.authenticated_transaction(application_engine, principal_a.credential) as session:
+                session.execute(
+                    text(
+                        f"INSERT INTO {SCHEMA}.outbox_events "
+                        "(tenant_id, idempotency_record_id, event_type, aggregate_type, aggregate_id) "
+                        "VALUES (:t, :r, 'workspace.created', 'workspace', :a)"
+                    ),
+                    {"t": principal_a.id, "r": target, "a": uuid.uuid4()},
+                )
+        refusals.append((exc.value.orig.sqlstate, str(exc.value).split("[SQL:")[0].strip()))
+    assert refusals[0] == refusals[1], refusals
+    assert refusals[0][0] == OUTBOX_LINK_SQLSTATE
+    assert "foreign key" not in refusals[0][1].lower()
     assert a_record != b_record
 
 
@@ -368,6 +470,63 @@ def test_the_application_role_holds_exactly_its_allowlist(owner_engine, disposab
     assert _privileges(owner_engine, disposable_database.application_role, table) == (
         APPLICATION_PRIVILEGES[table]
     )
+
+
+def _column_privileges(owner_engine, role: str, table: str, privilege: str) -> set[str]:
+    """The columns of one table carrying one privilege for one role, from the catalogue.
+
+    ``information_schema.role_table_grants`` reports table-level grants only, so a
+    column-level one is invisible to it and to the test above -- which is exactly why this
+    exists as well.
+    """
+    with owner_engine.connect() as connection:
+        return set(
+            connection.execute(
+                text(
+                    "SELECT column_name FROM information_schema.column_privileges "
+                    "WHERE table_schema = :schema AND table_name = :table "
+                    "AND grantee = :role AND privilege_type = :privilege"
+                ),
+                {"schema": SCHEMA, "table": table, "role": role, "privilege": privilege},
+            ).scalars()
+        )
+
+
+@pytest.mark.parametrize("table", sorted(APPEND_ONLY_TABLES))
+def test_the_application_role_may_write_exactly_the_columns_it_needs(
+    owner_engine, disposable_database, table
+):
+    """**The identifier is not one of them**, and nor is anything else server-derived.
+
+    A column-level ``INSERT`` grant is checked at permission-check time, before the executor
+    inserts anything -- so naming an ``id`` that exists and naming one that does not are
+    refused identically, and neither reaches a unique index. That is what closes the
+    write-side existence oracle: a caller cannot use ``INSERT ... ON CONFLICT`` with a
+    chosen key to ask whether a row the read policies hide is really there.
+    """
+    assert set(APPLICATION_COLUMN_INSERTS) == set(APPEND_ONLY_TABLES), (
+        "an append-only table was added without deciding which columns the application may write"
+    )
+    held = _column_privileges(
+        owner_engine, disposable_database.application_role, table, "INSERT"
+    )
+    assert held == APPLICATION_COLUMN_INSERTS[table]
+    # And the identifier, spelled out rather than implied by the set comparison, because
+    # this is the property the whole arrangement exists for.
+    assert "id" not in held
+
+
+@pytest.mark.parametrize("table", sorted(APPEND_ONLY_TABLES))
+def test_the_provisioning_role_writes_no_column_of_any_of_them(
+    owner_engine, disposable_database, table
+):
+    for privilege in ("INSERT", "UPDATE", "SELECT", "REFERENCES"):
+        assert (
+            _column_privileges(
+                owner_engine, disposable_database.provisioning_role, table, privilege
+            )
+            == set()
+        )
 
 
 @pytest.mark.parametrize("table", sorted(APPEND_ONLY_TABLES))

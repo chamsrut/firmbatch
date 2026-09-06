@@ -141,7 +141,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Sequence
 
 from sqlalchemy import event, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
 from ..security.authorization import Scope
@@ -177,6 +177,14 @@ CLAIM_CONSTRAINT = "uq_idempotency_records_tenant_id_operation_idempotency_key"
 #: default. Anything else is refused.
 REQUIRED_ISOLATION_LEVEL = "read committed"
 
+#: The SQLSTATE migration ``0004``'s outbox-link guard raises, mirrored here because this
+#: module translates it. A generic writer may link an event only to a claim its
+#: authenticated context may read, in its own tenant, that is not a lifecycle claim; every
+#: other link -- absent, hidden, another tenant's, a lifecycle machine's -- is refused with
+#: this one code **before** the foreign key or the one-event-per-claim index is evaluated,
+#: so that neither constraint can answer whether a hidden claim exists.
+OUTBOX_LINK_SQLSTATE = "FB006"
+
 #: The metadata policy for every bounded ``jsonb`` column in this schema lives in
 #: ``db/metadata.py``. It was extracted at Milestone 2.3 so that the audit trail could hold
 #: itself to exactly the same rule; every public name is re-exported here, so callers that
@@ -185,6 +193,10 @@ REQUIRED_ISOLATION_LEVEL = "read committed"
 #: See that module for what is refused and, more importantly, for what none of it proves.
 
 #: What a mutation may reach through its unit of work.
+#:
+#: ``in_transaction`` is deliberately **absent** from this list and written out on the class
+#: instead. It takes no arguments, so it has no business going through a variadic forwarder;
+#: see :meth:`MutationUnitOfWork.in_transaction` and the note on :func:`_forwarder`.
 _FORWARDED_OPERATIONS = (
     "add",
     "add_all",
@@ -240,6 +252,18 @@ class MutationContractError(IdempotencyError):
     """A mutation tried to leave the transaction boundary the primitive holds."""
 
 
+class OutboxLinkRefused(IdempotencyError):
+    """The event named a claim it may not be linked to.
+
+    One error for every reason, on purpose: the claim does not exist, belongs to another
+    tenant, is not readable by this authenticated context, or is a lifecycle claim -- which
+    only the lifecycle boundary may link an event to. The database refuses all four with a
+    single message before its foreign key or its one-event-per-claim index is consulted, so
+    the refusal cannot be used to ask whether a claim the read policies hide is real. This
+    class carries that message and nothing else.
+    """
+
+
 # --------------------------------------------------------------------------- unit of work
 
 
@@ -272,20 +296,56 @@ class MutationUnitOfWork:
     def __init__(self, session: Session) -> None:
         self.__session = session
 
+    def in_transaction(self) -> bool:
+        """Whether the primitive's transaction is still open. **Introspection only.**
+
+        Written out here rather than generated, and taking no arguments at all, because a
+        generated forwarder is variadic and a variadic method on this class is a way to name
+        a *different* method -- see :func:`_forwarder`. This one has nothing to forward: it
+        answers a boolean about the transaction and reaches nothing.
+
+        A caller that passes anything gets ``TypeError`` from Python itself, which is the
+        cheapest possible enforcement and the one nobody has to maintain.
+        """
+        return bool(self.__session.in_transaction())
+
     def __repr__(self) -> str:  # pragma: no cover - diagnostics only
         return "MutationUnitOfWork(<the primitive's transaction>)"
+
+
+def _forwarder(name: str):
+    """One forwarding method, with the target name closed over rather than defaulted.
+
+    The name binding is the whole point of this function existing.
+    ``def forward(self, *args, _name=name, **kwargs)`` is the obvious way to capture a loop
+    variable and it is **wrong here**: a default parameter is a keyword the *caller* can
+    supply, so every forwarded method accepted ``_name`` and used it to choose which
+    ``Session`` method to call.
+
+        unit_of_work.add(row, _name="connection")   # -> Session.connection()
+
+    That hands back the raw DBAPI connection this class exists to withhold, and the same
+    trick reached ``rollback``, ``get_transaction`` and every other name on ``Session`` --
+    through methods whose whole purpose was to be a narrower surface than ``Session``.
+    Every refusal in :data:`_REFUSED_OPERATIONS` was reachable around.
+
+    A closure binds the name where no caller can reach it. ``forward`` then takes exactly
+    what the target takes, so ``_name=`` becomes an ordinary unexpected keyword and
+    ``Session.add`` raises ``TypeError`` for it.
+    """
+
+    def forward(self, *args, **kwargs):
+        return getattr(self._MutationUnitOfWork__session, name)(*args, **kwargs)
+
+    forward.__name__ = name
+    forward.__qualname__ = f"MutationUnitOfWork.{name}"
+    return forward
 
 
 def _install_unit_of_work_surface() -> None:
     """Build the forwarding and refusing methods once, at import."""
     for name in _FORWARDED_OPERATIONS:
-
-        def forward(self, *args, _name=name, **kwargs):
-            return getattr(self._MutationUnitOfWork__session, _name)(*args, **kwargs)
-
-        forward.__name__ = name
-        forward.__qualname__ = f"MutationUnitOfWork.{name}"
-        setattr(MutationUnitOfWork, name, forward)
+        setattr(MutationUnitOfWork, name, _forwarder(name))
 
     for name, reason in _REFUSED_OPERATIONS.items():
         setattr(MutationUnitOfWork, name, _refusal(name, reason))
@@ -570,6 +630,16 @@ def append_outbox_event(
     reference is satisfied when any column is NULL) and the unique constraint does not
     collide, because PostgreSQL treats NULLs as distinct.
 
+    **A link is proved before either constraint sees it.** Since Milestone 2.4 a
+    ``BEFORE INSERT`` trigger requires a generic writer's link to name a claim this
+    authenticated context may read, in its own tenant, that is not a lifecycle claim; an
+    absent id, a hidden one, another tenant's and a lifecycle claim's are all refused with
+    one message, raised as :class:`OutboxLinkRefused` here. Left to the constraints, the
+    column was an existence oracle: the foreign key is checked with row security bypassed,
+    so a hidden lifecycle claim produced a uniqueness violation where an absent one produced
+    a foreign-key violation. Only the lifecycle boundary, executing as the dedicated
+    lifecycle writer role, may link an event to a lifecycle claim -- and it never calls this.
+
     This does not commit. It is the caller's transaction that makes the event durable,
     together with the state change it describes or not at all.
     """
@@ -592,7 +662,26 @@ def append_outbox_event(
         attributes=attributes,
     )
     session.add(row)
-    session.flush()
+    # The raise happens after the ``except`` block rather than inside it, so nothing is
+    # attached as ``__context__``: the database error renders the statement and its
+    # parameters, and the parameters are the caller's attributes document.
+    refused = False
+    try:
+        session.flush()
+    except IntegrityError:
+        raise
+    except DBAPIError as exc:
+        if getattr(getattr(exc, "orig", None), "sqlstate", None) != OUTBOX_LINK_SQLSTATE:
+            raise
+        refused = True
+    if refused:
+        raise OutboxLinkRefused(
+            "the outbox event may only be linked to a generic idempotency claim this "
+            "authenticated context may read, in its own tenant. The claim named is absent, "
+            "belongs to another tenant, is not readable by this context, or belongs to a "
+            "lifecycle machine -- the four are deliberately indistinguishable, because a refusal "
+            "that told them apart would answer whether a hidden claim exists."
+        ) from None
     return row.id
 
 

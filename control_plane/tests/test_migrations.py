@@ -12,6 +12,7 @@ import pathlib
 
 import pytest
 
+from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.runtime.migration import MigrationContext
 from sqlalchemy import inspect, text
@@ -21,7 +22,11 @@ from firmbatch.control_plane.db import models
 from firmbatch.control_plane.db.base import SCHEMA, VERSION_TABLE
 from firmbatch.control_plane.db.base import Base
 from firmbatch.control_plane.db.models import APPEND_ONLY_TABLES, TENANT_SCOPED_TABLES
-from firmbatch.control_plane.testing.bootstrap import create_disposable_database, drop_disposable_database
+from firmbatch.control_plane.testing.bootstrap import (
+    create_disposable_database,
+    drop_disposable_database,
+    wire_handle_roles,
+)
 
 
 def _load_migration_module(revision: str):
@@ -42,7 +47,7 @@ def test_bootstrap_reaches_the_expected_head(disposable_database, owner_engine):
 
 def test_there_is_exactly_one_head():
     """A branched history is a migration that applies differently in two environments."""
-    assert migrate.head_revision() == "0003_auth_context_and_audit"
+    assert migrate.head_revision() == "0004_lifecycle_state_machines"
 
 
 def test_every_revision_fits_the_version_column():
@@ -400,8 +405,98 @@ def test_the_third_migration_mirrors_the_model_and_catalogue_constants():
     from firmbatch.control_plane.security import secrets as secrets_module
 
     assert migration.CREDENTIAL_FORMAT_REGEX == secrets_module.BEARER_CREDENTIAL_REGEX.pattern
-    # And every policied table appears in the migration's policy catalogue.
-    assert set(migration.POLICIES) == set(TENANT_SCOPED_TABLES)
+    # Every table that existed at 0003 appears in its policy catalogue, and none that did
+    # not. A strict subset of TENANT_SCOPED_TABLES since 0004 added two more -- asserted as
+    # an exact set rather than as ``<=`` so that a table dropped from 0003's catalogue
+    # fails here instead of passing quietly.
+    assert set(migration.POLICIES) == {
+        "tenants",
+        "workspaces",
+        "idempotency_records",
+        "outbox_events",
+        "audit_events",
+    }
+    assert set(migration.POLICIES) < set(TENANT_SCOPED_TABLES)
+
+
+def test_the_fourth_migration_mirrors_the_model_and_catalogue_constants():
+    """0004 duplicates the name grammar, the bounds and the eligible scope set.
+
+    Same reason as 0002 and 0003, and one addition: the three SQLSTATEs the lifecycle
+    kernel raises are duplicated in ``db/lifecycle.py``, which translates them. A code that
+    drifted would turn a conflict into an unrecognised database error at exactly the moment
+    a caller most needs to know which one it was.
+    """
+    from firmbatch.control_plane.db import idempotency, lifecycle
+    from firmbatch.control_plane.security import authorization
+
+    migration = _load_migration_module("0004_lifecycle_state_machines")
+
+    assert migration.SIMPLE_NAME_REGEX == models.SIMPLE_NAME_REGEX
+    assert migration.LIFECYCLE_NAME_REGEX == models.LIFECYCLE_NAME_REGEX
+    assert migration.MAX_METADATA_BYTES == models.MAX_METADATA_BYTES
+    assert migration.MAX_LIFECYCLE_REASON_LENGTH == models.MAX_LIFECYCLE_REASON_LENGTH
+    assert migration.AUDIT_ACTOR_KINDS == models.AUDIT_ACTOR_KINDS
+    assert migration.LIFECYCLE_ELIGIBLE_SCOPES == authorization.LIFECYCLE_ELIGIBLE_SCOPES
+
+    assert migration.LIFECYCLE_CONFLICT_SQLSTATE == lifecycle.LIFECYCLE_CONFLICT_SQLSTATE
+    assert migration.LIFECYCLE_NOT_ALLOWED_SQLSTATE == lifecycle.LIFECYCLE_NOT_ALLOWED_SQLSTATE
+    assert migration.LIFECYCLE_DEFINITION_SQLSTATE == lifecycle.LIFECYCLE_DEFINITION_SQLSTATE
+    assert migration.LIFECYCLE_KEY_REUSE_SQLSTATE == lifecycle.LIFECYCLE_KEY_REUSE_SQLSTATE
+    assert migration.LIFECYCLE_PROVENANCE_SQLSTATE == lifecycle.LIFECYCLE_PROVENANCE_SQLSTATE
+    # The outbox-link refusal is translated by the generic primitive's module, not the
+    # lifecycle one: it is a generic writer that meets it.
+    assert migration.OUTBOX_LINK_SQLSTATE == idempotency.OUTBOX_LINK_SQLSTATE
+    # Six distinct codes, in a class the standard does not define, so neither psycopg's
+    # exception hierarchy nor a framework retry helper mistakes one for something it knows.
+    codes = {
+        migration.LIFECYCLE_CONFLICT_SQLSTATE,
+        migration.LIFECYCLE_NOT_ALLOWED_SQLSTATE,
+        migration.LIFECYCLE_DEFINITION_SQLSTATE,
+        migration.LIFECYCLE_KEY_REUSE_SQLSTATE,
+        migration.LIFECYCLE_PROVENANCE_SQLSTATE,
+        migration.OUTBOX_LINK_SQLSTATE,
+    }
+    assert len(codes) == 6
+    for code in codes:
+        assert len(code) == 5 and code.startswith("FB"), code
+
+    # The reserved namespace, duplicated for the same reason: the check constraint that ties
+    # it to the derived machine tag is written in the migration, and ``db/lifecycle.py``
+    # builds the operation name a claim lands under. A prefix that drifted would put
+    # lifecycle claims in the generic uniqueness domain, where a generic writer could collide
+    # with one -- and the check constraint would then refuse every lifecycle claim instead.
+    assert migration.LIFECYCLE_NAMESPACE_PREFIX == lifecycle.LIFECYCLE_NAMESPACE_PREFIX
+    assert (
+        migration.LIFECYCLE_TRANSITION_OPERATION_PREFIX
+        == lifecycle.LIFECYCLE_TRANSITION_OPERATION_PREFIX
+    )
+    assert migration.LIFECYCLE_TRANSITION_OPERATION_PREFIX.startswith(
+        migration.LIFECYCLE_NAMESPACE_PREFIX
+    )
+    # And the operation it produces is a valid dotted name, so the format constraint on the
+    # claim's operation column cannot refuse a claim the kernel itself writes.
+    import re as _re
+
+    assert _re.fullmatch(
+        models.DOTTED_NAME_REGEX, lifecycle.lifecycle_transition_operation("test_workflow", 1)
+    )
+    assert migration.DOTTED_NAME_REGEX == models.DOTTED_NAME_REGEX
+    assert migration.IDEMPOTENCY_KEY_REGEX == models.IDEMPOTENCY_KEY_REGEX
+    assert migration.FINGERPRINT_REGEX == models.FINGERPRINT_REGEX
+    assert migration.IDEMPOTENCY_STATUS_COMPLETED == models.IDEMPOTENCY_STATUS_COMPLETED
+
+    # The conflict message is written in both places rather than passed through, because
+    # psycopg renders a plpgsql exception's CONTEXT -- which names the line that raised, and
+    # a line number is a branch identifier. So the two say the same thing and neither is
+    # built from the other.
+    assert migration.LIFECYCLE_CONFLICT_MESSAGE.startswith("firmbatch: ")
+    shared = migration.LIFECYCLE_CONFLICT_MESSAGE.removeprefix("firmbatch: ")
+    assert lifecycle.LIFECYCLE_CONFLICT_MESSAGE.startswith(shared)
+
+    # And the two lifecycle tables it policies are exactly the two the models declare as
+    # tenant-owned lifecycle tables.
+    assert set(migration.POLICIES) == set(authorization.DEFINITION_SCOPED_TABLES)
 
 
 def test_idempotency_keys_are_scoped_by_tenant_and_operation(owner_engine):
@@ -479,9 +574,13 @@ def test_neither_new_table_has_a_binary_column(owner_engine):
             {"schema": SCHEMA},
         ).all()
     assert rows, "the M2.2 tables are missing"
-    allowed = {"uuid", "text", "jsonb", "timestamp with time zone"}
+    # ``integer`` since Milestone 2.4 added the lifecycle machine version to the tag. The
+    # allowlist is what stops a *binary* column arriving; widening it by one scalar type
+    # does not change what it refuses, and leaving ``bytea`` out is the assertion.
+    allowed = {"uuid", "text", "integer", "jsonb", "timestamp with time zone"}
     for table, column, data_type in rows:
         assert data_type in allowed, f"{table}.{column} is {data_type}"
+    assert "bytea" not in {data_type for _table, _column, data_type in rows}
 
 
 def test_the_metadata_columns_are_bounded_objects_in_the_database(owner_engine):
@@ -615,7 +714,6 @@ def test_the_grants_still_apply_after_a_round_trip(environment):
     the schema in a state those grants could not be applied to, the failure would appear
     at the next environment provisioning rather than here -- which is late.
     """
-    from firmbatch.control_plane.db import roles
 
     handle = create_disposable_database(environment)
     try:
@@ -625,10 +723,7 @@ def test_the_grants_still_apply_after_a_round_trip(environment):
             migrate.upgrade_to_head(connection, expected=expected)
             connection.commit()
 
-            roles.harden_database(connection, handle.database)
-            roles.revoke_public_table_privileges(connection)
-            roles.grant_application_role(connection, handle.application_role)
-            roles.grant_provisioning_role(connection, handle.provisioning_role)
+            wire_handle_roles(connection, handle)
             connection.commit()
 
             granted = connection.execute(
@@ -664,12 +759,14 @@ def test_the_grants_still_apply_after_a_round_trip(environment):
 
 
 def _wire(connection, handle):
-    from firmbatch.control_plane.db import roles
+    """The whole wiring, including the lifecycle writer's installation.
 
-    roles.harden_database(connection, handle.database)
-    roles.revoke_public_table_privileges(connection)
-    roles.grant_application_role(connection, handle.application_role)
-    roles.grant_provisioning_role(connection, handle.provisioning_role)
+    Through the bootstrap's ``wire_handle_roles`` rather than the four ``roles`` calls,
+    because since the third M2.4 correction the wiring has a fifth step that needs the
+    administrator: the two entry points are handed to the lifecycle writer under a
+    ``SET``-only membership granted for the duration of the call and revoked after it.
+    """
+    wire_handle_roles(connection, handle)
     connection.commit()
 
 
@@ -713,7 +810,7 @@ def test_role_provisioning_survives_a_rollback_to_0002_and_back(environment):
     try:
         with migrate.migration_connection(handle.migration_url) as (connection, expected):
             # --- at head, as the bootstrap left it -------------------------------------
-            assert roles.schema_revision(connection) == roles.M2_3_REVISION
+            assert roles.schema_revision(connection) == roles.M2_4_REVISION
             _wire(connection, handle)
             head_tables = _granted(connection, handle.application_role)
             head_functions = _executable(connection, handle.application_role)
@@ -723,6 +820,16 @@ def test_role_provisioning_survives_a_rollback_to_0002_and_back(environment):
             assert "append_audit_event" in head_functions
             assert "auth_context_begin" not in head_functions
             assert "audit_events" not in head_provisioning
+            # Milestone 2.4, at head: SELECT on both lifecycle tables and nothing more, the
+            # three lifecycle entry points executable, the definition readers not.
+            assert head_tables["lifecycle_instances"] == {"SELECT"}
+            assert head_tables["lifecycle_transitions"] == {"SELECT"}
+            assert "transition_lifecycle_instance" in head_functions
+            assert "lifecycle_edge_exists" not in head_functions
+            assert "lifecycle_instances" not in head_provisioning
+            assert "transition_lifecycle_instance" not in _executable(
+                connection, handle.provisioning_role
+            )
 
             # --- down to 0002 -----------------------------------------------------------
             migrate.downgrade_to(connection, roles.M2_2_REVISION, expected=expected)
@@ -750,7 +857,7 @@ def test_role_provisioning_survives_a_rollback_to_0002_and_back(environment):
             # --- and back up -------------------------------------------------------------
             migrate.upgrade_to_head(connection, expected=expected)
             connection.commit()
-            assert roles.schema_revision(connection) == roles.M2_3_REVISION
+            assert roles.schema_revision(connection) == roles.M2_4_REVISION
 
             _wire(connection, handle)
             assert _granted(connection, handle.application_role) == head_tables
@@ -758,6 +865,233 @@ def test_role_provisioning_survives_a_rollback_to_0002_and_back(environment):
             assert _granted(connection, handle.provisioning_role) == head_provisioning
     finally:
         drop_disposable_database(handle)
+
+
+def test_role_provisioning_survives_a_rollback_to_0003_and_back(environment):
+    """The one-step rollback, which is the one an operator actually performs.
+
+    The round trip to ``0002`` above proves the whole history reverses. This proves the
+    narrower and more likely thing: that stopping at ``0003`` leaves a database whose roles
+    can still be wired, and that the Milestone 2.3 grant set comes back **exactly** -- no
+    lifecycle table, no lifecycle function, and nothing missing that ``0003`` had.
+
+    Measured rather than reasoned about, because this is precisely where the Milestone 2.3
+    correction found a real defect: role wiring names objects, and which objects exist is a
+    property of the revision.
+    """
+    from firmbatch.control_plane.db import roles
+
+    handle = create_disposable_database(environment)
+    try:
+        with migrate.migration_connection(handle.migration_url) as (connection, expected):
+            _wire(connection, handle)
+            head_tables = _granted(connection, handle.application_role)
+            head_functions = _executable(connection, handle.application_role)
+
+            migrate.downgrade_to(connection, roles.M2_3_REVISION, expected=expected)
+            connection.commit()
+            assert roles.schema_revision(connection) == roles.M2_3_REVISION
+
+            _wire(connection, handle)
+            at_0003 = _granted(connection, handle.application_role)
+            assert set(at_0003) == {
+                "tenants",
+                "workspaces",
+                "idempotency_records",
+                "outbox_events",
+                "audit_events",
+            }, at_0003
+            functions_at_0003 = _executable(connection, handle.application_role)
+            assert "append_audit_event" in functions_at_0003
+            for name, _signature in roles.ALL_LIFECYCLE_FUNCTIONS:
+                assert name not in functions_at_0003, name
+            # And the objects themselves are gone, not merely ungranted.
+            for relation in ("lifecycle_machines", "lifecycle_instances", "lifecycle_transitions"):
+                assert connection.execute(
+                    text("SELECT pg_catalog.to_regclass(:name) IS NULL"),
+                    {"name": f"{SCHEMA}.{relation}"},
+                ).scalar_one(), relation
+
+            migrate.upgrade_to_head(connection, expected=expected)
+            connection.commit()
+            assert roles.schema_revision(connection) == roles.M2_4_REVISION
+            _wire(connection, handle)
+            assert _granted(connection, handle.application_role) == head_tables
+            assert _executable(connection, handle.application_role) == head_functions
+    finally:
+        drop_disposable_database(handle)
+
+
+def test_the_whole_ladder_reverses_and_reapplies(environment):
+    """0004 -> 0003 -> 0002 -> 0001 -> base, and all the way back up.
+
+    Every supported revision in one run, in both directions, because a downgrade is only
+    correct if the *next* one still works afterwards -- and an intermediate revision that
+    left a policy behind, or dropped a column a later downgrade still names, would only show
+    up on the step after it.
+
+    Role wiring is exercised at each revision it supports, and refused at the ones it does
+    not: ``0001`` and ``base`` have no plan, and being refused there is the property rather
+    than a gap.
+    """
+    from firmbatch.control_plane.db import roles
+
+    ladder = (
+        roles.M2_4_REVISION,
+        roles.M2_3_REVISION,
+        roles.M2_2_REVISION,
+        "0001_tenant_workspace_spine",
+        "base",
+    )
+    handle = create_disposable_database(environment)
+    try:
+        with migrate.migration_connection(handle.migration_url) as (connection, expected):
+            for revision in ladder:
+                if revision != roles.M2_4_REVISION:
+                    migrate.downgrade_to(connection, revision, expected=expected)
+                    connection.commit()
+                if revision in roles.REVISION_PLANS:
+                    assert roles.schema_revision(connection) == revision
+                    _wire(connection, handle)
+                else:
+                    with pytest.raises(roles.UnsupportedSchemaRevision):
+                        roles.schema_revision(connection)
+                    connection.rollback()
+
+            assert migrate.current_revision(connection) is None
+            assert migrate.upgrade_to_head(connection, expected=expected) == migrate.head_revision()
+            connection.commit()
+            assert roles.schema_revision(connection) == roles.M2_4_REVISION
+            _wire(connection, handle)
+
+            # And the head schema is whole again: every Milestone 2.4 object is back, and
+            # the framework tables carry the tag columns the read policy consults.
+            for relation in (
+                "lifecycle_machines",
+                "lifecycle_states",
+                "lifecycle_transition_edges",
+                "lifecycle_instances",
+                "lifecycle_transitions",
+            ):
+                assert connection.execute(
+                    text("SELECT pg_catalog.to_regclass(:name) IS NOT NULL"),
+                    {"name": f"{SCHEMA}.{relation}"},
+                ).scalar_one(), relation
+            for table in ("idempotency_records", "outbox_events", "audit_events"):
+                columns = {
+                    name
+                    for (name,) in connection.execute(
+                        text(
+                            "SELECT column_name FROM information_schema.columns "
+                            "WHERE table_schema = :s AND table_name = :t"
+                        ),
+                        {"s": SCHEMA, "t": table},
+                    ).all()
+                }
+                assert {"lifecycle_machine_key", "lifecycle_machine_version"} <= columns, table
+            assert connection.execute(
+                text("SELECT pg_catalog.to_regclass(:name) IS NOT NULL"),
+                {"name": f"{SCHEMA}.lifecycle_claim_provenance"},
+            ).scalar_one()
+    finally:
+        drop_disposable_database(handle)
+
+
+def test_the_framework_read_policies_are_restored_exactly_by_the_downgrade(environment):
+    """0004 replaces two Milestone 2.3 policies; the downgrade must put them back.
+
+    A downgrade that dropped the tag-aware read policy without restoring the original would
+    leave a database whose framework tables nothing could read -- and a round trip to
+    ``base`` would not notice, because it drops the tables anyway.
+    """
+    handle = create_disposable_database(environment)
+    try:
+        with migrate.migration_connection(handle.migration_url) as (connection, expected):
+            migrate.downgrade_to(connection, "0003_auth_context_and_audit", expected=expected)
+            connection.commit()
+
+            policies = dict(
+                connection.execute(
+                    text(
+                        "SELECT tablename || ':' || policyname, qual FROM pg_policies "
+                        "WHERE schemaname = :s AND policyname LIKE '%_authenticated_read'"
+                    ),
+                    {"s": SCHEMA},
+                ).all()
+            )
+            for table in ("idempotency_records", "outbox_events", "audit_events"):
+                predicate = policies[f"{table}:{table}_authenticated_read"]
+                assert "auth_tenant_id()" in predicate
+                assert ("audit:read" if table == "audit_events" else "mutation:execute") in predicate
+                assert "lifecycle_machine_key" not in predicate, (
+                    f"{table}: the downgrade left the Milestone 2.4 predicate behind"
+                )
+            # And the schema is back to exactly 0003's shape: no tag columns, no reserved
+            # namespace, no provenance relation, and no unique key on the outbox that 0003
+            # never had.
+            for table in ("idempotency_records", "outbox_events", "audit_events"):
+                columns = {
+                    name
+                    for (name,) in connection.execute(
+                        text(
+                            "SELECT column_name FROM information_schema.columns "
+                            "WHERE table_schema = :s AND table_name = :t"
+                        ),
+                        {"s": SCHEMA, "t": table},
+                    ).all()
+                }
+                assert "lifecycle_machine_key" not in columns, table
+                assert "lifecycle_machine_version" not in columns, table
+            assert connection.execute(
+                text("SELECT pg_catalog.to_regclass(:name) IS NULL"),
+                {"name": f"{SCHEMA}.lifecycle_claim_provenance"},
+            ).scalar_one()
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM pg_catalog.pg_constraint c "
+                    "JOIN pg_catalog.pg_class t ON t.oid = c.conrelid "
+                    "JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace "
+                    "WHERE n.nspname = :s AND t.relname = 'outbox_events' "
+                    "AND c.conname = 'uq_outbox_events_id_tenant_id'"
+                ),
+                {"s": SCHEMA},
+            ).scalar_one() == 0
+
+            migrate.upgrade_to_head(connection, expected=expected)
+            connection.commit()
+            restored = dict(
+                connection.execute(
+                    text(
+                        "SELECT tablename || ':' || policyname, qual FROM pg_policies "
+                        "WHERE schemaname = :s AND policyname LIKE '%_authenticated_read'"
+                    ),
+                    {"s": SCHEMA},
+                ).all()
+            )
+            for table in ("idempotency_records", "outbox_events", "audit_events"):
+                assert "lifecycle_machine_key" in restored[f"{table}:{table}_authenticated_read"]
+            assert connection.execute(
+                text("SELECT pg_catalog.to_regclass(:name) IS NOT NULL"),
+                {"name": f"{SCHEMA}.lifecycle_claim_provenance"},
+            ).scalar_one()
+    finally:
+        drop_disposable_database(handle)
+
+
+def test_the_head_plan_names_exactly_the_protected_tables_the_catalogue_does(environment):
+    """The per-revision protected lists are data; this is what keeps the head one honest.
+
+    ``db/roles.py`` writes each revision's protected relations out by hand rather than
+    deriving them from ``PROTECTED_TABLES``, because ``PROTECTED_TABLES`` describes *head*
+    and a plan for an older revision must not name an object that revision does not have.
+    The price of writing them out is that the head list can drift from the catalogue, and
+    this is the assertion that stops it.
+    """
+    from firmbatch.control_plane.db import roles
+    from firmbatch.control_plane.db.models import PROTECTED_TABLES
+
+    assert set(roles._M2_4_PROTECTED_TABLES) == set(PROTECTED_TABLES)
+    assert set(roles._M2_3_PROTECTED_TABLES) < set(roles._M2_4_PROTECTED_TABLES)
 
 
 def test_an_unsupported_revision_is_refused_rather_than_guessed_at(environment):
@@ -785,6 +1119,9 @@ def test_an_unsupported_revision_is_refused_rather_than_guessed_at(environment):
                 lambda: roles.revoke_public_table_privileges(connection),
                 lambda: roles.grant_application_role(connection, handle.application_role),
                 lambda: roles.grant_provisioning_role(connection, handle.provisioning_role),
+                lambda: roles.install_lifecycle_writer(
+                    connection, handle.lifecycle_writer_role, handle.application_role
+                ),
             ):
                 with pytest.raises(roles.UnsupportedSchemaRevision):
                     call()
@@ -876,8 +1213,8 @@ def test_the_plans_name_only_objects_their_revision_has(environment):
     handle = create_disposable_database(environment)
     try:
         with migrate.migration_connection(handle.migration_url) as (connection, expected):
-            for revision in (roles.M2_3_REVISION, roles.M2_2_REVISION):
-                if revision != roles.M2_3_REVISION:
+            for revision in (roles.M2_4_REVISION, roles.M2_3_REVISION, roles.M2_2_REVISION):
+                if revision != roles.M2_4_REVISION:
                     migrate.downgrade_to(connection, revision, expected=expected)
                     connection.commit()
                 plan = roles.revision_plan(connection)
@@ -885,6 +1222,177 @@ def test_the_plans_name_only_objects_their_revision_has(environment):
                 # Every table the grants name is a table the plan declares.
                 granted = {table for table, _privileges in plan.application_grants}
                 granted |= {table for table, _privileges in plan.provisioning_grants}
+                granted |= {table for table, _privileges in plan.lifecycle_writer_grants}
+                granted |= {
+                    table for table, _privileges, _columns in plan.lifecycle_writer_column_grants
+                }
                 assert granted <= set(plan.tables), (revision, granted - set(plan.tables))
+    finally:
+        drop_disposable_database(handle)
+
+
+# ------------------------------------------------- the 0003 boundary is 0003, exactly
+#
+# Migration ``0003`` is merged history and is not edited to suit objects ``0004`` introduced.
+# ``0004`` installs an ownership-aware ACL sanitiser as a function, hands two functions to the
+# lifecycle writer and grants that role, and its downgrade must undo all of it -- so that a
+# database taken from head down to ``0003`` is indistinguishable from one migrated freshly up
+# to ``0003``, in schema, functions, policies, triggers, grants and sanitiser behaviour. This is
+# what says so, by comparing catalogue snapshots of the two rather than reasoning about them.
+
+
+def _catalogue_snapshot(connection) -> dict:
+    """Everything about the ``firmbatch`` schema that a migration can change, sorted.
+
+    Names and definitions only -- never an OID, a timestamp or a row count -- so two databases
+    that are the same schema compare equal. The per-run role names are part of the ACL text;
+    the comparison below runs both states on one handle, so they agree.
+    """
+
+    def rows(sql: str) -> list:
+        return sorted(
+            tuple(row) for row in connection.execute(text(sql), {"s": SCHEMA}).all()
+        )
+
+    return {
+        "columns": rows(
+            "SELECT table_name, column_name, data_type, is_nullable, "
+            "coalesce(column_default, '') FROM information_schema.columns "
+            "WHERE table_schema = :s"
+        ),
+        "constraints": rows(
+            "SELECT t.relname, c.conname, pg_catalog.pg_get_constraintdef(c.oid) "
+            "FROM pg_catalog.pg_constraint c JOIN pg_catalog.pg_class t ON t.oid = c.conrelid "
+            "JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = :s"
+        ),
+        "indexes": rows("SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = :s"),
+        "row_security": rows(
+            "SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity, "
+            "       pg_catalog.pg_get_userbyid(c.relowner), coalesce(c.relacl::text, '') "
+            "FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = :s AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')"
+        ),
+        "column_acls": rows(
+            "SELECT c.relname, a.attname, coalesce(a.attacl::text, '') "
+            "FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+            "JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid "
+            "WHERE n.nspname = :s AND a.attnum > 0 AND NOT a.attisdropped AND a.attacl IS NOT NULL"
+        ),
+        "functions": rows(
+            "SELECT p.proname, pg_catalog.pg_get_function_identity_arguments(p.oid), "
+            "       p.prosecdef, coalesce(array_to_string(p.proconfig, ','), ''), p.prosrc, "
+            "       pg_catalog.pg_get_userbyid(p.proowner), coalesce(p.proacl::text, '') "
+            "FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace "
+            "WHERE n.nspname = :s"
+        ),
+        "policies": rows(
+            "SELECT tablename, policyname, permissive, roles::text, cmd, coalesce(qual, ''), "
+            "       coalesce(with_check, '') FROM pg_policies WHERE schemaname = :s"
+        ),
+        "triggers": rows(
+            "SELECT c.relname, g.tgname, g.tgtype, g.tgenabled, g.tgfoid::regproc::text "
+            "FROM pg_catalog.pg_trigger g JOIN pg_catalog.pg_class c ON c.oid = g.tgrelid "
+            "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = :s AND NOT g.tgisinternal"
+        ),
+        "types": rows(
+            "SELECT t.typname, t.typtype, pg_catalog.pg_get_userbyid(t.typowner), "
+            "       coalesce(t.typacl::text, '') "
+            "FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace "
+            "WHERE n.nspname = :s AND t.typtype IN ('c', 'd', 'e', 'r')"
+        ),
+        "schema": rows(
+            "SELECT pg_catalog.pg_get_userbyid(n.nspowner), coalesce(n.nspacl::text, '') "
+            "FROM pg_catalog.pg_namespace n WHERE n.nspname = :s"
+        ),
+        "revision": rows(f"SELECT version_num FROM {SCHEMA}.{VERSION_TABLE}"),
+    }
+
+
+def _differences(left: dict, right: dict) -> dict:
+    return {
+        key: (sorted(set(left[key]) - set(right[key])), sorted(set(right[key]) - set(left[key])))
+        for key in left
+        if left[key] != right[key]
+    }
+
+
+def test_the_0003_boundary_matches_a_fresh_0003_installation(environment):
+    """head -> 0003 by downgrade equals base -> 0003 by upgrade, catalogue for catalogue.
+
+    The bootstrap is the fresh ``0001 -> 0002 -> 0003 -> 0004`` installation. From there:
+    downgrade to ``0003``, wire, and snapshot; prove the sanitiser ``0003`` shipped and the
+    runtime one behave identically at that revision; then go to ``base``, upgrade freshly to
+    ``0003``, wire, and snapshot -- and the two snapshots must be equal in every dimension a
+    migration can touch. Finally the direct ``0003 -> 0004`` upgrade, re-wired, is the head
+    the bootstrap produced: the ownership-aware sanitiser is back as a function, the writer
+    owns its two functions again, and every guard recognises it.
+    """
+    from firmbatch.control_plane.db import roles
+    from firmbatch.control_plane.testing.bootstrap import wire_handle_roles
+
+    migration_0003 = _load_migration_module("0003_auth_context_and_audit")
+
+    handle = create_disposable_database(environment)
+    try:
+        with migrate.migration_connection(handle.migration_url) as (connection, expected):
+            at_head = roles.lifecycle_writer_inventory(connection, handle.lifecycle_writer_role)
+            assert at_head.recognised
+
+            # --- head -> 0003, by the downgrade ----------------------------------------
+            migrate.downgrade_to(connection, roles.M2_3_REVISION, expected=expected)
+            connection.commit()
+            wire_handle_roles(connection, handle)
+            connection.commit()
+            via_downgrade = _catalogue_snapshot(connection)
+            assert via_downgrade["revision"] == [(roles.M2_3_REVISION,)]
+            assert not any("sanitize_schema_privileges" in row[0] for row in via_downgrade["functions"])
+            assert not any(
+                handle.lifecycle_writer_role in row[-1] for row in via_downgrade["functions"]
+            ), "a function ACL still names the lifecycle writer at 0003"
+            assert not any(
+                handle.lifecycle_writer_role in row[-2] for row in via_downgrade["functions"]
+            ), "a function is still owned by the lifecycle writer at 0003"
+
+            # --- sanitiser behaviour at 0003: 0003's own block and the runtime block agree --
+            connection.execute(text(migration_0003._SANITIZE_SCHEMA_ACL))
+            connection.commit()
+            stripped_by_0003 = _catalogue_snapshot(connection)
+            wire_handle_roles(connection, handle)
+            connection.commit()
+            assert _catalogue_snapshot(connection) == via_downgrade
+            roles.sanitize_schema_privileges(connection)
+            connection.commit()
+            stripped_by_runtime = _catalogue_snapshot(connection)
+            assert stripped_by_runtime == stripped_by_0003, _differences(
+                stripped_by_runtime, stripped_by_0003
+            )
+            wire_handle_roles(connection, handle)
+            connection.commit()
+
+            # --- base -> 0003, freshly ------------------------------------------------
+            migrate.downgrade_to(connection, "base", expected=expected)
+            connection.commit()
+            command.upgrade(
+                migrate.alembic_config(connection=connection, expected=expected),
+                roles.M2_3_REVISION,
+            )
+            connection.commit()
+            wire_handle_roles(connection, handle)
+            connection.commit()
+            fresh = _catalogue_snapshot(connection)
+            assert fresh == via_downgrade, _differences(fresh, via_downgrade)
+
+            # --- the direct 0003 -> 0004 upgrade, and the head is the bootstrap's --------
+            migrate.upgrade_to_head(connection, expected=expected)
+            connection.commit()
+            wire_handle_roles(connection, handle)
+            connection.commit()
+            assert migrate.current_revision(connection) == migrate.head_revision()
+            assert roles.lifecycle_writer_inventory(connection, handle.lifecycle_writer_role) == at_head
+            assert connection.execute(
+                text("SELECT pg_catalog.to_regprocedure(:f) IS NOT NULL"),
+                {"f": f"{SCHEMA}.sanitize_schema_privileges()"},
+            ).scalar_one()
     finally:
         drop_disposable_database(handle)

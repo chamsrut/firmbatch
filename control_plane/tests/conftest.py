@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 import pytest
@@ -30,6 +31,11 @@ from sqlalchemy import create_engine, text
 from firmbatch.control_plane import config, migrate
 from firmbatch.control_plane.db import auth
 from firmbatch.control_plane.db import engine as db_engine
+from firmbatch.control_plane.db.lifecycle import (
+    LifecycleDefinition,
+    create_lifecycle_instance,
+    register_lifecycle_definition,
+)
 from firmbatch.control_plane.db.repositories import TenantRepository
 from firmbatch.control_plane.security.authorization import Scope
 from firmbatch.control_plane.security.secrets import Secret
@@ -100,8 +106,67 @@ def drop_handle_objects(environment, handle) -> None:
         environment,
         database=handle.database,
         owner_role=handle.owner_role,
-        role_names=(handle.application_role, handle.provisioning_role, handle.owner_role),
+        role_names=(
+            handle.application_role,
+            handle.provisioning_role,
+            handle.owner_role,
+            handle.lifecycle_writer_role,
+        ),
     )
+
+
+@contextmanager
+def acting_as_lifecycle_writer(disposable_database, *, bind_as=None):
+    """One owner connection running as the lifecycle writer, by the trusted administrator's hand.
+
+    **This is the accepted limitation, exercised deliberately, and it is the only way any
+    test reaches the writer's identity.** Nobody can ``SET ROLE`` to the writer -- the
+    application, provisioning and owner roles are all refused, and that refusal is asserted
+    by name elsewhere. What can happen is what happens here: the bootstrap administrator,
+    which holds ``ADMIN OPTION`` on every role it created (or is a superuser, in CI), grants
+    the owner a ``SET``-only membership for the duration of the block and takes it back
+    afterwards, and a fresh connection then confirms nothing of it survived. That reach is
+    the one ADR 0004 section 8f accepts.
+
+    Tests use it for two things: to write rows that only the writer can write -- a tagged
+    claim with no provenance, provenance pointing at the wrong transition -- so that the
+    replay's chain verification can be exercised on rows the guards would otherwise make
+    unconstructible; and to prove that the guards pass **for the writer** and for nobody
+    else, which a refusal-only test could not distinguish from a guard that refuses always.
+
+    ``bind_as`` binds the tenant's authenticated context on the connection **before** the
+    ``SET ROLE``, as the owner, because ``bind_authenticated_context`` is not among the
+    functions the writer may execute. The context is per backend and per transaction, so
+    it survives the change of role.
+    """
+    from firmbatch.control_plane.testing.bootstrap import temporary_set_membership
+
+    owner = migrate.create_migration_engine(disposable_database.migration_url)
+    try:
+        with temporary_set_membership(
+            disposable_database.admin_url,
+            role=disposable_database.lifecycle_writer_role,
+            member=disposable_database.owner_role,
+        ):
+            with owner.connect() as connection:
+                if bind_as is not None:
+                    connection.execute(
+                        text("SELECT firmbatch.bind_authenticated_context(:c)"),
+                        {"c": bind_as.credential.reveal()},
+                    )
+                connection.execute(
+                    text(f'SET ROLE "{disposable_database.lifecycle_writer_role}"')
+                )
+                try:
+                    yield connection
+                finally:
+                    # A refused statement leaves the transaction aborted, and RESET ROLE
+                    # is refused inside an aborted transaction; clear it first. SET ROLE
+                    # is session-level, so the reset is still needed after the rollback.
+                    connection.rollback()
+                    connection.execute(text("RESET ROLE"))
+    finally:
+        owner.dispose()
 
 
 @pytest.fixture(scope="session")
@@ -334,6 +399,140 @@ def issue_credential(application_engine):
             )
 
     return _issue
+
+
+# ------------------------------------------------------- Milestone 2.4 lifecycle machines
+#
+# **These are test-only definitions and they are deliberately not product machines.**
+#
+# Migration 0004 registers no machine at all: the job lifecycle of target architecture
+# section 5.1 and the window-offer machine of section 12.1 belong to Milestones 5 and 6,
+# alongside the domain tables they describe, and seeding a graph ahead of those rows would
+# be a product decision taken by a foundation. So the suite installs its own, into the
+# disposable database it created, through the trusted owner -- the only identity that can
+# register one -- and ``test_lifecycle_definitions.py`` asserts that a *fresh* database
+# carries none.
+#
+# The names all begin with ``test_`` so that a definition leaking into a real environment
+# would be obvious rather than plausible. The scopes are existing customer capabilities
+# from the closed catalogue; there is no ``lifecycle:*`` scope and Milestone 2.4 adds none.
+
+#: The general-purpose machine. Its graph is chosen to exercise the properties a kernel has
+#: to get right rather than to model anything: a **cycle** (active <-> paused), two distinct
+#: terminal states, a state reachable two ways, and an edge out of the initial state
+#: straight to a terminal one.
+TEST_WORKFLOW = LifecycleDefinition(
+    machine_key="test_workflow",
+    version=1,
+    initial_state="draft",
+    states=("draft", "active", "paused", "closed", "cancelled"),
+    terminal_states=("closed", "cancelled"),
+    transitions=(
+        ("draft", "active"),
+        ("draft", "cancelled"),
+        ("active", "paused"),
+        ("paused", "active"),
+        ("active", "closed"),
+        ("active", "cancelled"),
+    ),
+    read_scope=Scope.WORKSPACE_READ.value,
+    create_scope=Scope.WORKSPACE_WRITE.value,
+    transition_scope=Scope.WORKSPACE_WRITE.value,
+)
+
+#: The same key, a **different version**, with a different graph. A change to a machine is a
+#: new version, so this is what that looks like -- and an instance pinned to version 1 is
+#: unaffected by it, which is the property version pinning exists for.
+TEST_WORKFLOW_V2 = LifecycleDefinition(
+    machine_key="test_workflow",
+    version=2,
+    initial_state="draft",
+    states=("draft", "active", "closed"),
+    terminal_states=("closed",),
+    transitions=(("draft", "active"), ("active", "closed")),
+    read_scope=Scope.WORKSPACE_READ.value,
+    create_scope=Scope.WORKSPACE_WRITE.value,
+    transition_scope=Scope.WORKSPACE_WRITE.value,
+)
+
+#: A machine requiring **different capabilities**, so that "the scope comes from the
+#: definition" is something a test can observe rather than read. The pairing is arbitrary
+#: and says nothing about what audit or credential management mean; what matters is that a
+#: credential holding every workspace capability reaches none of this machine.
+TEST_RESTRICTED = LifecycleDefinition(
+    machine_key="test_restricted",
+    version=1,
+    initial_state="opened",
+    states=("opened", "settled"),
+    terminal_states=("settled",),
+    transitions=(("opened", "settled"),),
+    read_scope=Scope.AUDIT_READ.value,
+    create_scope=Scope.CREDENTIAL_MANAGE.value,
+    transition_scope=Scope.CREDENTIAL_MANAGE.value,
+)
+
+#: A **self-edge**, which is legal. A move that changes only the revision is a real thing to
+#: want, and forbidding it would be a graph rule nobody asked for -- as would forbidding the
+#: cycle in ``TEST_WORKFLOW``. Both are here so that "this kernel does not assume acyclicity"
+#: is a test somebody has to delete on purpose.
+TEST_CYCLIC = LifecycleDefinition(
+    machine_key="test_cyclic",
+    version=1,
+    initial_state="idle",
+    states=("idle",),
+    terminal_states=(),
+    transitions=(("idle", "idle"),),
+    read_scope=Scope.WORKSPACE_READ.value,
+    create_scope=Scope.WORKSPACE_WRITE.value,
+    transition_scope=Scope.WORKSPACE_WRITE.value,
+)
+
+TEST_LIFECYCLE_DEFINITIONS: tuple[LifecycleDefinition, ...] = (
+    TEST_WORKFLOW,
+    TEST_WORKFLOW_V2,
+    TEST_RESTRICTED,
+    TEST_CYCLIC,
+)
+
+
+@pytest.fixture(scope="session")
+def lifecycle_definitions(owner_engine) -> dict:
+    """Install the test-only machines once, as the owner, into the disposable database.
+
+    Through :func:`register_lifecycle_definition`, which is the supported interface and the
+    one a later milestone's migration will use -- not through hand-written inserts, so the
+    fixture exercises the registrar rather than working around it.
+
+    Session-scoped and never removed: the definition tables refuse ``DELETE`` for every
+    role, including this one, which is exactly the immutability property under test. The
+    disposable database is dropped at the end of the session and takes them with it.
+    """
+    with owner_engine.connect() as connection:
+        for definition in TEST_LIFECYCLE_DEFINITIONS:
+            register_lifecycle_definition(connection, definition)
+        connection.commit()
+    return {(d.machine_key, d.version): d for d in TEST_LIFECYCLE_DEFINITIONS}
+
+
+@pytest.fixture()
+def workflow(lifecycle_definitions) -> LifecycleDefinition:
+    """The general-purpose test machine, version 1."""
+    return lifecycle_definitions[(TEST_WORKFLOW.machine_key, TEST_WORKFLOW.version)]
+
+
+@pytest.fixture()
+def new_instance(application_engine, lifecycle_definitions):
+    """Create one lifecycle instance as a principal, and return where it starts."""
+
+    def _create(principal, definition: LifecycleDefinition = TEST_WORKFLOW):
+        with auth.authenticated_transaction(application_engine, principal.credential) as session:
+            return create_lifecycle_instance(
+                session,
+                machine_key=definition.machine_key,
+                machine_version=definition.version,
+            )
+
+    return _create
 
 
 @pytest.fixture()

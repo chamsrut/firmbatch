@@ -2,24 +2,29 @@
 
 Active work and open questions. Updated at the end of each task, alongside `docs/STATE.md`.
 
-Last updated: 2026-09-05, `main` merge commit `b028f21` (Milestone 2.2, PR #5), plus
-Milestone 2.3 on `feat/milestone-2-3-auth-audit-secrets`, **implemented, tested, reviewed
-and awaiting merge**, after a fourth security correction pass. Milestone 1 merged at
-`6b4f341`; M2.1 merged at `712b51a` (implementation
-commit `521870b`, plus the bootstrap trust-boundary correction `78eae1d`); M2.2 merged at
-`b028f21` (implementation commit `d362717`).
+Last updated: 2026-09-06, `main` merge commit `dca2d49` (Milestone 2.3, PR #6), plus
+Milestone 2.4 on `feat/milestone-2-4-lifecycle-state-machines`, **implemented and tested in
+the working tree, awaiting review**, after two review correction passes closing six and five
+findings. Milestone 1 merged at `6b4f341`; M2.1 merged at
+`712b51a` (implementation commit `521870b`, plus the bootstrap trust-boundary correction
+`78eae1d`); M2.2 merged at `b028f21` (implementation commit `d362717`); M2.3 merged at
+`dca2d49` (implementation commit `89fbdd9`), after a fourth security correction pass.
 
-**M2.3 is at implementation commit `89fbdd9`.** Nothing has been pushed or merged; the
-human pushes and merges.
+**M2.4 has no commit hash.** Nothing has been staged, committed, pushed or merged; the human
+does all four.
 
 ---
 
 ## Active — Milestone 2, shared product foundation
 
-Milestones 0 and 1 are complete; Milestone 1 merged at `6b4f341`. Milestone 2 is now the active
-milestone. It has four slices; the first two are merged, the third is implemented, tested
-and reviewed at commit `89fbdd9` and awaiting merge, and the fourth is not started.
-Milestone 2 remains active until M2.4 is completed.
+Milestones 0 and 1 are complete; Milestone 1 merged at `6b4f341`. Milestone 2 is the active
+milestone. It has four slices; the first three are merged, and the fourth is **implemented
+and tested in the working tree, uncommitted, awaiting review**.
+
+**Milestone 2's declared implementation scope is now complete, subject to review and
+merge** -- every item the canonical roadmap lists under it is built. That is a statement
+about the working tree and not about a merge or a deployment: nothing in Milestone 2 is
+VERIFIED LIVE, because no evidence artifact has been captured for any of its four slices.
 
 ### M2.1 — PostgreSQL and tenant-isolation spine — **merged at `712b51a` (PR #4)**
 
@@ -207,25 +212,25 @@ Seven things worth a reviewer's attention, in descending order of consequence:
    created. It is still a guardrail and not a sandbox: a callback that opens its own
    engine or connection, drops to the DBAPI, or issues `COMMIT` as raw SQL is outside this
    transaction and outside anything the module can see.
-3. **The loser of a race executes its mutation and has it rolled back to a savepoint.**
+5. **The loser of a race executes its mutation and has it rolled back to a savepoint.**
    Only one mutation *commits*; both may run. A `mutate` function must therefore confine
    itself to rollback-safe DML — no mail, no spend, no provider call, no session-scoped
    advisory locks. That is what the outbox is for.
-4. **`READ COMMITTED` is required and anything stricter is refused.** The recovery path
+6. **`READ COMMITTED` is required and anything stricter is refused.** The recovery path
    re-reads a row another transaction has just committed. Under `REPEATABLE READ` that
    read returns nothing and the caller is told a taken key is free — a wrong answer, so
    the level is checked rather than assumed.
-5. **Append-only is enforced twice**: the application role holds `SELECT, INSERT` only, and
+7. **Append-only is enforced twice**: the application role holds `SELECT, INSERT` only, and
    the tables carry no `UPDATE`/`DELETE` policy at all, so even the owner reaches no row
    under `FORCE`. The one route left open by design is a tenant delete cascading, and no
    runtime role holds `DELETE` on `tenants`.
-6. **"Exactly one event" is a property of the primitive, not of the constraint.** The
+8. **"Exactly one event" is a property of the primitive, not of the constraint.** The
    unique constraint on `(tenant_id, idempotency_record_id)` enforces **at most one**
    linked event; a uniqueness constraint cannot require existence. The primitive writes
    exactly one, atomically with the claim, and the PostgreSQL tests count both after a real
    commit. A deferred constraint trigger would have made it a database fact and was
    deliberately not built — machinery to preserve a sentence is the wrong trade.
-7. **Exactly-once delivery is not claimed anywhere.** The outbox records intent. A later
+9. **Exactly-once delivery is not claimed anywhere.** The outbox records intent. A later
    dispatcher may deliver at least once.
 
 Three existing tests were changed rather than added to, and all three were strengthened:
@@ -268,9 +273,9 @@ Known limits carried out of this slice, in prose rather than as passing tests:
 - the contention test depends on `pg_stat_activity` showing a blocked backend, so on a
   server where that view is restricted it fails rather than silently degrading.
 
-### M2.3 — authenticated context, authorization, audit, secrets — **implemented and tested at `89fbdd9`, reviewed, awaiting merge**
+### M2.3 — authenticated context, authorization, audit, secrets — **merged at `dca2d49` (PR #6)**
 
-On `feat/milestone-2-3-auth-audit-secrets`, at implementation commit `89fbdd9`. It closes
+Delivered by implementation commit `89fbdd9`. It closes
 the piece M2.1 deliberately left open: tenant context is now resolved from an authenticated
 credential rather than accepted from a caller-set setting. `docs/STATE.md` has what it does and the property-to-test map;
 `docs/adr/0006-authenticated-authorization-audit-and-secrets.md` has why.
@@ -346,7 +351,7 @@ Eight things worth a reviewer's attention, in descending order of consequence:
    insert through the ORM. That is PostgreSQL behaving correctly; it is why the `tenants`
    read rule includes the provisioning scope, why the audit insert carries no `RETURNING`,
    and it is asserted as documented behaviour rather than left to be discovered.
-8. **Four of the five `AUTH-BOUND-TENANT-CONTEXT` completion cases are met.** The fifth —
+10. **Four of the five `AUTH-BOUND-TENANT-CONTEXT` completion cases are met.** The fifth —
    an authenticated user with no membership in a workspace — needs memberships, which are
    Milestone 3's. The task is not closed here and this branch does not close it.
 
@@ -461,7 +466,7 @@ in the same pass and are covered in `docs/STATE.md`.
 
 From the third review, three more:
 
-9. **Column-level ACLs bypassed the protected-state boundary entirely** (P1). As the
+11. **Column-level ACLs bypassed the protected-state boundary entirely** (P1). As the
    migration owner, `GRANT SELECT (backend_pid), UPDATE (tenant_id) ON
    firmbatch.auth_transaction_context TO <application role>` — and the hardened checkout
    accepted the connection. The application could then authenticate as tenant A, rewrite
@@ -573,22 +578,236 @@ building a partial one here would be the half-built capability ADR 0004 §8g arg
 **Customer-facing deployment remains blocked** until Milestone 3 supplies identity,
 membership and credential lifecycle together.
 
-### M2.4 — explicit lifecycle state machines — PLANNED
+### M2.4 — explicit lifecycle state machines — **implemented and tested, uncommitted, awaiting review**
 
-The next planned Milestone 2 slice. Conditional, persisted transitions that invalid
-transitions cannot race through. Not started.
+On `feat/milestone-2-4-lifecycle-state-machines`, **with no commit hash**: the earlier work
+is staged, the third correction pass is unstaged, and nothing has been committed, pushed or
+merged. `docs/STATE.md` has what it does and the property-to-test map;
+`docs/adr/0007-persisted-race-safe-lifecycle-transitions.md` has why.
 
-**Milestone 2's completion gate is met and Milestone 2 is still open.** The gate is
-cross-tenant reads and writes failing closed in automated tests **and** duplicate mutations
-producing one contractual effect; M2.1 delivered the first half, M2.2 the second, and M2.3
-re-established the first on a mechanism a compromised runtime cannot drive. The milestone's
-declared scope is wider than its gate — of the items listed under Milestone 2 in the
-canonical roadmap, audit events, tenant-scoped authorization and the secrets and encryption
-model are now built, and **explicit lifecycle state machines are not**. Do not close the
-milestone on the gate sentence.
+**An independent review found six issues in the first implementation, and all six are now
+corrected at the root.** Their table is in `docs/STATE.md` ("The M2.4 review correction
+pass"); the design consequences are ADR 0007 decisions 4a–4c, 8a-bis, 8c and 8d, and the
+extension to 8b. In one sentence each: a transition can no longer commit without its outbox
+event, because the database function writes every artifact and Python appends nothing;
+`mutation:execute` no longer reads a lifecycle's framework records, because those rows carry
+a derived machine tag their read policy consults; two identical concurrent requests now both
+replay instead of one conflicting; a definition is a draft until it is published in one
+transaction, and sealed afterwards; the expected revision is compared before any graph
+question; and `MutationUnitOfWork`'s generated forwarders can no longer be redirected to
+another `Session` operation.
 
-Do not implement execution, customer billing, or the portal opportunistically inside this
-milestone.
+**A second review then found five more, four of them introduced or left standing by that
+first pass, and all five are corrected too.** Their table is in `docs/STATE.md` ("The second
+M2.4 review correction pass"); the design consequences are ADR 0007 decisions 4a-bis, 4d, 8e
+and 8f. In one sentence each: a replay is now backed by a protected provenance row linking the
+claim to the exact transition it stands for, because a machine tag says which machine a row
+belongs to and not what it records; the operation name and the request fingerprint are derived
+inside PostgreSQL, because a fingerprint a caller supplies can bind a claim to a request that
+was never made; lifecycle **audit** events got the same tag and the same narrowed read policy
+the other two framework tables already had; every publication rule moved from the function
+onto the table's own triggers and every child mutation now serialises with publication on one
+machine-row lock; and a chosen framework identifier is refused at permission-check time while
+the `lifecycle.` operation namespace is closed to generic writers, which is what removes the
+two remaining write-side existence oracles.
+
+**A third review found the last two, and both are corrected at the root.** Their table is in
+`docs/STATE.md` ("The third M2.4 review correction pass"); the design consequences are ADR
+0007 decisions 8g and 8h. In one sentence each: a generic outbox writer now proves, in a
+`BEFORE INSERT` trigger that runs as the inserting role under its own row-security view and
+before the foreign key, the one-event-per-claim index or the `ON CONFLICT` arbiter is
+consulted, that the claim it links to is a generic claim it may read in its own tenant --
+so a hidden lifecycle claim and an absent UUID are refused with one message, where before one
+produced a uniqueness violation and the other a foreign-key violation; and every
+lifecycle-derived row -- the three machine tags, the provenance relation, the lifecycle
+outbox link -- is now written only by a **dedicated `NOLOGIN` lifecycle writer role** that
+owns the two `SECURITY DEFINER` entry points and that nobody, the schema owner included, can
+`SET ROLE` to, because the previous `current_user = schema owner` check was passed by the
+owner's own DML and by any definer function the owner happened to own. The writer is
+recognised from the catalogue (`firmbatch.lifecycle_writer_role()`: the owner of both entry
+points, provided it is not the schema owner and cannot log in), installed by the wiring layer
+under a temporary `SET`-only membership the administrator grants and revokes, left owning
+and holding nothing by a downgrade, and restored exactly by a re-upgrade.
+
+The points below are written as they now stand.
+
+**The one sentence that matters.** A lifecycle is a versioned graph stored in protected,
+global tables and sealed the moment it is published, an instance is a tenant-owned row
+carrying a state and a monotonic revision, and a move is **one conditional `UPDATE`** whose
+predicate carries the tenant, the instance, the machine version, the expected state and the
+expected revision — with a `BEFORE UPDATE` trigger underneath it that requires `(old, new)` to
+be a declared edge for every writer including the schema owner, and one database call that
+writes every artifact the move owes or none of them.
+
+Twelve things worth a reviewer's attention, in descending order of consequence:
+
+1. **Every artifact is written by the call that changes the state, or none is.** The database
+   function writes the state change, the history row, the audit event, the idempotency claim
+   when one was asked for, and the outbox intent — and it checks `mutation:execute` as well as
+   the machine's transition scope, inside the database. Neither Python entry point appends
+   anything, so an application role executing arbitrary SQL cannot produce a subset. Creating
+   an instance writes an outbox intent too (`<machine>.created`), so the rule has no
+   exception. Every lower-level state-changing function is executable by nobody. ADR 0007
+   decisions 8c and 8d.
+2. **A replay is backed by a transition, not by a machine tag -- and the transition boundary
+   is an identity, not the schema owner.** The tag says which machine a framework row belongs
+   to; it says nothing about which move a claim records, so a claim carrying a plausible
+   `result` would have replayed as a transition that never happened.
+   `firmbatch.lifecycle_claim_provenance` is the link: one row per claim, every column a
+   composite foreign key into a row the transition wrote, no runtime role holding any
+   privilege on it, written only by the transition entry point **executing as the dedicated
+   lifecycle writer role that owns it**, refused to every other identity including the
+   schema owner's own DML and the schema owner's own definer functions, and refused every
+   `UPDATE` and `DELETE`. The same identity check guards the three machine tags and the
+   lifecycle outbox link. A replay resolves the whole chain and refuses anything that does
+   not agree with itself. ADR 0007 decisions 8f and 8h.
+3. **The operation name and the request fingerprint are the database's.** Both were
+   parameters; a fingerprint a caller supplies can bind a claim to a request that was never
+   made, and one operation name for every machine put a tenant's machines in one key space,
+   which made the claim index answer "is this key taken" for rows the read policies hide.
+   The operation is now `lifecycle.transition.<machine>.v<version>` from the machine the
+   instance pins, and the fingerprint is a SHA-256 over a `jsonb` descriptor of the request
+   the call actually executed. **PostgreSQL is the only implementation**, so there is no
+   parity to prove. The replay lookup and the lost-race recovery went with them. ADR 0007
+   decision 8e.
+4. **A definition is a draft until it is published, and sealed once it is — and every rule
+   is on the table rather than in the function.** Registration inserts the machine
+   unpublished, then its states, then its edges, and publishes as its **last** statement in
+   the same transaction. The `BEFORE UPDATE` trigger carries the whole validation, so a
+   hand-written `UPDATE` runs exactly what the supported function runs; a `BEFORE INSERT`
+   trigger refuses a row that arrives published; the instant is the server's. Publication
+   requires every row to carry that transaction's `xmin` — which refuses an `AUTOCOMMIT`
+   registration and a definition assembled across transactions — and then checks the
+   whole-graph properties no constraint can state. Every consumer requires `published_at`.
+   Afterwards nothing may insert, update, delete, unpublish or re-describe it, including the
+   owner under ordinary DML. ADR 0007 decisions 4a–4c and 4a-bis.
+5. **Publication and the graph serialise on one lock.** Reading the publication column
+   without a lock is not deciding on it: an edge could commit between a publication's read
+   and its decision, leaving a published machine carrying an edge nothing validated. One
+   lockable object — the machine row — taken `FOR UPDATE` by publication before it inspects
+   any child and by every state and edge insert before it reads the column, which it then
+   re-reads from the row the lock returns. An edge locks the machine, not the states it
+   names. State and edge `UPDATE`/`DELETE` are refused outright, so neither can race at
+   all. ADR 0007 decision 4d.
+6. **No machine is registered, and that is the decision rather than an omission.** Migration
+   `0004` seeds nothing. The job lifecycle (target architecture §5.1) and the window-offer
+   machine (§12.1) are Milestone 5 and 6 definitions, registered alongside the domain tables
+   they describe. Both diagrams establish intent and neither is edge-complete; a registered
+   version is immutable; and a graph carrying contractual events is a product decision rather
+   than a data structure. `test_a_fresh_database_carries_no_lifecycle_definition` asserts it
+   on a fresh disposable database. ADR 0007 decision 2.
+7. **The graph is enforced by a trigger, not by the function.** A row-level-security policy's
+   `USING` clause sees the old row and its `WITH CHECK` sees the new one, and no policy sees
+   both — so "this pair is a declared edge" is not expressible as a policy at all. The
+   `BEFORE UPDATE` trigger does see both, and it binds the owner. The function's own edge
+   check is a courtesy that gives the caller a good error. ADR 0007 decision 8.
+8. **The required capability is data, read from the protected definition.** A machine version
+   declares which scope its instances take, and every policy reads it through
+   `firmbatch.lifecycle_required_scope()`. The caller never states one. This does **not**
+   reopen the closed catalogue: a definition may name only a scope that already exists, and
+   M2.4 adds none — there is deliberately no `lifecycle:*` wildcard. ADR 0007 decision 7.
+9. **A conflict is one refusal and says nothing else**, and making that true took two fixes
+   found by measurement. Two raise sites in plpgsql are two different errors, because psycopg
+   renders the `CONTEXT` line number and a line number is a branch identifier; and the Python
+   translation drops the database's text for this one error and uses its own constant. ADR
+   0007 decision 8b.
+10. **The expectation is compared before the graph**, and the reason is a defect the
+   unchoreographed race test found: with the graph first, a caller that lost a race and
+   re-read after the winner committed was told its transition was *invalid* rather than
+   *stale* — and whether it was depended on the interleaving.
+11. **Idempotency reuses M2.2's table and rules, and is composed rather than wrapped.** Two
+   supported shapes, one database call: the internal form commits one unlinked event, and the
+   API form passes **one idempotency key** into the same call, which derives the rest and
+   writes the claim, one linked event and the provenance that ties them. It cannot go through `execute_idempotent_mutation`, and the
+   reason is forced: the event must be written by the function, an outbox row is append-only
+   so the link cannot be added afterwards, and a claim's `result` is not known until the move
+   has happened — so claim and event must be written by the same call, claim first, whereas
+   the generic primitive claims *after* the mutation it wraps. Everything that carries
+   meaning is M2.2's: the same table, the same unique index as the serialisation point, the
+   same key validator, the same conflict. The fingerprint is **not**, deliberately -- see point 3.
+   **No claim identifier and no operation name is ever caller-supplied**, so there is nothing
+   to attach and nothing to validate. The generic primitive is untouched for
+   every non-lifecycle mutation; the one change in `db/idempotency.py` is the forwarder
+   narrowing above. ADR 0007 decisions 8d and 10.
+12. **The two runtime roles are no longer symmetric, and there is a fourth role.**
+   Provisioning receives no lifecycle authority of any kind, and `RevisionPlan` grew an
+   `application_functions` field to say so. The lifecycle writer -- `NOLOGIN`, no credential,
+   no membership, unreachable by `SET ROLE`, owning exactly the two entry points and holding
+   the minimum their bodies need -- is created and dropped with the other three, installed by
+   `roles.install_lifecycle_writer()` under a temporary `SET`-only membership the bootstrap
+   administrator grants and revokes (`bootstrap.wire_roles()` is the one function every
+   re-wiring goes through), and its ownership and grant matrix is compared to the plan field
+   by field. The ACL sanitiser's two function loops now touch only functions the schema owner
+   owns, because the owner cannot revoke on the writer's: `db/roles.py` runs that body as its
+   `DO` block, `0004` installs the same body as `firmbatch.sanitize_schema_privileges()` and
+   drops it on downgrade, and migration `0003` is untouched history with no diff against
+   `main`. ADR 0007 decision 8h.
+13. **A generic outbox link is an authorization check made before any constraint.**
+   `firmbatch.outbox_events_link_is_authorized()` runs as the inserting role, under its own
+   row-security view, and refuses a link to any claim that is absent, hidden, another
+   tenant's, not readable by the current authenticated context, or a lifecycle claim's --
+   with one message, SQLSTATE `FB006`, translated to `OutboxLinkRefused`. The lifecycle
+   writer passes; an authorized generic claim links as before; one already linked still
+   meets the one-event-per-claim index by name. ADR 0007 decision 8g.
+
+**Limits carried forward, and one new one:**
+
+- authenticated work remains **writable-primary-only** (M2.3's boundary, unchanged; Milestone
+  8 owns read-replica routing);
+- the outbox still records intent and a future dispatcher still delivers **at least once**;
+- sealing a published definition, the lifecycle tags, the provenance relation and the
+  outbox link are enforced by row triggers, so they bind ordinary DML including the owner's
+  -- the owner's own `INSERT` and its own definer functions are refused every
+  lifecycle-derived write -- but **not** a superuser, and not an owner who first disables or
+  redefines a trigger, sets `session_replication_role = replica`, or drops a writer-owned
+  function inside its schema (which makes the writer unrecognised and closes every guard).
+  Those are deliberate DDL-shaped acts by a role already trusted with the definitions
+  themselves, and the trusted-administrator limitation is retained on purpose;
+- **moving an instance requires the machine's read capability** as well as its transition
+  capability, because the function resolves the instance through the same policy a reader
+  uses. That is the capability model read correctly rather than a regression, and it is
+  asserted by name;
+- a caller that catches the database's refusal in Python keeps **nothing**: the `RAISE` aborts
+  back to the last savepoint, so the artifact count is all-or-nothing and the revision is
+  unchanged;
+- `audit:read` alone no longer reads a lifecycle audit row, its resource identifiers or its
+  details. Generic audit reading is unchanged, and the `lifecycle.` action namespace is
+  closed to the generic append;
+- the request fingerprint is canonical **within a database** and is not a cross-implementation
+  identifier. Nothing compares one across databases or persists one as an external contract;
+  if PostgreSQL's `jsonb` text form ever changed, stored claims would stop matching and those
+  retries would be refused as conflicting reuses rather than replayed;
+- the "no chosen identifier" caveat is **closed**: a generic link to a claim this context may
+  not read -- hidden, absent, another tenant's, or a lifecycle claim's -- is refused before
+  the foreign key and the unique index, with one message, in the plain and the
+  `ON CONFLICT` forms;
+- installing the lifecycle writer is a two-party act -- the administrator grants the owner a
+  `SET`-only membership for one call and revokes it after -- so an operator runbook has to
+  do the same: grant, install, revoke. A wiring that skips the writer leaves a database in
+  which every lifecycle-derived write is refused, which is the fail-closed direction;
+- the verify script's header comment and the `verify` skill now describe the four-role test
+  lifecycle, and the two new test modules are registered in `REQUIRED_FILES` -- both edits
+  made with the human's explicit approval, narrowly, and neither adds, removes, reorders or
+  weakens a gate;
+- the bounded-metadata policy is **shared rather than copied**, so a raw-SQL caller whose
+  transition details are refused sees a message that says "audit details". The rule is the
+  same rule; only the noun is imprecise, in a backstop;
+- the concurrency test depends on `pg_stat_activity` showing a blocked backend, so on a
+  server where that view is restricted it fails rather than silently degrading.
+
+**Where it stands.** `./scripts/verify-repository.sh` on 2026-09-06, after the third
+correction pass: **14 gates passed, 0 failed**, with the PostgreSQL foundation suite at
+**1,746 collected — 1,745 passed, 1 skipped** (the pre-existing local `REPLICATION`
+skip), up from 1,315 at M2.3, from 1,512 before the first correction pass, from 1,640
+before the second and from 1,721 before the third. `ruff check .` clean, `git diff --check`
+clean, one Alembic head, `0004` upgrading, downgrading and re-upgrading from `0001` with
+exact role wiring -- the lifecycle writer's included -- at each revision. M2.4 stays
+**implemented and tested** — not deployed, not VERIFIED LIVE, and no evidence artifact has
+been captured.
+
+**Do not** implement execution, customer billing, jobs, window offers or the portal
+opportunistically on top of this. The kernel is the mechanism those milestones express part
+of their invariants *with*; it establishes none of them.
 
 ---
 

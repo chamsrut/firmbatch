@@ -52,8 +52,10 @@ _ACCEPTED_SCHEMES = ("postgresql+psycopg", "postgresql", "postgres")
 #: real database can collide with it by accident.
 DISPOSABLE_DATABASE_PATTERN = re.compile(r"^firmbatch_test_[0-9a-f]{12}$")
 #: app = restricted application role; prov = tenant provisioning; own = the per-run
-#: database owner, which is also the migration principal and the deletion authority.
-DISPOSABLE_ROLE_PATTERN = re.compile(r"^firmbatch_test_(?:app|prov|own)_[0-9a-f]{12}$")
+#: database owner, which is also the migration principal and the deletion authority; lcw =
+#: the lifecycle writer, a NOLOGIN role that owns the two lifecycle entry points and that
+#: nobody can SET ROLE to.
+DISPOSABLE_ROLE_PATTERN = re.compile(r"^firmbatch_test_(?:app|prov|own|lcw)_[0-9a-f]{12}$")
 
 #: Databases an admin test URL is allowed to point at. It is a *maintenance* connection,
 #: used only to CREATE and DROP the disposable database and its roles; no Firmbatch table

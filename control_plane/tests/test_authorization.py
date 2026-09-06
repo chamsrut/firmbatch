@@ -40,8 +40,10 @@ from firmbatch.control_plane.db.idempotency import (
 from firmbatch.control_plane.db.models import PROTECTED_TABLES, TENANT_SCOPED_TABLES, Tenant, Workspace
 from firmbatch.control_plane.db.repositories import WorkspaceRepository
 from firmbatch.control_plane.security.authorization import (
+    DEFINITION_SCOPED_TABLES,
     DELEGABLE_SCOPES,
     KNOWN_SCOPES,
+    LIFECYCLE_ELIGIBLE_SCOPES,
     RESERVED_NON_CUSTOMER_DOMAINS,
     RESOURCE_RULES,
     RULES_BY_TABLE,
@@ -72,11 +74,47 @@ def test_the_rules_agree_with_the_models_about_which_tables_are_which():
             assert rule.read is None and rule.write is None, (
                 f"{rule.table} is protected, so there is no scope that reaches it"
             )
+            assert rule.scope_source == "none"
+        elif rule.kind == "lifecycle":
+            # Milestone 2.4. Tenant-owned like any other policed table, but the scope its
+            # policies require is a property of the *row* -- read from the protected machine
+            # definition -- rather than a constant this catalogue could state. The two
+            # ``None``s therefore mean something different here than they do above, and
+            # ``scope_source`` is what says which.
+            assert rule.table in TENANT_SCOPED_TABLES
+            assert rule.tenant_column == TENANT_SCOPED_TABLES[rule.table]
+            assert rule.read is None and rule.write is None, (
+                f"{rule.table} takes the scope its machine version declares, so no fixed one"
+            )
+            assert rule.scope_source == "definition"
+            assert rule.table in DEFINITION_SCOPED_TABLES
         else:
             assert rule.table in TENANT_SCOPED_TABLES
             assert rule.tenant_column == TENANT_SCOPED_TABLES[rule.table]
             assert rule.read is not None and rule.write is not None
+            assert rule.scope_source == "catalogue"
         assert rule.note.strip(), f"{rule.table}: a rule without a reason is a rule nobody can review"
+
+
+def test_a_lifecycle_machine_may_only_require_a_scope_the_catalogue_already_has():
+    """The bound that keeps data-driven authorization inside the closed catalogue.
+
+    A machine declaring its own required capability sounds like the catalogue stopped being
+    closed. It did not: the eligible set is a subset of :data:`KNOWN_SCOPES`, so a
+    definition can pick which existing capability it takes and cannot invent one -- and
+    Milestone 2.4 adds no scope at all, so there is no ``lifecycle:*`` anything.
+
+    ``tenant:provision`` is excluded, and the exclusion is not cosmetic: it cannot be placed
+    on any credential (see ``test_tenant_provision_cannot_be_delegated_by_anybody``), so a
+    machine requiring it would be unreachable by every customer credential rather than
+    protected from them.
+    """
+    assert set(LIFECYCLE_ELIGIBLE_SCOPES) < set(KNOWN_SCOPES)
+    assert Scope.TENANT_PROVISION.value not in LIFECYCLE_ELIGIBLE_SCOPES
+    assert set(LIFECYCLE_ELIGIBLE_SCOPES) == set(KNOWN_SCOPES) - {Scope.TENANT_PROVISION.value}
+    # No new scope was introduced for lifecycles, in either direction.
+    for scope in KNOWN_SCOPES:
+        assert not scope.startswith("lifecycle"), scope
 
 
 def test_the_database_and_the_catalogue_agree_on_the_scope_vocabulary(owner_engine):

@@ -71,6 +71,7 @@ RUNTIME_MODULES = (
     "db/engine.py",
     "db/identity.py",
     "db/idempotency.py",
+    "db/lifecycle.py",
     "db/metadata.py",
     "db/models.py",
     "db/principal.py",
