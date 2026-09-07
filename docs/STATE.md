@@ -14,34 +14,49 @@ Five labels, kept strictly apart:
 - **NOT VERIFIED** — asserted, expected, or reasoned about, with no captured run behind it.
   Documentation, comments, and passing-in-the-moment are not evidence.
 
-Last updated: 2026-09-06, at `main` merge commit `dca2d49` (Milestone 2.3, PR #6), plus
-Milestone 2.4 on `feat/milestone-2-4-lifecycle-state-machines`, **reviewed and awaiting
-merge** at implementation commit `d91e4f2`, after three independent reviews whose six, five
-and two findings are all corrected (see the three M2.4 correction-pass sections below). Milestone 1 merged at `6b4f341`; M2.1 merged at
-`712b51a` (implementation commit `521870b`, with the bootstrap trust-boundary correction
-`78eae1d` — see the CI correction section below); M2.2 merged at `b028f21` (implementation
-commit `d362717`); M2.3 merged at `dca2d49` (implementation commit `89fbdd9`), after four
-independent security reviews whose twenty-three findings are all corrected (see the four
-correction-pass sections below).
+Last updated: 2026-09-06, at `main` merge commit `4511f7d` (Milestone 2.4, PR #7), on the
+Milestone 3.0 documentation branch `docs/rev-d-phase-0-roadmap`. Milestone 1 merged at
+`6b4f341`; M2.1 merged at `712b51a` (implementation commit `521870b`, with the bootstrap
+trust-boundary correction `78eae1d` — see the CI correction section below); M2.2 merged at
+`b028f21` (implementation commit `d362717`); M2.3 merged at `dca2d49` (implementation
+commit `89fbdd9`), after four independent security reviews whose twenty-three findings are
+all corrected (see the four correction-pass sections below); **M2.4 merged at `4511f7d`
+(PR #7, implementation commit `d91e4f2`, status commit `290f715`)**, after three
+independent reviews whose six, five and two findings are all corrected (see the three M2.4
+correction-pass sections below). Wherever this document says "at M2.3", it means the state
+of commit `89fbdd9`; "at M2.4" means `d91e4f2`.
 
-**M2.4 is committed, and neither pushed nor merged.** Its implementation commit is `d91e4f2`
-on `feat/milestone-2-4-lifecycle-state-machines`; the human pushes, opens the pull request
-and merges. Wherever this document says "at M2.3", it means the state of commit `89fbdd9`.
+**Milestone 2 status: complete and merged.** Its four slices — **M2.1, M2.2, M2.3 and
+M2.4 — are implemented, tested and merged to `main`** through PR #7 at `4511f7d`. Milestone
+2 is **not deployed and not VERIFIED LIVE**: **no evidence artifact has been captured** for
+any of the four. The last verification pass recorded before the merge, at implementation
+commit `d91e4f2`, was **14 gates passed, 0 failed**, with **97** required files in the
+layout gate and the PostgreSQL foundation suite at **1,746 collected — 1,745 passed,
+1 skipped**; the supplied post-merge transcript reported the same 14 gates and 97 files.
+Those are HISTORICAL observations at those commits, not this document's claim about any
+later commit — see "Asserted — artifact pending" for the run at the current one. Every
+actionable M2.4 review finding is corrected and migration `0003` is unchanged history.
 
-**Milestone 2 status.** Its four slices — **M2.1, M2.2, M2.3 and M2.4 — are implemented and
-tested**. Milestone 2 is **not deployed and not VERIFIED LIVE**: **no evidence artifact has
-been captured** for any of the four. The last verification pass was **14 gates passed, 0
-failed**, with **97** required files in the layout gate and the PostgreSQL foundation suite
-at **1,746 collected — 1,745 passed, 1 skipped**. Every actionable M2.4 review finding is
-corrected; migration `0003` remains unchanged, with no diff against `main`; and the operator
-capacity agent remains separate operator-side software, owned by Milestone 6. **Milestone 3 —
-customer accounts and the customer-only portal foundation — is next.**
+**Architecture revision D.1 is adopted as PLANNED (Milestone 3.0, this branch).** The
+target is now `docs/architecture/v1-target-architecture.md` at revision D.1 (Phase 0
+purchased capacity, evaluation and internal qualification tiers, bridge envelope with gross
+accrued enforcement, purchase and measurement records, cost-aware routing, and the ten rev D
+review items resolved against the settlement canon, plan v3.4 and roadmap r2_4), with the
+verbatim D.1 and D sources under `docs/architecture/sources/`, the resolutions and the
+genuinely remaining choices in `docs/architecture/rev-d-decision-register.md`, and the
+decision in ADR 0008. **Nothing rev D or D.1 adds is implemented.** The operator capacity
+agent remains separate operator-side software, now scheduled for Phase P (after a supplier
+signs) rather than Milestone 6. **Milestone 3.1 — membership-bound identity, sessions and
+credential issuance — is next.** See the "CURRENT — Milestone 3.0" section and PLANNED
+below.
 
 ---
 
 ## CURRENT — Milestone 0 documentation baseline
 
-Milestone 0 aligns repository guidance with revision C of the approved v1 target architecture:
+Milestone 0 aligned repository guidance with revision C of the approved v1 target
+architecture (the target has since moved to revision D.1 at Milestone 3.0 — see that section
+below; the authority structure Milestone 0 established is unchanged):
 
 - `docs/architecture/v1-target-architecture.md` is the repo-native target specification.
 - `docs/firmbatch-v1-roadmap.md` is the active implementation sequence.
@@ -811,14 +826,13 @@ captures it, nothing is deployed, and the test count is not deployment proof.
 
 ---
 
-## CURRENT — Milestone 2.4 persisted, race-safe lifecycle state machines
+## CURRENT — Milestone 2.4 persisted, race-safe lifecycle state machines — **merged at `4511f7d` (PR #7)**
 
-The fourth and last declared slice of Milestone 2, on
-`feat/milestone-2-4-lifecycle-state-machines` at implementation commit `d91e4f2`.
-**Implemented and tested, reviewed, and awaiting merge, after three independent review
-passes whose six, five and two findings are all corrected.** Nothing has been pushed or
-merged. Not deployed, and **not VERIFIED LIVE** — no evidence artifact has been captured
-for this slice.
+The fourth and last declared slice of Milestone 2, implementation commit `d91e4f2`, status
+commit `290f715`, **merged to `main` at `4511f7d` through PR #7** after three independent
+review passes whose six, five and two findings are all corrected. Implemented and tested.
+Not deployed, and **not VERIFIED LIVE** — no evidence artifact has been captured for this
+slice; merging is not evidence.
 
 Everything M2.1, M2.2 and M2.3 established is preserved and re-run unchanged: forced
 row-level security, the pinned schema, the verified runtime principal, separated credentials,
@@ -1113,6 +1127,39 @@ proof.
 
 ---
 
+## CURRENT — Milestone 3.0 revision D.1 documentation adoption — **reviewed, awaiting commit/PR**
+
+Documentation only, on `docs/rev-d-phase-0-roadmap` from `main` at `4511f7d`. It changes
+no product behavior, no migration, no test, no dependency and no evidence, and it touches
+no protected agent, policy, workflow or verification file. The branch first adopted
+revision D; revision D.1 superseded D the same day, before anything was committed, and the
+staged documentation was corrected in place to D.1. Reviewed on 2026-09-07; one
+clarification was applied after review — the `AUTH-MEMBERSHIP-BOUND-IDENTITY` completion
+gate's non-member and session-versus-API-credential cases in `docs/firmbatch-v1-roadmap.md`
+and `docs/tasks/current.md`, with the M3.1 deliverable text aligned — and nothing else
+changed.
+
+| Document | What changed |
+| --- | --- |
+| `docs/firmbatch-v1-roadmap.md` | Revised M3–M8 sequence under revision D.1; Phase 0 / P / B and endpoint triggers; Milestone 2 recorded complete at `4511f7d`; the stale active `AUTH-BOUND-TENANT-CONTEXT` "raw GUC" blocker prose replaced by `AUTH-MEMBERSHIP-BOUND-IDENTITY`, with the M2.3 closure linked and its adversarial tests retained; M3.0 adoption, M3.1 identity and issuance, M3.2 customer application and M3.3 protected AWS staging (planned, not authorized); each later slice names the D.1 rule it implements; a "Remaining decisions" table with owners |
+| `docs/architecture/v1-target-architecture.md` | Revision D.1 integrated under the existing section numbers; §17 invariants 1–11 byte-identical to `main`, 12 (purchase only against an admitted job, inside a bridge envelope enforced as gross accrued spend, frozen `purchase_rate` and `supplier_account`, no recomputed cost) and 13 (`provider_policy` governs execution placement only, not the payload plane, and never weakens invariant 11) appended; `[D.1]` markers where D.1 states a rule precisely; new §5.5 qualification tier; no open-rule markers; §18 revision record for rev C → D → D.1 |
+| `docs/architecture/rev-d-decision-register.md` | Converted from an open-items list into the D-review/D.1-resolution register: each of D1–D10 with the review finding, the D.1 resolution, the source authority by section, and the genuinely remaining implementation choice if any; the qualification tier; the remaining-decisions table with owners |
+| `docs/architecture/sources/` | The supplied rev D.1 Markdown verbatim (`architecture-v1-rev-d-1.md`, SHA-256 `44e29e07…853f3`, the current source), the rev D Markdown kept as the historical reviewed input (`architecture-v1-rev-d.md`, SHA-256 `ea09cb2e…a2a2c`), and a manifest with the hashes of both PDFs and of every companion authority reviewed (settlement canon, plan v3.4, roadmap r2_4, price register, customer brief, definitions, demand map, operator equation, both RFQs), each marked stored or hash-referenced; the snapshots' "PLANNED — nothing here is implemented" banner is the source's disclaimer about itself, explained in the manifest |
+| `docs/adr/0008-phase-0-purchased-capacity-and-staged-delivery.md` | New: Phase 0 purchased capacity at revision D.1, Milestone 2 preserved, staged delivery with the M3.3 preview, the qualification tier and gross-accrual bridge accounting with the configured caps left to a human, Phase P / endpoint / Phase B deferrals, the review items resolved and the remaining choices named |
+| `docs/STATE.md`, `docs/tasks/current.md`, `README.md` | Status: Milestone 2 merged; revision D.1 PLANNED; M3.1 next; one README status line |
+
+**What this adoption does not do.** It implements nothing from revision D or D.1. It does
+not verify any price, SKU, quota, throughput or cost figure in the sources or the
+companions; those are the documents' figures at their capture dates. It does not fix the
+bridge caps (plan v3.4's $3–5k a month and $10k total are a planning range; the configured
+caps are a human's spend decision), the per-evaluation token and spend caps, the quote
+expiry or any other value the authorities leave to configuration, contract or measurement.
+It creates no cloud resource and authorizes no deployment, purchase, supplier contact or
+customer invitation. It reclassifies no evidence: Milestone 2 stays implemented and tested,
+not VERIFIED LIVE.
+
+---
+
 ## CURRENT — v0 prototype
 
 1,437 lines of Python across the product modules (`control/`, `controller.py`, `worker/`,
@@ -1241,7 +1288,7 @@ capture new artifacts with provenance matching the committed tree.
 
 | Claim | How to settle it |
 | --- | --- |
-| All **fourteen** gates in `scripts/verify-repository.sh` pass — **14 passed, 0 failed**: layout (**97** required files since Milestone 2.4 registered eleven more), agent configuration, hygiene, v0 property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 247/247, the runtime import closure check, and the PostgreSQL foundation suite **1,746 collected — 1,745 passed, 1 skipped** locally — the one skip is the pre-existing REPLICATION skip (granting REPLICATION needs a superuser admin, which CI has and the developer cluster does not. On CI that test runs and two others skip instead -- the owner-only-refusal assertions, which have no meaning for a superuser bootstrap administrator). Observed locally on 2026-09-06, after all three correction passes, against PostgreSQL 16.15 on the developer's WSL machine, at Milestone 2.4 implementation commit `d91e4f2`. **None of M2.2, M2.3 or M2.4 added a gate**; the foundation-suite gate already runs the whole `control_plane/tests` directory, so the new modules run inside it. | `/record-evidence` → `docs/evidence/r0/gates.txt` (and a Milestone 2 artifact for the foundation suite). Not yet captured. |
+| All **fourteen** gates in `scripts/verify-repository.sh` pass — **14 passed, 0 failed**: layout (**97** required files since Milestone 2.4 registered eleven more), agent configuration, hygiene, v0 property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 247/247, the runtime import closure check, and the PostgreSQL foundation suite **1,746 collected — 1,745 passed, 1 skipped** locally — the one skip is the pre-existing REPLICATION skip (granting REPLICATION needs a superuser admin, which CI has and the developer cluster does not. On CI that test runs and two others skip instead -- the owner-only-refusal assertions, which have no meaning for a superuser bootstrap administrator). Observed locally on 2026-09-06, after all three correction passes, against PostgreSQL 16.15 on the developer's WSL machine, at Milestone 2.4 implementation commit `d91e4f2` — that suite count is HISTORICAL to that commit. **Re-run for Milestone 3.0** on 2026-09-06 at `main` `4511f7d`, twice — once with the rev D documentation changes uncommitted in the working tree, and again after the correction to rev D.1 with the documentation changes staged — against the same attested PostgreSQL 16.15 cluster: **14 gates passed, 0 failed** both times, 97 required files; the script's passing output does not print the foundation suite's collected/passed/skipped counts, so no new count is claimed here. Still no artifact. **None of M2.2, M2.3 or M2.4 added a gate**; the foundation-suite gate already runs the whole `control_plane/tests` directory, so the new modules run inside it. | `/record-evidence` → `docs/evidence/r0/gates.txt` (and a Milestone 2 artifact for the foundation suite). Not yet captured. |
 | The M2.1 tenant-isolation properties hold in PostgreSQL: absent context reads nothing and writes nothing; tenant A cannot read, insert, update or delete tenant B's rows; a fabricated cross-tenant or dangling foreign key is rejected; tenant context is not inherited from a session value, a pooled connection, or a URL option; a reused ORM `Session` cannot serve a previous tenant's object; a temporary relation cannot shadow a Firmbatch table; the application role is non-owner, `NOSUPERUSER`, `NOBYPASSRLS`, is refused at connect time if it were any of those, cannot disable a policy, cannot create tables or temporary tables, cannot read the schema history, and cannot create a tenant even with matching context; workspace uniqueness is tenant-local. | `/record-evidence` → `docs/evidence/m2/tenant-isolation-suite.txt`, after the Milestone 2.1 commit. Until then this is a re-runnable claim with no captured artifact. |
 | The M2.2 idempotency and outbox properties hold in PostgreSQL: an identical retry returns the stored result and invokes the mutation once; four identical calls leave one workspace, one claim and one linked event; a conflicting reuse is rejected; two callers observed contending on a real lock commit one effect and one event, and the loser replays; a failure before commit leaves nothing and does not block the retry; a mutation callback cannot commit or roll back the primitive's transaction and an escape by any other route is detected; unflushed ORM state at entry is rejected; malformed operations and keys are refused before the mutation runs; the same key is independent between tenants; cross-tenant reads and writes on both new tables fail closed; missing context fails closed; a committed event is immutable to the application role and matches zero rows even for the owner; an internal state change appends an event with no idempotency record and a rollback removes both; and no value of the request identity reaches a row. **At M2.2 this was 511 passing checks with 1 skipped, of which 130 were new; the same properties are asserted at M2.3 inside a suite of 806.** | `/record-evidence` → `docs/evidence/m2/idempotency-outbox-suite.txt`, at or after Milestone 2.2 implementation commit `d362717`. Until then this is a re-runnable claim with no captured artifact, and M2.2 is **not** VERIFIED LIVE. |
 | The M2.3 authenticated-context, authorization, audit and secrets properties hold in PostgreSQL: a forged `app.tenant_id` or any fabricated setting grants nothing; a fabricated tenant, binding id, fingerprint, actor or scope grants nothing; the function that writes a context is executable by nobody; a relation forged where the context lives is ignored because it is not owned by the schema owner; unknown, malformed, revoked and expired credentials fail closed with one indistinguishable message; binding twice or switching identity is refused; context survives no commit, rollback, failed statement, pool reuse or `Session` reuse, and a Connection-bound `Session` is refused; a valid credential reaches its own tenant and no other; the credential is never stored; authorization is deny-by-default with read/write scope distinctions, minimal framework capabilities and no non-customer scope; every `SECURITY DEFINER` function is owned, path-pinned, `PUBLIC`-revoked, minimally granted and free of dynamic SQL; the registry has no grants and no policy; audit events derive tenant and actor, refuse a supplied alternative, cannot be backdated, are immutable, roll back with their action and reject secret-shaped metadata; secrets never render themselves and production fails closed; and the migration reverses to the M2.2 shape and back. **1,314 pytest checks pass, 1 skipped**, a net increase of 803 collected checks over M2.2's 512 -- five new modules, plus every existing module moved onto the authenticated mechanism, plus a handful of M2.1 tests replaced by the stronger property that superseded them. | `/record-evidence` → `docs/evidence/m2/authenticated-context-suite.txt`, at or after Milestone 2.3 implementation commit `89fbdd9`. No evidence artifact has been captured, so this remains a re-runnable claim and M2.3 is **implemented and tested**, **not** VERIFIED LIVE. |
@@ -1305,24 +1352,51 @@ The Claude `PreToolUse` hook is confirmed loaded and blocking, observed denying 
 
 ## PLANNED
 
-The canonical roadmap is `docs/firmbatch-v1-roadmap.md`; the pilot roadmap is superseded context.
+The canonical roadmap is `docs/firmbatch-v1-roadmap.md`, at architecture **revision D.1**
+since Milestone 3.0; the pilot roadmap is superseded context, and the revision C sequence is
+git history.
 
-Milestone 0 and Milestone 1 are complete (Milestone 1 merged at `6b4f341`). Milestone 2 is
-active. Its first slice, M2.1, is merged at `712b51a`; its second, M2.2, at `b028f21`; its
-third, M2.3, at `dca2d49`; its fourth and last, M2.4, is **implemented, tested, reviewed and
-awaiting merge** at implementation commit `d91e4f2`.
+Milestone 0 and Milestone 1 are complete (Milestone 1 merged at `6b4f341`). **Milestone 2
+is complete and merged**: M2.1 at `712b51a`, M2.2 at `b028f21`, M2.3 at `dca2d49`, and
+M2.4 at `4511f7d` (PR #7, implementation commit `d91e4f2`).
 
-**Milestone 2's declared implementation scope is now complete, subject to merge.** Every
-item the canonical roadmap lists under Milestone 2 — PostgreSQL migrations,
-tenant and workspace records, the transactional outbox, audit events, tenant-scoped
-authorization, the secrets and encryption model, the test and production configuration
-boundaries, the idempotent API mutation framework, and explicit lifecycle state machines — is
-built. The completion gate was met by M2.1 and M2.2 and re-established by M2.3; what remained
-was scope rather than gate, and M2.4 closes it.
+**Milestone 2's declared implementation scope is complete.** Every item the canonical
+roadmap lists under Milestone 2 — PostgreSQL migrations, tenant and workspace records, the
+transactional outbox, audit events, tenant-scoped authorization, the secrets and encryption
+model, the test and production configuration boundaries, the idempotent API mutation
+framework, and explicit lifecycle state machines — is built and merged. The completion gate
+was met by M2.1 and M2.2 and re-established by M2.3; what remained was scope rather than
+gate, and M2.4 closed it.
 
-That is a statement about the branch, not about a merge or a deployment. Milestone 2 is
-**not deployed**, and **nothing in Milestone 2 is VERIFIED LIVE**: no evidence artifact has
-been captured for any of its four slices.
+That is a statement about the code, not about a deployment. Milestone 2 is **not
+deployed**, and **nothing in Milestone 2 is VERIFIED LIVE**: no evidence artifact has been
+captured for any of its four slices. Revision D.1 does not reopen it: later domain work
+extends the foundation through new migrations, and `0001`–`0004` are history (ADR 0008).
+
+### PLANNED — everything revision D.1 adds
+
+Target revision D.1 (ADR 0008) is adopted and **none of it is implemented**: the purchased
+supply class and its frozen `supplier_account` and `purchase_rate`; the platform bridge
+envelope, enforced as gross accrued spend with reservations, usage replacement and invoice
+reconciliation and reported net of invoiced billings; purchase records with an immutable
+launch snapshot and append-only usage and invoice adjustments; measurement records and the
+seven-day Gate 1 protocol; the price register loaded from `gpu_price_register_1.xlsx`;
+cost-aware routing (`E[V]` per dollar) and measured throughput in the certification
+registry; the Google, Azure, AWS and Verda spot drivers; the evaluation tier with its
+per-tenant-per-corpus rule, its caps and its always-produced report; the internal
+qualification tier; `auto_accept_below` with its comparison, currency and consent-binding
+rules; `provider_policy` scoped to execution placement only; the usage basis per supply
+class and per-request endpoint metering; the frozen-terms-versus-measured-outcomes split
+on every attempt; the settlement canon's cause enum, revocation column, grouping parameter
+and 90-day true-up on the dark settlement paths; node-level windows and multi-GPU
+`execution_spec` fields; the firm tier redefined as a customer-named deadline of at least
+24 and under 72 hours; and the phase triggers (Phase P, endpoint extension, Phase B).
+The ten rev D review items are resolved by D.1 and recorded with their sources in
+`docs/architecture/rev-d-decision-register.md`; what remains open there are configuration,
+contract and measurement choices with named owners — the configured bridge caps, the
+evaluation caps, the quote expiry, the corpus identity rule, the qualification allow-list,
+per-contract settlement parameters, supplier-quoted rates, the model band, the staging
+authorisation and the agent language — none of which blocks Milestone 3.
 
 ### PLANNED — `AUTH-MEMBERSHIP-BOUND-IDENTITY` (Milestone 3), and it blocks launch
 
@@ -1355,30 +1429,45 @@ milestone's declared scope is wider than its gate, and the last item of it — e
 lifecycle state machines — is what M2.4 built. Milestone 2 is complete when its scope is, not
 when the gate sentence is quotable.
 
-**Next is Milestone 3: customer accounts and the customer-only portal foundation** —
-identity, workspaces, memberships, permissions, API credentials, and the authenticated
-customer application shell.
+**Milestone 3 is active.** M3.0, the revision D.1 documentation adoption, is this branch.
+**Next is M3.1: membership-bound identity, sessions and credential issuance** — signup,
+verification, recovery, browser sessions, workspace membership and roles, and the trusted
+issuance path from a verified identity and an active membership to the protected M2.3
+database context, with browser sessions kept distinct from scoped API credentials. Then
+M3.2, the authenticated customer application with honest empty states for later features,
+and M3.3, a protected AWS staging preview pulled forward from Milestone 8 — **planned, and
+not authorized**: a reviewed infrastructure plan, a cost estimate and an explicit go-ahead
+precede creating any resource, and no GPU driver is enabled by it.
 
 **The portal Milestone 3 builds is the customer application and nothing else.** The
 **operator capacity agent remains separate operator-side software**: a static Rust or Go
-binary installed in an operator's own cluster (target architecture §2 and §4), whose
-language decision and implementation belong to Milestone 6. It is not part of the customer
-portal, and §17 invariant 11 — customer, internal-operator and supplier permissions and
-interfaces remain separate — is why the two are not built as one surface.
+binary installed in an operator's own cluster (target architecture §2 and §4.2), built in
+**Phase P** when a supplier signs, with its language chosen by ADR then. It is not part of
+the customer portal, and §17 invariant 11 — customer, internal-operator and supplier
+permissions and interfaces remain separate — is why the two are not built as one surface.
 
-Then, following the canonical sequence:
+Then, following the canonical sequence at revision D.1:
 
-- Milestone 4: quotes, commercial records, payment projection, and billing interface.
-- Milestone 5: native JobSpec and tenant-scoped S3 payload path — and the **actual job
+- Milestone 4: immutable quotes and contracts with `auto_accept_below`, the dormant firm
+  contract, the evaluation allowance, billing and payment projection in sandbox, and the
+  bridge budget and price model.
+- Milestone 5: native JobSpec with `provider_policy` and `movable_to_shared`, the
+  tenant-scoped presigned payload path, the evaluation and paid flows — and the **actual job
   lifecycle**, whose machine definition is registered there, alongside the job tables it
   describes. M2.4 registered none.
-- Milestone 6: fenced attempts, validator/canonicalizer, providers, routing, spend, and
-  ledgers — and **window offers, attempts, leases and execution state**, whose machine
-  definitions are registered there for the same reason. The **operator capacity agent** is
-  Milestone 6's too, behind its own Rust-versus-Go ADR, and it stays operator-side software.
-- Milestone 8: deployment, and read-replica routing, which is what would lift the
-  writable-primary-only limitation M2.3 named and M2.4 inherits.
+- Milestone 6: fenced attempts, validator/canonicalizer, the three ledgers, spend and bridge
+  enforcement, the first purchased driver (Google Cloud spot) with **admitted, capped,
+  human-authorized internal qualification jobs** and Gate 1 measurements, measured pricing
+  and cost-aware admission and routing, the remaining VM drivers, and the firm, window and
+  operator-statement paths built and tested dark — and **window offers, attempts, leases
+  and execution state**, whose machine definitions are registered there for the same reason.
+- Milestone 7: the evaluation journey and the paid flex journey, end to end in staging.
+- Milestone 8: production deployment and the Phase 0 release; read-replica routing, which
+  is what would lift the writable-primary-only limitation M2.3 named and M2.4 inherits.
+- Phase P, the endpoint extension and Phase B follow their own triggers (target §15.4).
 
-Real-provider qualification and a real-GPU slice remain unverified, separately authorized work.
-They were not prerequisites for the Milestone 1 audit gate, they are not prerequisites for
-Milestone 2, and they must not be run implicitly.
+Real-provider qualification and a real-GPU slice remain unverified, separately authorized
+work. They were not prerequisites for the Milestone 1 audit gate or for Milestone 2, they
+are not prerequisites for Milestone 3, and they must not be run implicitly. Under
+revision D.1 the first billable execution is Milestone 6.2's, behind admission, caps,
+credentials and a human's specific authorization of each run.

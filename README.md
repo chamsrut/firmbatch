@@ -1,10 +1,12 @@
 # firmbatch
 
 > [!IMPORTANT]
-> **Current code:** v0 prototype. **Target:** Firmbatch v1 revision C.
+> **Current code:** v0 prototype, plus the merged Milestone 2 v1 foundation under
+> `control_plane/` (not deployed). **Target:** Firmbatch v1 revision D.1.
 >
 > The canonical target is `docs/architecture/v1-target-architecture.md`.
 > The implementation sequence is `docs/firmbatch-v1-roadmap.md`.
+> What the code does today is `docs/STATE.md`.
 
 A persistent batch job that survives its machines.
 

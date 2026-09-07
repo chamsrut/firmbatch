@@ -2,39 +2,168 @@
 
 Active work and open questions. Updated at the end of each task, alongside `docs/STATE.md`.
 
-Last updated: 2026-09-06, `main` merge commit `dca2d49` (Milestone 2.3, PR #6), plus
-Milestone 2.4 on `feat/milestone-2-4-lifecycle-state-machines`, **reviewed and awaiting
-merge** at implementation commit `d91e4f2`, after three review correction passes closing six,
-five and two findings. Milestone 1 merged at `6b4f341`; M2.1 merged at
-`712b51a` (implementation commit `521870b`, plus the bootstrap trust-boundary correction
-`78eae1d`); M2.2 merged at `b028f21` (implementation commit `d362717`); M2.3 merged at
-`dca2d49` (implementation commit `89fbdd9`), after a fourth security correction pass.
+Last updated: 2026-09-06, `main` merge commit `4511f7d` (Milestone 2.4, PR #7), on the
+Milestone 3.0 documentation branch `docs/rev-d-phase-0-roadmap`. Milestone 1 merged at
+`6b4f341`; M2.1 merged at `712b51a` (implementation commit `521870b`, plus the bootstrap
+trust-boundary correction `78eae1d`); M2.2 merged at `b028f21` (implementation commit
+`d362717`); M2.3 merged at `dca2d49` (implementation commit `89fbdd9`), after a fourth
+security correction pass; **M2.4 merged at `4511f7d` (PR #7, implementation commit
+`d91e4f2`)**, after three review correction passes closing six, five and two findings.
 
-**M2.4 is committed, and neither pushed nor merged.** Its implementation commit is `d91e4f2`;
-the human pushes, opens the pull request and merges.
+**Milestone 2 status: complete and merged.** Its four slices — **M2.1, M2.2, M2.3 and
+M2.4 — are implemented, tested and merged to `main`**. Milestone 2 is **not deployed and
+not VERIFIED LIVE**, and **no evidence artifact has been captured** for any of the four.
+The verification recorded at implementation commit `d91e4f2` was **14 gates passed, 0
+failed**, with **97** required files in the layout gate and the PostgreSQL foundation suite
+at **1,746 collected — 1,745 passed, 1 skipped**; the supplied post-merge transcript
+reported the same 14 gates and 97 files. Those figures are HISTORICAL to those commits; the
+run at the current commit is recorded under "Active — Milestone 3" below. Migration `0003`
+remains unchanged, and the operator capacity agent remains separate operator-side software,
+now scheduled for Phase P.
 
-**Milestone 2 status.** Its four slices — **M2.1, M2.2, M2.3 and M2.4 — are implemented and
-tested**. Milestone 2 is **not deployed and not VERIFIED LIVE**, and **no evidence artifact
-has been captured** for any of the four. Verification stands at **14 gates passed, 0 failed**,
-with **97** required files in the layout gate and the PostgreSQL foundation suite at **1,746
-collected — 1,745 passed, 1 skipped**. Every actionable M2.4 review finding is corrected;
-migration `0003` remains unchanged; and the operator capacity agent remains separate
-operator-side software. **Milestone 3 — customer accounts and the customer-only portal
-foundation — is next.**
+**Architecture revision D.1 is adopted (Milestone 3.0, this branch, documentation only).**
+`docs/firmbatch-v1-roadmap.md` carries the revised M3–M8 sequence and the Phase 0 / P / B
+triggers; the target is at revision D.1 with verbatim source snapshots (D.1 current, D
+historical) and a review register that records each rev D review item's D.1 resolution;
+ADR 0008 records the decision. **Milestone 3.1 — membership-bound identity, sessions and
+credential issuance — is next.**
 
 ---
 
-## Active — Milestone 2, shared product foundation
+## Active — Milestone 3, accounts, identity, portal and protected staging
 
-Milestones 0 and 1 are complete; Milestone 1 merged at `6b4f341`. Milestone 2 is the active
-milestone. It has four slices; the first three are merged, and the fourth is **committed at
-`d91e4f2`, reviewed, and awaiting merge**.
+Milestones 0, 1 and 2 are complete. Milestone 3 is the active milestone, under the
+revision D.1 roadmap. Its slices: **M3.0** documentation adoption (this branch), **M3.1**
+identity, membership and credential issuance, **M3.2** the customer application, **M3.3**
+the protected AWS staging preview.
 
-**Milestone 2's declared implementation scope is now complete, subject to merge** -- every
-item the canonical roadmap lists under it is built, and all four slices are implemented and
-tested. That is a statement about the branch and not about a merge or a deployment:
-Milestone 2 is not deployed and nothing in it is VERIFIED LIVE, because no evidence artifact
-has been captured for any of its four slices.
+### M3.0 — revision D.1 documentation adoption — **reviewed, awaiting commit/PR**
+
+Documentation only. The branch first adopted revision D; D.1 superseded it the same day,
+before anything was committed, and the staged documentation was corrected in place.
+Reviewed on 2026-09-07 with one clarification applied afterwards: the
+`AUTH-MEMBERSHIP-BOUND-IDENTITY` completion gate's non-member case and its
+session-versus-API-credential case, in `docs/firmbatch-v1-roadmap.md` and this file, with
+the M3.1 deliverable text aligned to the same distinction. No architecture decision, source
+snapshot or register entry changed.
+Changed: `docs/firmbatch-v1-roadmap.md` (revised M3–M8 at D.1, phase triggers, M2 closure,
+the stale `AUTH-BOUND-TENANT-CONTEXT` GUC-blocker prose replaced by
+`AUTH-MEMBERSHIP-BOUND-IDENTITY` with the M2.3 closure linked, each later slice naming the
+D.1 rule it implements, a remaining-decisions table);
+`docs/architecture/v1-target-architecture.md` (revision D.1 integrated under the existing
+section numbers, §17 invariants 1–11 byte-identical to `main`, 12 and 13 appended as D.1
+states them, new §5.5 qualification tier, no open-rule markers, §18 revision record);
+`docs/architecture/rev-d-decision-register.md` (converted into the D-review/D.1-resolution
+register); `docs/architecture/sources/` (D.1 snapshot added beside the historical D
+snapshot, manifest with every reviewed authority's hash and stored-versus-referenced
+status); `docs/adr/0008-phase-0-purchased-capacity-and-staged-delivery.md` (new, at D.1);
+this file, `docs/STATE.md` and one status line in `README.md`. No code, migration, test,
+dependency, evidence, deployment or provider change. No protected agent, policy, workflow
+or verification file was touched.
+
+**The rev D review items, resolved by D.1** (register D1–D10, each with its source): the
+cancellation cause is `operator_platform_failure`; an operator-asserted `security_stop`
+revokes an accepted window; grouping is once per operator-month with per-class as a
+contract parameter and the 90-day true-up follows Amendment 4; endpoint execution is
+accounted per request with raw token meters retained and the pricing unit frozen; the
+bridge follows plan v3.4's $3–5k monthly and $10k total planning range, enforced as gross
+accrued spend with reservations, usage replacement and invoice reconciliation, without
+turning the range into a fixed production cap; Gate 1 runs the seven-day per-pool,
+per-zone protocol with D.1's thresholds; evaluation is one per tenant per corpus unless an
+approval is recorded, at most 1,000 requests, capped, with a report in every terminal
+state; `auto_accept_below` compares the stored quote total excluding VAT and payment fees
+in the billing currency, less than or equal, with consent bound to the submitting
+credential and lapsing at quote expiry; `provider_policy` governs execution placement only
+in v1, so a customer excluding Amazon altogether cannot be served; purchase launch terms
+are immutable and usage and invoice adjustments append-only; frozen terms and measured
+outcomes stay separate; and the internal qualification tier exists. The companions
+(settlement canon, plan v3.4, roadmap r2_4, price register, customer brief, definitions,
+demand map, operator equation, both RFQs) were read in full and are hash-referenced in the
+manifest. **What genuinely remains** is listed with owners in the register's §3 and the
+roadmap's "Remaining decisions": the configured bridge caps and sub-caps, the numeric
+evaluation caps, the quote expiry, the corpus identity rule, the qualification allow-list,
+per-contract settlement parameters, supplier-quoted rates, the model band as a
+measurement, the staging authorisation and the agent language. No value for any of them
+was invented. None blocks M3.1 or M3.2.
+
+**Gate for this slice:** one active roadmap; correct M2 status; traceable rev D and D.1 changes;
+explicit open rules; no code or migration diff; `git diff --check` clean;
+`./scripts/verify-repository.sh` passing. **Result on 2026-09-06**, at `4511f7d`, run once
+with the rev D changes uncommitted and again after the correction to rev D.1 with the
+documentation changes staged, against the attested local PostgreSQL 16.15 cluster:
+`git diff --check` and `git diff --cached --check` clean; **14 gates passed, 0 failed**
+both times, 97 required files; the passing output prints no suite counts, so the
+historical 1,746 / 1,745 / 1 figure is not restated as this run's. It is a run, not an
+evidence artifact, and is recorded in `docs/STATE.md` "Asserted — artifact pending".
+
+Order for the human, from here (item 1 done at the 2026-09-07 review):
+
+1. Review ADR 0008, the review register, and the target's §17 (invariants 1–11 must read
+   exactly as before; 12 and 13 are the additions, now stated as D.1 states them).
+2. Check both snapshot hashes: `sha256sum docs/architecture/sources/*.md` must match
+   `docs/architecture/sources/README.md` (D.1 `44e29e07…853f3`, D `ea09cb2e…a2a2c`).
+3. Commit the reviewed branch, push, open the pull request, merge after checks pass. No
+   evidence artifact is claimed by this change.
+4. Before M4.1, M4.3 and M6.2 respectively: decide and record the evaluation caps and quote
+   expiry, the configured bridge caps and sub-caps, and the qualification allow-list and
+   per-run authorisations. These are the human's decisions; the documents leave them open on
+   purpose.
+
+### M3.1 — identity, workspace membership and credential issuance — **next implementation slice**
+
+The proposed slice, to be run under the `milestone` skill (inspect → gap → bounded plan →
+approval → implement → verify → report):
+
+- **Accounts and verification:** signup, login, email verification, credential recovery,
+  browser sessions with logout and revocation.
+- **Workspace membership:** create, invite, accept, remove; roles; workspace selection and
+  rename; lifecycle.
+- **The issuer:** a trusted issuance path from a verified identity and an active membership
+  to the protected M2.3 database context (`firmbatch.auth_bindings`), held by an authority
+  the runtime cannot impersonate. Browser sessions and scoped API credentials are distinct
+  credential types, never accepted at one another's authentication boundary and never
+  converted or redeemed into one another; a verified session may explicitly authorize an
+  audited API-credential create, rotate or revoke only after active membership and the
+  requested scopes are rechecked, and that issues a new credential rather than exchanging
+  a token. An account-level session exists before any workspace does, can create the
+  account's first workspace, and binds to a workspace only through active membership.
+  Creation, one-time display, rotation, revocation, last-use and audit records.
+- **Migrations:** new domain migrations after `0004`; `0001`–`0004` untouched.
+- **Gate:** `AUTH-MEMBERSHIP-BOUND-IDENTITY` (roadmap M3.1) — four adversarial tests against
+  real PostgreSQL 16, each failing closed — plus every existing M2 protection passing
+  unchanged. Not blocked by any open register entry.
+
+The UI (M3.2) may be designed alongside; M3.3's staging needs a reviewed infrastructure and
+cost plan and explicit authorization before any resource is created.
+
+### Open questions carried into Milestone 3
+
+- **Configuration the authorities leave to a human** (register §3): the configured bridge
+  monthly cap, total cap and per-supplier sub-caps (before any M6.2 purchase; plan v3.4's
+  $3–5k a month and $10k total are a planning range, not the number); the numeric
+  per-evaluation token and spend caps and the quote validity duration (M4.1); the
+  qualification tenant, profile allow-list and per-run authorisations (M6.1, M6.2). Not
+  needed before M3.
+- **AWS staging authorization** (M3.3): region, access model, cost estimate, managed-RDS role
+  and migration feasibility, and the human's explicit go-ahead.
+- **Evidence promotion:** Milestone 2 could be promoted to VERIFIED LIVE by capturing the
+  foundation-suite run with `/record-evidence` under `docs/evidence/m2/`. Until then the
+  **implemented and tested** classification stands for all four slices.
+
+---
+
+## Complete — Milestone 2, shared product foundation — **merged through PR #7 at `4511f7d`**
+
+Milestones 0 and 1 are complete; Milestone 1 merged at `6b4f341`. Milestone 2 has four
+slices, all merged: M2.1 (PR #4), M2.2 (PR #5), M2.3 (PR #6), M2.4 (PR #7). The sections
+below are the record of each slice as it was delivered and reviewed; their "order for the
+human" lists are historical and complete.
+
+**Milestone 2's declared implementation scope is complete and merged** -- every item the
+canonical roadmap lists under it is built, and all four slices are implemented and tested.
+That is a statement about the code and not about a deployment: Milestone 2 is not deployed
+and nothing in it is VERIFIED LIVE, because no evidence artifact has been captured for any
+of its four slices.
 
 ### M2.1 — PostgreSQL and tenant-isolation spine — **merged at `712b51a` (PR #4)**
 
@@ -405,7 +534,7 @@ is not on that list — gains seven entries in its `RUNTIME_MODULES` manifest so
 runtime modules are covered by the import-boundary check; no gate logic changed, and the
 change strengthens the check rather than relaxing it.
 
-Order for the human, from here:
+Order for the human at the time (all of it is now done; PR #6 merged at `dca2d49`):
 
 1. Review `docs/adr/0006-authenticated-authorization-audit-and-secrets.md`, in particular
    "What this does not claim" and the rejected alternatives.
@@ -577,23 +706,31 @@ building a partial one here would be the half-built capability ADR 0004 §8g arg
 
 **Completion gate.** Adversarial tests, against real PostgreSQL 16, each failing closed:
 
-1. A verified account with no membership in a workspace cannot obtain a session or a
-   credential scoped to it, by any route the API exposes.
+1. A verified account without membership in a workspace may retain its account-level
+   browser session, including the ability to create its first workspace, but cannot bind
+   that session to the unauthorized workspace or obtain any credential scoped to it, by any
+   route the API exposes.
 2. Revoking a membership stops the identity acting in that workspace, on the same
    linearisation terms the credential path already states.
 3. An invitation accepted for one tenant grants nothing in another.
-4. A session and an API credential remain distinct, and neither can be exchanged for the
-   other.
+4. Browser sessions and API credentials are distinct credential types and are never
+   accepted at one another's authentication boundary or directly converted or redeemed into
+   one another. A verified browser session may explicitly authorize an audited
+   API-credential create, rotate or revoke operation only after active membership and the
+   requested scopes are rechecked; that operation issues a new credential and is not a
+   token exchange.
 
 **Customer-facing deployment remains blocked** until Milestone 3 supplies identity,
 membership and credential lifecycle together.
 
-### M2.4 — explicit lifecycle state machines — **reviewed and awaiting merge, at `d91e4f2`**
+### M2.4 — explicit lifecycle state machines — **merged at `4511f7d` (PR #7)**
 
-On `feat/milestone-2-4-lifecycle-state-machines`, **implementation commit `d91e4f2`**: the
-milestone and all three correction passes are committed, and nothing has been pushed or
-merged. `docs/STATE.md` has what it does and the property-to-test map;
-`docs/adr/0007-persisted-race-safe-lifecycle-transitions.md` has why.
+Delivered by implementation commit `d91e4f2` on `feat/milestone-2-4-lifecycle-state-machines`,
+with the milestone and all three correction passes, and **merged to `main` at `4511f7d`
+through PR #7** (status commit `290f715`). `docs/STATE.md` has what it does and the
+property-to-test map; `docs/adr/0007-persisted-race-safe-lifecycle-transitions.md` has why.
+The paragraphs below are the record as it stood at review; "awaiting merge" wording in the
+history tables of `docs/STATE.md` describes that moment.
 
 **An independent review found six issues in the first implementation, and all six are now
 corrected at the root.** Their table is in `docs/STATE.md` ("The M2.4 review correction
@@ -814,10 +951,11 @@ before the second and from 1,721 before the third. `ruff check .` clean, `git di
 clean, one Alembic head, `0004` upgrading, downgrading and re-upgrading from `0001` with
 exact role wiring -- the lifecycle writer's included -- at each revision, and **migration
 `0003` unchanged**, with no diff against `main`. **All actionable M2.4 review findings are
-corrected.** M2.4 stays **implemented and tested** — reviewed and awaiting merge, not
+corrected.** M2.4 is **implemented and tested** and, since `4511f7d`, **merged** — not
 deployed, not VERIFIED LIVE, and no evidence artifact has been captured.
 
-Order for the human, from here:
+Order for the human at the time (all of it is now done; PR #7 merged at `4511f7d`, with the
+supplied post-merge transcript reporting **14 gates, 0 failed** and 97 required files):
 
 1. Commit this documentation change — `docs/STATE.md` and `docs/tasks/current.md`, on top of
    implementation commit `d91e4f2`.
@@ -829,14 +967,16 @@ Order for the human, from here:
 5. Merge after all required checks pass.
 6. Optionally, later: capture live evidence with `/record-evidence` under `docs/evidence/m2/`
    to promote Milestone 2 to **VERIFIED LIVE**. Until then the **implemented and tested**
-   classification stands, for all four slices.
+   classification stands, for all four slices. (Still open — see "Open questions carried
+   into Milestone 3" above.)
 
-**What is next.** **Milestone 3 — customer accounts and the customer-only portal
-foundation**: identity, workspaces, memberships, permissions, API credentials, and the
-authenticated customer application shell, with `AUTH-MEMBERSHIP-BOUND-IDENTITY` above as its
-launch-blocking task. The portal it builds is the **customer** application and nothing else;
-the **operator capacity agent remains separate operator-side software**, a Milestone 6 binary
-in the operator's own cluster, kept apart by §17 invariant 11.
+**What is next.** **Milestone 3 under the revision D.1 roadmap**: M3.0 documentation adoption
+(this branch), then M3.1 identity, workspaces, memberships, permissions and credential
+issuance with `AUTH-MEMBERSHIP-BOUND-IDENTITY` above as its launch-blocking gate, then the
+customer application (M3.2) and a protected AWS staging preview (M3.3, planned and not yet
+authorized). The portal it builds is the **customer** application and nothing else; the
+**operator capacity agent remains separate operator-side software**, a Phase P binary in the
+operator's own cluster, kept apart by §17 invariant 11 and ADR 0008.
 
 **Do not** implement execution, customer billing, jobs, window offers or the portal
 opportunistically on top of this. The kernel is the mechanism those milestones express part
