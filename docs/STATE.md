@@ -15,10 +15,13 @@ Five labels, kept strictly apart:
   Documentation, comments, and passing-in-the-moment are not evidence.
 
 Last updated: 2026-09-09, on `feat/milestone-3-1-identity-membership` from `main` at
-`116b5ee` (Milestone 3.0, PR #8), with Milestone 3.1 implemented and tested in the working
-tree and **not committed**, after two independent review correction passes whose ten
-findings and two gaps (Codex) and six findings (GPT-5.6 Sol) are all corrected — see the two
-M3.1 correction-pass sections below. Milestone 1 merged at
+`116b5ee` (Milestone 3.0, PR #8), with **Milestone 3.1 implemented, tested and committed at
+`f92ecb9`**, after two independent review correction passes whose ten findings and two gaps
+(Codex) and six findings (GPT-5.6 Sol) are all corrected, and a third, clean independent
+review (GPT-5.6 Sol at xhigh effort) that verified all six of those findings as fixed and
+raised no actionable regression — see the three M3.1 review sections below. The branch is
+**ready for pull request and merge**; it is not merged, not deployed and not VERIFIED LIVE.
+Milestone 1 merged at
 `6b4f341`; M2.1 merged at `712b51a` (implementation commit `521870b`, with the bootstrap
 trust-boundary correction `78eae1d` — see the CI correction section below); M2.2 merged at
 `b028f21` (implementation commit `d362717`); M2.3 merged at `dca2d49` (implementation
@@ -50,9 +53,9 @@ genuinely remaining choices in `docs/architecture/rev-d-decision-register.md`, a
 decision in ADR 0008. **Nothing rev D or D.1 adds is implemented.** The operator capacity
 agent remains separate operator-side software, now scheduled for Phase P (after a supplier
 signs) rather than Milestone 6. **Milestone 3.1 — membership-bound identity, sessions and
-credential issuance — is implemented and tested on the branch, uncommitted, not merged,
-not deployed and not VERIFIED LIVE.** See the "CURRENT — Milestone 3.1" section and PLANNED
-below.
+credential issuance — is implemented, tested and independently reviewed at `f92ecb9`, ready
+for pull request and merge, and not merged, not deployed and not VERIFIED LIVE.** See the
+"CURRENT — Milestone 3.1" section and PLANNED below.
 
 ---
 
@@ -1164,12 +1167,14 @@ not VERIFIED LIVE.
 
 ---
 
-## CURRENT — Milestone 3.1 membership-bound identity, sessions and credential issuance — **implemented and tested on `feat/milestone-3-1-identity-membership`, uncommitted**
+## CURRENT — Milestone 3.1 membership-bound identity, sessions and credential issuance — **implemented, tested and independently reviewed at `f92ecb9`, ready for PR**
 
-Implemented on the branch from `main` at `116b5ee` (Milestone 3.0, PR #8); **not committed,
-not merged, not deployed, and not VERIFIED LIVE**. ADR 0009 records the design. Nothing in
-Milestone 2 is reopened: migrations `0001`–`0004` are unchanged, `bind_authenticated_context`
-is unchanged, and every existing test passes unchanged except the three named below.
+Implemented on the branch from `main` at `116b5ee` (Milestone 3.0, PR #8) and committed at
+**`f92ecb9`**; **not merged, not deployed, and not VERIFIED LIVE**. ADR 0009 records the
+design. Nothing in Milestone 2 is reopened: migrations `0001`–`0004` are unchanged —
+migration `0005` is where the whole, still unmerged M3.1 implementation lives —
+`bind_authenticated_context` is unchanged, and every existing test passes unchanged except
+the three named below.
 
 **What it is.** Forward migration `0005_identity_and_membership` adds nine **protected**
 tables — `accounts`, `account_passwords`, `account_tokens`, `memberships`,
@@ -1211,7 +1216,7 @@ capture adapter and a production adapter that raises, and no HTML.
 | `control_plane/db/accounts.py`, `membership.py`, `credentials.py` | The Python wrappers: signup, verification, recovery, login, sessions; workspaces, binding, memberships, invitations; issuance, rotation, revocation, listing, last use |
 | `control_plane/security/passwords.py`, `permissions.py`, `secrets.py` | Argon2id policy; the closed role model and the issuable subset; the five identity secret prefixes and the appended shape |
 | `control_plane/api/` | `app.py` (the boundary and thirty-two routes), `settings.py` (`FIRMBATCH_API_ALLOWED_ORIGINS`, `FIRMBATCH_API_COOKIE_SECURE`, `FIRMBATCH_API_SESSION_TTL_SECONDS`), `email.py`, `__main__.py` (loopback uvicorn, application settings only) |
-| `control_plane/tests/` | Eight new modules (`test_identity_accounts`, `_membership`, `_issuance`, `_protection`, `_migration`, `_permissions`, `_concurrency`, `test_api_http`) and `identity_helpers.py`; `test_migrations.py`, `test_audit_events.py` and `test_protected_auth_state.py` extended for the new head, the appended shape and the nine tables |
+| `control_plane/tests/` | Nine new modules (`test_identity_accounts`, `_membership`, `_issuance`, `_protection`, `_migration`, `_permissions`, `_concurrency`, `test_api_http`, and `_security_corrections` from the Codex pass) and `identity_helpers.py`; `test_migrations.py`, `test_audit_events.py` and `test_protected_auth_state.py` extended for the new head, the appended shape and the nine tables, and `conftest.py`, `test_configuration.py`, `test_admin_escalation.py`, `test_bootstrap_safety.py` and `test_bootstrap_lifecycle.py` extended for the authenticator role |
 | `requirements-v1.txt`, `requirements-v1-dev.txt`, both lock files | `argon2-cffi==25.1.0`, `starlette==1.6.0`, `uvicorn==0.52.4` (runtime); `httpx==0.28.1` (dev); locks regenerated with `pip-compile --generate-hashes --strip-extras --no-header` in a throwaway environment |
 | `docs/adr/0009-…`, `.env.example`, `README.md` | The decision record; the three API variables; one status line |
 
@@ -1252,15 +1257,15 @@ equal to an independent downgrade, and re-upgrades, with role wiring at every re
 | 3. An invitation accepted for one tenant grants nothing in another | `test_identity_membership.py::test_gate_case_3_an_invitation_accepted_for_one_tenant_grants_nothing_in_another` |
 | 4. Sessions and API credentials are distinct types, never accepted at each other's boundary, never converted; issuance is an audited operation after membership and scopes are rechecked | `test_identity_issuance.py::test_gate_case_4_a_session_issues_a_credential_that_authenticates_as_its_membership_and_nothing_else` |
 
-**Verification at the implementation state (uncommitted working tree), 2026-09-09, after the
-second review correction pass, against the attested local PostgreSQL 16.15 cluster:** the
-PostgreSQL foundation suite **2,038 collected — 2,037 passed, 1 skipped** (the one skip is
-the pre-existing REPLICATION skip), a net increase of 76 over the first pass's 1,962 that is
-this pass's regression and concurrency coverage; `./scripts/verify-repository.sh` reports
+**Verification at implementation commit `f92ecb9`, 2026-09-09, against the attested local
+PostgreSQL 16.15 cluster:** the PostgreSQL foundation suite **2,038 collected — 2,037 passed,
+1 skipped** (the one skip is the pre-existing, environment-dependent REPLICATION skip) — the
+latest full-suite result, a net increase of 76 over the first pass's 1,962 that is the second
+pass's regression and concurrency coverage; `./scripts/verify-repository.sh` reports
 **14 gates passed, 0 failed**, with **119** required files in the layout gate; `git diff
 --check` is clean; the cluster carries no leaked `firmbatch_test_*` database, role or session
-afterwards. **No evidence artifact was captured**; these are HISTORICAL observations of a
-working tree, not VERIFIED LIVE. (The figures recorded for 2026-09-07 were 1,962 collected —
+afterwards. **No evidence artifact was captured**; these are HISTORICAL observations at that
+commit, not VERIFIED LIVE. (The figures recorded for 2026-09-07 were 1,962 collected —
 1,961 passed, 1 skipped, and they are HISTORICAL to that state.)
 
 **Three existing tests changed, each because the head moved:** `test_migrations.py` (the head
@@ -1462,6 +1467,31 @@ with an explicitly supplied future expiry does not lift that refusal; re-issuanc
 back. The elapsed-expiry guard is kept as a refusal rather than deleted, so a future edit
 cannot silently reintroduce the `NULL`.
 
+### The final independent M3.1 verification — clean, nothing outstanding
+
+A third independent review — GPT-5.6 Sol at xhigh effort, over the implementation at
+`f92ecb9` — **verified all six outstanding findings from the second pass as fixed**: the
+recovery/login transaction race; the mailbox-verification authority; stale workspace
+membership; HTTP authentication and CSRF ordering; strict `keep_current` Boolean parsing; and
+credential-expiry consistency. The additional **authenticator-role teardown leak** — the
+seventh item above, found by the leak check rather than by a reviewer — is **fixed** with
+them: the four hand-written per-run role lists in `test_bootstrap_safety.py` and
+`test_bootstrap_lifecycle.py` name the authenticator, so the group leaves no role behind.
+The review found **no actionable regression**.
+
+The final focused verification of that state passed **202 tests with no failures**, and
+`./scripts/verify-repository.sh` passed **all 14 gates**, the layout gate over **119**
+required files. The latest full foundation-suite result stands where the paragraph above
+records it — **2,038 collected, 2,037 passed and 1 environment-dependent REPLICATION skip**.
+Migrations `0001`–`0004` remain unchanged; migration `0005` contains the unmerged M3.1
+implementation. No disposable database, role or session remained on the cluster after the
+run.
+
+**M3.1 is implemented, tested, independently reviewed and ready for pull request and merge.**
+It is still **not merged, not deployed and not VERIFIED LIVE**: no deployment exists and no
+evidence artifact has been captured, and neither a passing suite nor a clean review is
+evidence under this repository's standard.
+
 ### Not implemented in M3.1 — deliberately
 
 The customer application and any HTML (M3.2); password change while signed in (needs M3.2's
@@ -1473,7 +1503,8 @@ revocation have no tenant); more than one workspace per tenant.
 
 ### What M3.1 does not claim
 
-It is not committed, not merged, not deployed and not VERIFIED LIVE. The gate's "through the
+It is committed at `f92ecb9`, and it is **not merged, not deployed and not VERIFIED LIVE**:
+no deployment exists and no evidence artifact has been captured. The gate's "through the
 UI" route is M3.2's to build and test; the four cases are met here at the database and HTTP
 boundaries. Password verification runs in the application process, so a compromised runtime
 can read one Argon2id hash per address it names — a stated limitation, not a solved one, now
@@ -1556,7 +1587,7 @@ Established by the repository-initialization pass and its R0 remediation (see
 | Item | State |
 | --- | --- |
 | `AGENTS.md` | Canonical instructions. `CLAUDE.md` imports it and adds Claude-only surfaces. Carries the guardrail's scope limits and the approval-required file list. |
-| `scripts/verify-repository.sh` | The one verification entry point. **Fourteen** gates since M2.1, unchanged by M2.2, M2.3 and M2.4 — the thirteenth checks that production code imports nothing outside the runtime lock, and the fourteenth runs the PostgreSQL foundation suite. Invoked identically by the human, the `verify` skill, and CI. No longer side-effect free: the last gate creates and drops one disposable database and **four** per-run roles (owner, application, provisioning, and the `NOLOGIN` lifecycle writer), and leaves the persistent `firmbatch_disposable_test_cluster` attestation marker in place. M2.4 changed it in two approved, narrow ways: **eleven more entries in `REQUIRED_FILES`** — nine with the milestone and two more with its third correction pass, taking the manifest to **97** files, so deleting any one of them fails the layout gate — and a header comment that describes the four-role test lifecycle. No gate was added, removed, reordered or weakened. |
+| `scripts/verify-repository.sh` | The one verification entry point. **Fourteen** gates since M2.1, unchanged by M2.2, M2.3, M2.4 and M3.1 — the thirteenth checks that production code imports nothing outside the runtime lock, and the fourteenth runs the PostgreSQL foundation suite. Invoked identically by the human, the `verify` skill, and CI. No longer side-effect free: the last gate creates and drops one disposable database and, since M3.1, **five** per-run roles (owner, application, provisioning, authenticator, and the `NOLOGIN` lifecycle writer), and leaves the persistent `firmbatch_disposable_test_cluster` attestation marker in place. M2.4 changed it in two approved, narrow ways: **eleven more entries in `REQUIRED_FILES`** — nine with the milestone and two more with its third correction pass, taking the manifest to 97 files — and a header comment describing the then four-role test lifecycle. M3.1 changed it the same two ways, with the human's explicit approval: **twenty-two more `REQUIRED_FILES` entries**, taking the manifest to **119** files, so deleting any one of them fails the layout gate, and a header comment describing the five-role lifecycle. No gate has been added, removed, reordered or weakened. |
 | `.agents/skills/` | `verify`, `record-evidence`, `milestone`. Symlinked into `.claude/skills/`; single body each. |
 | `.agents/policy/guard.py` | Shared deterministic policy engine, `--adapter claude` and `--adapter codex`. An accident-prevention guardrail, **not** a sandbox or security boundary. |
 | `.agents/policy/test_guard.py` | 247 synthetic checks. |
@@ -1611,12 +1642,12 @@ capture new artifacts with provenance matching the committed tree.
 
 | Claim | How to settle it |
 | --- | --- |
-| All **fourteen** gates in `scripts/verify-repository.sh` pass — **14 passed, 0 failed**: layout (**97** required files since Milestone 2.4 registered eleven more), agent configuration, hygiene, v0 property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 247/247, the runtime import closure check, and the PostgreSQL foundation suite **1,746 collected — 1,745 passed, 1 skipped** locally — the one skip is the pre-existing REPLICATION skip (granting REPLICATION needs a superuser admin, which CI has and the developer cluster does not. On CI that test runs and two others skip instead -- the owner-only-refusal assertions, which have no meaning for a superuser bootstrap administrator). Observed locally on 2026-09-06, after all three correction passes, against PostgreSQL 16.15 on the developer's WSL machine, at Milestone 2.4 implementation commit `d91e4f2` — that suite count is HISTORICAL to that commit. **Re-run for Milestone 3.0** on 2026-09-06 at `main` `4511f7d`, twice — once with the rev D documentation changes uncommitted in the working tree, and again after the correction to rev D.1 with the documentation changes staged — against the same attested PostgreSQL 16.15 cluster: **14 gates passed, 0 failed** both times, 97 required files; the script's passing output does not print the foundation suite's collected/passed/skipped counts, so no new count is claimed here. Still no artifact. **None of M2.2, M2.3 or M2.4 added a gate**; the foundation-suite gate already runs the whole `control_plane/tests` directory, so the new modules run inside it. | `/record-evidence` → `docs/evidence/r0/gates.txt` (and a Milestone 2 artifact for the foundation suite). Not yet captured. |
+| All **fourteen** gates in `scripts/verify-repository.sh` pass — **14 passed, 0 failed**: layout (**119** required files since Milestone 3.1 registered its production and test modules; 97 at Milestone 2.4), agent configuration, hygiene, v0 property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 247/247, the runtime import closure check, and the PostgreSQL foundation suite **1,746 collected — 1,745 passed, 1 skipped** locally — the one skip is the pre-existing REPLICATION skip (granting REPLICATION needs a superuser admin, which CI has and the developer cluster does not. On CI that test runs and two others skip instead -- the owner-only-refusal assertions, which have no meaning for a superuser bootstrap administrator). Observed locally on 2026-09-06, after all three correction passes, against PostgreSQL 16.15 on the developer's WSL machine, at Milestone 2.4 implementation commit `d91e4f2` — that suite count is HISTORICAL to that commit. **Re-run for Milestone 3.0** on 2026-09-06 at `main` `4511f7d`, twice — once with the rev D documentation changes uncommitted in the working tree, and again after the correction to rev D.1 with the documentation changes staged — against the same attested PostgreSQL 16.15 cluster: **14 gates passed, 0 failed** both times, 97 required files; the script's passing output does not print the foundation suite's collected/passed/skipped counts, so no new count is claimed here. Still no artifact. **Re-run for Milestone 3.1** on 2026-09-09 at implementation commit `f92ecb9`, against the same attested PostgreSQL 16.15 cluster: **14 gates passed, 0 failed**, with **119** required files in the layout gate, and no disposable database, role or session left behind. The foundation-suite figure current at that commit is the **2,038 collected — 2,037 passed, 1 environment-dependent REPLICATION skip** recorded in the Milestone 3.1 row below; the 1,746 above stays HISTORICAL to `d91e4f2`. **No milestone since M2.1 has added a gate**; the foundation-suite gate already runs the whole `control_plane/tests` directory, so each milestone's new modules run inside it. | `/record-evidence` → `docs/evidence/r0/gates.txt` (and a Milestone 2 artifact for the foundation suite). Not yet captured. |
 | The M2.1 tenant-isolation properties hold in PostgreSQL: absent context reads nothing and writes nothing; tenant A cannot read, insert, update or delete tenant B's rows; a fabricated cross-tenant or dangling foreign key is rejected; tenant context is not inherited from a session value, a pooled connection, or a URL option; a reused ORM `Session` cannot serve a previous tenant's object; a temporary relation cannot shadow a Firmbatch table; the application role is non-owner, `NOSUPERUSER`, `NOBYPASSRLS`, is refused at connect time if it were any of those, cannot disable a policy, cannot create tables or temporary tables, cannot read the schema history, and cannot create a tenant even with matching context; workspace uniqueness is tenant-local. | `/record-evidence` → `docs/evidence/m2/tenant-isolation-suite.txt`, after the Milestone 2.1 commit. Until then this is a re-runnable claim with no captured artifact. |
 | The M2.2 idempotency and outbox properties hold in PostgreSQL: an identical retry returns the stored result and invokes the mutation once; four identical calls leave one workspace, one claim and one linked event; a conflicting reuse is rejected; two callers observed contending on a real lock commit one effect and one event, and the loser replays; a failure before commit leaves nothing and does not block the retry; a mutation callback cannot commit or roll back the primitive's transaction and an escape by any other route is detected; unflushed ORM state at entry is rejected; malformed operations and keys are refused before the mutation runs; the same key is independent between tenants; cross-tenant reads and writes on both new tables fail closed; missing context fails closed; a committed event is immutable to the application role and matches zero rows even for the owner; an internal state change appends an event with no idempotency record and a rollback removes both; and no value of the request identity reaches a row. **At M2.2 this was 511 passing checks with 1 skipped, of which 130 were new; the same properties are asserted at M2.3 inside a suite of 806.** | `/record-evidence` → `docs/evidence/m2/idempotency-outbox-suite.txt`, at or after Milestone 2.2 implementation commit `d362717`. Until then this is a re-runnable claim with no captured artifact, and M2.2 is **not** VERIFIED LIVE. |
 | The M2.3 authenticated-context, authorization, audit and secrets properties hold in PostgreSQL: a forged `app.tenant_id` or any fabricated setting grants nothing; a fabricated tenant, binding id, fingerprint, actor or scope grants nothing; the function that writes a context is executable by nobody; a relation forged where the context lives is ignored because it is not owned by the schema owner; unknown, malformed, revoked and expired credentials fail closed with one indistinguishable message; binding twice or switching identity is refused; context survives no commit, rollback, failed statement, pool reuse or `Session` reuse, and a Connection-bound `Session` is refused; a valid credential reaches its own tenant and no other; the credential is never stored; authorization is deny-by-default with read/write scope distinctions, minimal framework capabilities and no non-customer scope; every `SECURITY DEFINER` function is owned, path-pinned, `PUBLIC`-revoked, minimally granted and free of dynamic SQL; the registry has no grants and no policy; audit events derive tenant and actor, refuse a supplied alternative, cannot be backdated, are immutable, roll back with their action and reject secret-shaped metadata; secrets never render themselves and production fails closed; and the migration reverses to the M2.2 shape and back. **1,314 pytest checks pass, 1 skipped**, a net increase of 803 collected checks over M2.2's 512 -- five new modules, plus every existing module moved onto the authenticated mechanism, plus a handful of M2.1 tests replaced by the stronger property that superseded them. | `/record-evidence` → `docs/evidence/m2/authenticated-context-suite.txt`, at or after Milestone 2.3 implementation commit `89fbdd9`. No evidence artifact has been captured, so this remains a re-runnable claim and M2.3 is **implemented and tested**, **not** VERIFIED LIVE. |
 | The M2.4 lifecycle properties hold in PostgreSQL: a malformed definition is refused in Python and again by the schema; a registered version is immutable for the owner too; migration `0004` seeds no machine; an instance starts at revision zero in its machine's initial state and cannot be created elsewhere; its tenant, machine and version are immutable and its revision advances by exactly one; cross-tenant reads, writes and moves fail closed and produce the same refusal an invented id does; the required capability is read from the protected definition and a caller cannot name, lower or manufacture one; every declared edge can be taken and an undeclared one, a terminal source, a stale state and a stale revision each change nothing; one transition writes exactly one revision, history row, audit event and outbox intent, and a rollback removes all four; two callers racing from one revision with different idempotency keys produce one move, with the contention observed on `pg_stat_activity`; an identical retry replays and moves nothing; no runtime role may write either lifecycle table directly, register a machine, add an edge or call an internal reader; a grant or column grant on a definition table refuses the connection at connect time; and `0004` upgrades, downgrades and re-upgrades with exact role wiring at each revision. And, after the six-finding correction pass: a definition is invisible and unusable until it is published, cannot be published unless every one of its rows was written by the publishing transaction, and cannot be revised, unpublished or extended afterwards; a raw-SQL caller cannot commit a lifecycle move without its history row, audit event and outbox intent, and neither can a caller that catches the database's refusal; `mutation:execute` alone reads no lifecycle claim or event; two identical concurrent requests produce one move and two replays while a stale, cross-tenant or wrong-identity conflict still conflicts; a stale revision gets the common conflict rather than a graph diagnosis; and no unit-of-work method can be redirected to another `Session` operation. And, after the five-finding second pass: a replay is refused unless the protected provenance linking the claim, the transition, the instance, the revisions and the event checks out, so a fabricated generic claim carrying a plausible lifecycle result replays nothing; the operation name and the request fingerprint are derived inside PostgreSQL, so raw SQL cannot bind a claim to a request it did not make; `audit:read` alone reads no lifecycle audit row, its resource identifiers or its details; a hand-written `UPDATE` publishing a machine runs exactly the validation the supported function runs, a pre-published `INSERT` is refused, and publication and every child mutation serialise on one machine-row lock with the contention observed on `pg_stat_activity` and no deadlock; and a chosen primary key and a reserved-namespace claim are both refused before any index could answer whether a hidden row exists. And, after the two-finding third pass: a generic outbox link naming a hidden lifecycle claim and one naming an absent identifier are refused identically, before the foreign key, the one-event-per-claim index and the `ON CONFLICT` arbiter, in the plain and the `ON CONFLICT` forms; and every lifecycle-derived write — the three machine tags, the provenance row and the lifecycle outbox link — is refused to every identity but the dedicated `NOLOGIN` lifecycle writer, the schema owner's own DML and its own definer functions included, while migration `0003` stays untouched history and a database taken from head down to `0003` is catalogue-for-catalogue identical to one migrated freshly to it. **1,746 pytest checks are collected — 1,745 pass and 1 is skipped**, a net increase of 431 collected checks over M2.3's 1,315 — eight new modules plus new migration, rollback, catalogue, append-only, column-privilege, ownership, role-count and unit-of-work assertions in the existing ones. | `/record-evidence` → `docs/evidence/m2/lifecycle-state-machine-suite.txt`, **at or after Milestone 2.4 implementation commit `d91e4f2`**. No evidence artifact has been captured, so this remains a re-runnable claim and M2.4 is **implemented and tested**, **not** VERIFIED LIVE. |
-| The M3.1 identity properties hold in PostgreSQL — the four `AUTH-MEMBERSHIP-BOUND-IDENTITY` cases and everything listed under "What M3.1 proves": **2,038 pytest checks collected, 2,037 pass, 1 skipped** in the working tree on 2026-09-09, after the second review correction pass — a net increase over M2.4's 1,746 that is the eight new modules, the extended migration, shape and protected-state assertions, and the two correction passes' regression and concurrency coverage. | `/record-evidence` → `docs/evidence/m3/identity-membership-suite.txt`, at or after the Milestone 3.1 implementation commit, once one exists. Uncommitted work has no commit to cite, so this is a re-runnable claim and M3.1 is **implemented and tested**, **not** VERIFIED LIVE. |
+| The M3.1 identity properties hold in PostgreSQL — the four `AUTH-MEMBERSHIP-BOUND-IDENTITY` cases and everything listed under "What M3.1 proves": **2,038 pytest checks collected, 2,037 pass, 1 environment-dependent REPLICATION skip** at implementation commit `f92ecb9` on 2026-09-09 — a net increase over M2.4's 1,746 that is the new modules, the extended migration, shape and protected-state assertions, and the correction passes' regression and concurrency coverage. The final independent review's focused verification of the same state passed **202 tests with no failures**, and the canonical verification passed all 14 gates over 119 required files. | `/record-evidence` → `docs/evidence/m3/identity-membership-suite.txt`, **at or after Milestone 3.1 implementation commit `f92ecb9`**. No evidence artifact has been captured and nothing is deployed, so this remains a re-runnable claim and M3.1 is **implemented, tested and independently reviewed**, **not** VERIFIED LIVE. |
 | The destructive-safety properties hold: a forged, altered, cross-server, or foreign-cluster teardown handle is refused and the database survives; an unattested server refuses both creation and teardown; a failure after creation removes the database and both roles; a generated password never reaches exception text, stdout, or stderr. Covered by `control_plane/tests/test_bootstrap_safety.py`. | Same artifact as the row above. |
 | The shared policy engine denies the R0 accident classes across both adapter protocols — multi-line blocks classified line by line, `git -C`/`git -c`, `gh` and `aws` global options, `env`/`timeout` prefixes, `cd`/`cd -`/`pushd`/`popd`/`||` sequences, subshell grouping, argparse-abbreviated provider selection, evidence-tree ancestors including glob and `mv` forms, source and destination operands, in-place archivers, `git restore`/`checkout` over a path, credential reads on every surface including the `.env.*` family, wrapper- and prefix-depth exhaustion, unparseable input, unknown tool names carrying a payload, and engine exceptions. 247 synthetic checks pass. | `/record-evidence` → `docs/evidence/r0/policy-tests.txt`, after the R0 commit. |
 
@@ -1755,17 +1786,19 @@ when the gate sentence is quotable.
 
 **Milestone 3 is active.** M3.0, the revision D.1 documentation adoption, merged at
 `116b5ee` (PR #8). **M3.1 — membership-bound identity, sessions and credential issuance —
-is implemented and tested on `feat/milestone-3-1-identity-membership`**, uncommitted and
-not merged: signup, verification, recovery, browser sessions, workspace membership and
-roles, and the trusted issuance path from a verified identity and an active membership to
+is implemented, tested and independently reviewed at `f92ecb9`**, ready for pull request
+and merge and not yet merged: signup, verification, recovery, browser sessions, workspace
+membership and roles, and the trusted issuance path from a verified identity and an active
+membership to
 the protected M2.3 database context, with browser sessions distinct from scoped API
 credentials (see "CURRENT — Milestone 3.1" and ADR 0009). The four completion cases pass as
 named tests at the database and HTTP boundaries; the gate's UI route is M3.2's, and
-customer-facing deployment stays blocked until M3.2 and an authorized M3.3. Next is
-M3.2, the authenticated customer application with honest empty states for later features,
-and M3.3, a protected AWS staging preview pulled forward from Milestone 8 — **planned, and
-not authorized**: a reviewed infrastructure plan, a cost estimate and an explicit go-ahead
-precede creating any resource, and no GPU driver is enabled by it.
+customer-facing deployment stays blocked until M3.2 and an authorized M3.3. **Next is
+M3.2** — the customer-only portal UI, the authenticated customer application with honest
+empty states for later features. **M3.3 remains later**: a protected AWS staging preview
+pulled forward from Milestone 8, **planned, and not authorized** — a reviewed infrastructure
+plan, a cost estimate and an explicit go-ahead precede creating any resource, and no GPU
+driver is enabled by it.
 
 **The portal Milestone 3 builds is the customer application and nothing else.** The
 **operator capacity agent remains separate operator-side software**: a static Rust or Go
