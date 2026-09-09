@@ -10,7 +10,7 @@ Two distinct things live here. Do not merge them.
 - **The default pass** is fast, deterministic, and writes no evidence artifact. Run it
   before reporting any change complete. Since Milestone 2.1 it is **not side-effect
   free**: its last gate runs the v1 foundation suite against a real PostgreSQL 16 server,
-  where it creates and then drops a disposable database and four throwaway roles: three
+  where it creates and then drops a disposable database and five throwaway roles: four
   login roles and a NOLOGIN lifecycle writer.
   See the prerequisites below.
 - **`--chaos`** is an integration *experiment*, not verification. It hard-kills
@@ -102,12 +102,13 @@ standing between a mistyped environment variable and a `DROP DATABASE`.
 
 ### What the gate does to the database
 
-It creates `firmbatch_test_<12 random hex>` plus **four** throwaway roles -- three login
+It creates `firmbatch_test_<12 random hex>` plus **five** throwaway roles -- four login
 roles: a per-run owner (which is the migration principal and the deletion authority), an
-application role and a provisioning role; and, since Milestone 2.4, a `NOLOGIN` lifecycle
-writer with no credential, which owns the two lifecycle entry points and which nobody can
-`SET ROLE` to -- migrates the database, wires the roles, runs the suite, and removes all
-five objects.
+application role, a provisioning role and, since Milestone 3.1, an authenticator role (the
+trusted-issuer boundary: login, session opening and recovery, which the application role
+does not hold); and, since Milestone 2.4, a `NOLOGIN` lifecycle writer with no credential,
+which owns the two lifecycle entry points and which nobody can `SET ROLE` to -- migrates the
+database, wires the roles, runs the suite, and removes all six objects.
 
 The final `DROP DATABASE` is issued **as the per-run owner**, not with admin authority, so
 PostgreSQL's ownership check applies to whatever object is present at that instant: a

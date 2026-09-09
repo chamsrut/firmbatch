@@ -111,6 +111,7 @@ def drop_handle_objects(environment, handle) -> None:
             handle.provisioning_role,
             handle.owner_role,
             handle.lifecycle_writer_role,
+            handle.authenticator_role,
         ),
     )
 
@@ -225,6 +226,27 @@ def application_engine(disposable_database):
 def provisioning_engine(disposable_database):
     """The privileged tenant-provisioning role. Still non-owner and NOBYPASSRLS."""
     engine = db_engine.create_application_engine(disposable_database.provisioning_url, pool_size=2)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def authenticator_engine(disposable_database):
+    """The trusted-issuer (authenticator) role (Milestone 3.1 security correction).
+
+    A restricted, non-owner engine holding the pre-authentication identity functions --
+    login, session opening, recovery -- which the application role no longer holds. Autouse
+    and session-scoped so it is always registered for the identity helpers, which look it up
+    by database and therefore need no change at their call sites. It goes through
+    ``create_application_engine``, whose principal check refuses it if it is anything but a
+    restricted role, exactly as for the application engine.
+    """
+    from firmbatch.control_plane.tests import identity_helpers
+
+    engine = db_engine.create_application_engine(disposable_database.authenticator_url)
+    identity_helpers.register_authenticator_engine(engine)
     try:
         yield engine
     finally:

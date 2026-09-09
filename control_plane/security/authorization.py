@@ -408,6 +408,79 @@ RESOURCE_RULES: tuple[ResourceRule, ...] = (
             "foreign keys point at, and those apply the tenant filter."
         ),
     ),
+    # --------------------------------------------------------------- Milestone 3.1
+    #
+    # The identity plane. Every one of these is **protected**: no runtime or provisioning
+    # role holds anything on it, and the only way in is a SECURITY DEFINER function in
+    # migration 0005 that derives the account, tenant, workspace and membership from a
+    # secret the caller presents or from the context a secret established. They carry no
+    # policy for the reason auth_bindings carries none. The membership-domain permissions
+    # (security/permissions.py) are read by those functions, never by a policy.
+    *(
+        ResourceRule(
+            table=table,
+            kind="protected",
+            tenant_column=None,
+            read=None,
+            write=None,
+            append_only=False,
+            scope_source="none",
+            note=note,
+        )
+        for table, note in (
+            (
+                "accounts",
+                "One customer identity, existing before any workspace. Global, like a tenant slug; "
+                "its uniqueness is never observable by a runtime role, and signup_account() answers "
+                "the same shape for a new address and an existing one.",
+            ),
+            (
+                "account_passwords",
+                "The Argon2id hash of one account's password, fetched by login_lookup() for one "
+                "account per call and verified in Python. A check constraint refuses any other stored form.",
+            ),
+            (
+                "account_tokens",
+                "Email-verification and recovery tokens as fingerprints: written once, consumed or "
+                "superseded once, never deleted. The secret exists only in the result row that minted it.",
+            ),
+            (
+                "memberships",
+                "One account's role in one workspace of one tenant -- the row that decides which "
+                "workspaces a person may choose from, re-read on every session bind and every "
+                "issuance. Revocation is a state a trigger makes final, and the same trigger revokes "
+                "every credential the membership issued and unbinds every session bound through it.",
+            ),
+            (
+                "workspace_directory",
+                "A protected copy of each workspace's slug and name, maintained by a trigger on "
+                "workspaces for every writer and read only by account_workspaces(), which has to name "
+                "an account's workspaces across tenants before any tenant context exists.",
+            ),
+            (
+                "browser_sessions",
+                "One browser session as two fingerprints (session, CSRF) and an optional workspace "
+                "binding that names its membership with the workspace and tenant. A session secret is "
+                "accepted only by bind_session_context(); a bearer credential is not, and vice versa.",
+            ),
+            (
+                "workspace_invitations",
+                "An invitation bound to a workspace, tenant, recipient address, role and expiry, "
+                "consumed once under a row lock by the recipient it names.",
+            ),
+            (
+                "account_idempotency_records",
+                "The account-scoped replay record for the two mutations that run before a tenant "
+                "context exists: creating a workspace and accepting an invitation. Append-only.",
+            ),
+            (
+                "identity_transaction_context",
+                "One transaction's bound session, or the account it challenged at login: keyed by "
+                "backend pid, readable only by the transaction whose id it carries. The mechanism, "
+                "beside auth_transaction_context, and protected for the same reasons.",
+            ),
+        )
+    ),
 )
 
 #: The scopes that may be placed on a credential minted through ``register_auth_binding``.

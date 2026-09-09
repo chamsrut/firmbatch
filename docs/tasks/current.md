@@ -2,8 +2,13 @@
 
 Active work and open questions. Updated at the end of each task, alongside `docs/STATE.md`.
 
-Last updated: 2026-09-06, `main` merge commit `4511f7d` (Milestone 2.4, PR #7), on the
-Milestone 3.0 documentation branch `docs/rev-d-phase-0-roadmap`. Milestone 1 merged at
+Last updated: 2026-09-09, on `feat/milestone-3-1-identity-membership` from `main` at
+`116b5ee` (Milestone 3.0, PR #8), with **Milestone 3.1 implemented, tested and committed at
+`f92ecb9`** — after two review correction passes closing ten findings and two gaps (Codex)
+and six findings (GPT-5.6 Sol), and a third, clean independent review (GPT-5.6 Sol at xhigh
+effort) that verified all six of those findings as fixed and raised no actionable regression.
+The branch is **ready for pull request and merge**; it is not merged, not deployed and not
+VERIFIED LIVE. Milestone 1 merged at
 `6b4f341`; M2.1 merged at `712b51a` (implementation commit `521870b`, plus the bootstrap
 trust-boundary correction `78eae1d`); M2.2 merged at `b028f21` (implementation commit
 `d362717`); M2.3 merged at `dca2d49` (implementation commit `89fbdd9`), after a fourth
@@ -25,8 +30,10 @@ now scheduled for Phase P.
 `docs/firmbatch-v1-roadmap.md` carries the revised M3–M8 sequence and the Phase 0 / P / B
 triggers; the target is at revision D.1 with verbatim source snapshots (D.1 current, D
 historical) and a review register that records each rev D review item's D.1 resolution;
-ADR 0008 records the decision. **Milestone 3.1 — membership-bound identity, sessions and
-credential issuance — is next.**
+ADR 0008 records the decision; M3.0 merged at `116b5ee` (PR #8). **Milestone 3.1 —
+membership-bound identity, sessions and credential issuance — is implemented, tested and
+independently reviewed at `f92ecb9` on this branch, ready for pull request and merge, and
+not merged, not deployed and not VERIFIED LIVE** (ADR 0009).
 
 ---
 
@@ -37,7 +44,7 @@ revision D.1 roadmap. Its slices: **M3.0** documentation adoption (this branch),
 identity, membership and credential issuance, **M3.2** the customer application, **M3.3**
 the protected AWS staging preview.
 
-### M3.0 — revision D.1 documentation adoption — **reviewed, awaiting commit/PR**
+### M3.0 — revision D.1 documentation adoption — **merged at `116b5ee` (PR #8)**
 
 Documentation only. The branch first adopted revision D; D.1 superseded it the same day,
 before anything was committed, and the staged documentation was corrected in place.
@@ -109,10 +116,130 @@ Order for the human, from here (item 1 done at the 2026-09-07 review):
    per-run authorisations. These are the human's decisions; the documents leave them open on
    purpose.
 
-### M3.1 — identity, workspace membership and credential issuance — **next implementation slice**
+### M3.1 — identity, workspace membership and credential issuance — **implemented, tested and reviewed at `f92ecb9`, ready for PR**
 
-The proposed slice, to be run under the `milestone` skill (inspect → gap → bounded plan →
-approval → implement → verify → report):
+Implemented on `feat/milestone-3-1-identity-membership` from `main` at `116b5ee` and
+**committed at `f92ecb9`**. Nothing is pushed, no PR is opened, nothing is merged, nothing is
+deployed, no provider is contacted and no cloud spend is incurred. Migrations `0001`–`0004`
+are unchanged; migration `0005` carries the unmerged M3.1 implementation. ADR 0009 records
+the design; `docs/STATE.md` "CURRENT — Milestone 3.1" records what it is and what it proves.
+
+**Where it stands:** implemented, tested, independently reviewed and **ready for pull request
+and merge**. It is **not merged, not deployed and not VERIFIED LIVE** — no deployment exists
+and no evidence artifact has been captured, so the standard's VERIFIED LIVE label does not
+apply however green the suite is.
+
+**Changed files** (commit `f92ecb9`, 47 files). New: migration
+`0005_identity_and_membership.py`; `db/accounts.py`, `db/membership.py`, `db/credentials.py`;
+`security/passwords.py`, `security/permissions.py`; `api/__init__.py`, `api/app.py`,
+`api/settings.py`, `api/email.py`, `api/__main__.py`; `tests/identity_helpers.py` and nine
+test modules (`test_identity_accounts`, `test_identity_membership`,
+`test_identity_issuance`, `test_identity_protection`, `test_identity_migration`,
+`test_identity_permissions`, `test_identity_concurrency`,
+`test_identity_security_corrections`, `test_api_http`);
+`docs/adr/0009-membership-bound-identity-sessions-and-credential-issuance.md`.
+Modified: `config.py`, `db/models.py`, `db/roles.py`, `security/authorization.py`,
+`security/secrets.py`, `testing/bootstrap.py`; `tests/conftest.py`,
+`tests/test_migrations.py`, `tests/test_audit_events.py`,
+`tests/test_protected_auth_state.py`, `tests/test_configuration.py`,
+`tests/test_admin_escalation.py`, `tests/test_bootstrap_safety.py`,
+`tests/test_bootstrap_lifecycle.py`; `requirements-v1.txt`, `requirements-v1-dev.txt`,
+`requirements-v1-lock.txt`, `requirements-v1-dev-lock.txt`; `.env.example`; `README.md`;
+`docs/STATE.md`; this file.
+
+**Three protected files changed, each with the human's explicit approval and none of them a
+gate**: `scripts/verify-repository.sh` (twenty-two more `REQUIRED_FILES` entries, taking the
+layout manifest to 119, and a header comment describing the five-role test lifecycle — no
+gate added, removed, reordered or weakened), `scripts/check-runtime-imports.py`
+(`RUNTIME_MODULES` extended to name every new production module) and
+`.agents/skills/verify/SKILL.md` (the same five-role lifecycle documented). No other
+protected file was touched: no policy, agent, workflow or instruction file changed.
+
+**Verification at implementation commit `f92ecb9` (2026-09-09, attested local PostgreSQL
+16.15):** `./scripts/verify-repository.sh` passed **all 14 gates**, the layout gate over
+**119** required files; the latest full foundation-suite result is **2,038 collected — 2,037
+passed, 1 environment-dependent REPLICATION skip**; the final independent review's focused
+verification of the same state passed **202 tests with no failures**; `git diff --check`
+clean; no disposable `firmbatch_test_*` database, role or session left behind. No evidence
+artifact captured, so nothing here is VERIFIED LIVE.
+
+*Earlier runs, kept as history:* the working tree on 2026-09-07 was **1,962 collected —
+1,961 passed, 1 skipped**, with the eight then-new modules collecting 182; the second
+correction pass took the suite to the 2,038 recorded above.
+
+**Gate mapping** — `AUTH-MEMBERSHIP-BOUND-IDENTITY`:
+
+| Gate case | Test |
+| --- | --- |
+| 1. A verified non-member keeps its account session, can create its first workspace, and cannot bind the unauthorized workspace or obtain a credential scoped to it by any route | `test_identity_membership.py::test_gate_case_1_a_non_member_keeps_its_account_session_and_cannot_bind_the_workspace` |
+| 2. Revoking a membership stops the identity acting in the workspace on the credential path's linearisation terms | `test_identity_membership.py::test_gate_case_2_revoking_a_membership_stops_the_identity_acting_in_the_workspace` |
+| 3. An invitation accepted for one tenant grants nothing in another | `test_identity_membership.py::test_gate_case_3_an_invitation_accepted_for_one_tenant_grants_nothing_in_another` |
+| 4. Sessions and API credentials are distinct types, never accepted at each other's boundary, never converted; issuance is an audited operation after membership and scopes are rechecked | `test_identity_issuance.py::test_gate_case_4_a_session_issues_a_credential_that_authenticates_as_its_membership_and_nothing_else` |
+
+**Deferred, by design:** the UI (M3.2); password change while signed in (M3.2); deployment,
+TLS, the separated issuer credential, real secrets delivery and managed-PostgreSQL
+qualification (M3.3, not authorized); a real email provider, rate limiting and metrics (M8,
+subset pulled forward by M3.3); account deletion and archival; account-level events in a
+tenant audit trail; more than one workspace per tenant.
+
+**Codex security correction pass — ten findings and two gaps, all closed.** A Codex diff
+scan of the uncommitted M3.1 tree raised ten findings and two review gaps; all are corrected
+on the branch with regression tests. The design-level change is a distinct **authenticator**
+database login role holding the pre-authentication functions (login, session opening,
+recovery) that the ordinary application role no longer holds, so raw SQL as the runtime role
+cannot mint a victim session or reset a victim password. Its grant is the least that reaches
+them — plus `auth_tenant_id` and the `auth_context` its invoker-rights body calls — with no
+relation privilege and no role membership, asserted from the catalogue. (The second review
+pass below moved the three mailbox-verification functions onto the same role, so the current
+inventory is eight pre-authentication functions and ten in total.) Account recovery evicts
+credentials
+through a durable `accounts.security_epoch` checked at bearer authentication; issuance and
+rotation share the workspace serializer and re-read membership under it; owner-only mutations
+re-read the caller's role under the lock; Argon2 runs behind a bounded admission gate;
+request bodies are capped while streaming; and an owner-run `purge_expired_unverified_accounts`
+reclaims stale pending accounts. ADR 0009 "Security corrections" and `docs/STATE.md` record
+the detail. The populated-data downgrade that failed with error 23514 is reconciled and
+tested end to end, and `scripts/check-runtime-imports.py` `RUNTIME_MODULES` now names every
+new M3.1 production module.
+
+**Second review correction pass (GPT-5.6 Sol) — six findings, all closed.** All are
+corrected on the branch with regression tests, and `0005` — which is unmerged — was corrected
+in place; `0001`–`0004` are untouched. In one line each: the login challenge now carries the
+account's password version (`security_epoch`) and `open_browser_session` compares it under a
+lock that conflicts with recovery, closing the recovery/login race in both transaction
+orderings; the three mailbox-verification functions moved onto the authenticator, because
+minting *and* consuming a verification secret is the whole of the mailbox-control proof;
+`firmbatch.workspace_membership_authority` is now the one membership revalidation and every
+workspace-mode operation — rename, invitation revoke and manager listing, credential revoke,
+credential listing and history — goes through it after taking its serialisation lock and
+before any replay lookup, disclosure or mutation; the HTTP boundary authenticates before it
+interprets a body, so absent, malformed, unknown and mixed credentials are one `401` whatever
+the body is; `_refused_bind` carries the request's CSRF proof into its retry, so an incorrect
+token is `401` and never `workspace_required`, and `keep_current` is a strict JSON Boolean;
+and revoked and expired are one credential state, computed by PostgreSQL, with an expired
+credential refused rotation rather than rotated into an unlimited successor. ADR 0009 "Second
+review correction pass" and `docs/STATE.md` record the detail and the reasoning.
+
+**Final independent verification (GPT-5.6 Sol, xhigh) — clean, nothing outstanding.** A third
+independent review over the implementation at `f92ecb9` **verified all six outstanding
+findings as fixed**: the recovery/login transaction race; the mailbox-verification authority;
+stale workspace membership; HTTP authentication and CSRF ordering; strict `keep_current`
+Boolean parsing; and credential-expiry consistency. The additional **authenticator-role
+teardown leak** — the hand-written per-run role lists in `test_bootstrap_safety.py` and
+`test_bootstrap_lifecycle.py`, which predated the authenticator — is **fixed** with them. The
+review raised **no actionable regression**. The focused verification passed **202 tests with
+no failures**, `./scripts/verify-repository.sh` passed **all 14 gates** over **119** required
+files, and the cluster was left with no disposable database, role or session. This is a clean
+review and a passing suite, not evidence: M3.1 stays **not VERIFIED LIVE**.
+
+**No protected file is awaiting an approved update.** Both inventories are extended:
+`scripts/verify-repository.sh` `REQUIRED_FILES` names every M3.1 module and test (the layout
+gate reports 119 required files) and `scripts/check-runtime-imports.py` `RUNTIME_MODULES`
+names every new production module. The paragraph that stood here said otherwise; it predated
+the approval and is corrected. A follow-up lock regeneration could move the development
+test-client pin from `httpx` to `httpx2`, which Starlette 1.6 prefers.
+
+The slice as it was proposed, for the record:
 
 - **Accounts and verification:** signup, login, email verification, credential recovery,
   browser sessions with logout and revocation.
@@ -133,8 +260,11 @@ approval → implement → verify → report):
   real PostgreSQL 16, each failing closed — plus every existing M2 protection passing
   unchanged. Not blocked by any open register entry.
 
-The UI (M3.2) may be designed alongside; M3.3's staging needs a reviewed infrastructure and
-cost plan and explicit authorization before any resource is created.
+**Next is M3.2 — the customer-only portal UI**, the authenticated customer application, once
+M3.1 is merged. **M3.3 remains later**: its AWS staging needs a reviewed infrastructure and
+cost plan and explicit authorization before any resource is created. The **operator capacity
+agent remains separate operator-side software** and is not part of the customer portal — it
+is Phase P work, after a supplier signs.
 
 ### Open questions carried into Milestone 3
 
@@ -148,7 +278,17 @@ cost plan and explicit authorization before any resource is created.
   and migration feasibility, and the human's explicit go-ahead.
 - **Evidence promotion:** Milestone 2 could be promoted to VERIFIED LIVE by capturing the
   foundation-suite run with `/record-evidence` under `docs/evidence/m2/`. Until then the
-  **implemented and tested** classification stands for all four slices.
+  **implemented and tested** classification stands for all four slices. M3.1 is
+  **implemented, tested and independently reviewed** at `f92ecb9` and could be promoted the
+  same way, by capturing its foundation-suite run under `docs/evidence/m3/` at or after that
+  commit; until an artifact and a deployment exist it is not VERIFIED LIVE.
+- **M3.1 follow-ups needing approval:** whether the hash-harvest limitation of
+  application-side password verification (ADR 0009 decision 6) is acceptable through M3.3 or
+  needs a separated verifier process there. The two protected inventories are no longer open:
+  both were extended with the human's explicit approval, and the authenticator's grant has
+  since been narrowed to the functions its call graph actually reaches — ten at present,
+  after mailbox verification joined it — closing the least-privilege follow-up that
+  correction had left behind.
 
 ---
 

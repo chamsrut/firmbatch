@@ -242,13 +242,16 @@ def test_the_per_run_roles_hold_no_administrative_attribute(disposable_database,
                         disposable_database.application_role,
                         disposable_database.provisioning_role,
                         disposable_database.lifecycle_writer_role,
+                        # Milestone 3.1 security correction: the authenticator role must be as
+                        # unprivileged as the rest -- it holds functions, not authority.
+                        disposable_database.authenticator_role,
                     ]
                 },
             ).all()
     finally:
         engine.dispose()
 
-    assert len(rows) == 4, f"expected all four per-run roles, saw {[row[0] for row in rows]}"
+    assert len(rows) == 5, f"expected all five per-run roles, saw {[row[0] for row in rows]}"
     for row in rows:
         assert tuple(row[1:]) == (False, False, False, False, False), (
             f"{row[0]} holds an administrative attribute: "

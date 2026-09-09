@@ -47,7 +47,7 @@ def test_bootstrap_reaches_the_expected_head(disposable_database, owner_engine):
 
 def test_there_is_exactly_one_head():
     """A branched history is a migration that applies differently in two environments."""
-    assert migrate.head_revision() == "0004_lifecycle_state_machines"
+    assert migrate.head_revision() == "0005_identity_and_membership"
 
 
 def test_every_revision_fits_the_version_column():
@@ -71,7 +71,9 @@ def test_every_revision_fits_the_version_column():
 
 #: Tables the metadata comparison deliberately does not see. Named here rather than
 #: inline so that adding one is a decision somebody has to write down.
-UNMODELLED_TABLES = frozenset({"auth_transaction_context"})
+# Milestone 3.1 adds the transaction-scoped identity context, unmodelled for the same
+# reason: its authority column is ``xid8``.
+UNMODELLED_TABLES = frozenset({"auth_transaction_context", "identity_transaction_context"})
 
 
 def _include_name(name, type_, parent_names) -> bool:
@@ -810,7 +812,7 @@ def test_role_provisioning_survives_a_rollback_to_0002_and_back(environment):
     try:
         with migrate.migration_connection(handle.migration_url) as (connection, expected):
             # --- at head, as the bootstrap left it -------------------------------------
-            assert roles.schema_revision(connection) == roles.M2_4_REVISION
+            assert roles.schema_revision(connection) == roles.M3_1_REVISION
             _wire(connection, handle)
             head_tables = _granted(connection, handle.application_role)
             head_functions = _executable(connection, handle.application_role)
@@ -857,7 +859,7 @@ def test_role_provisioning_survives_a_rollback_to_0002_and_back(environment):
             # --- and back up -------------------------------------------------------------
             migrate.upgrade_to_head(connection, expected=expected)
             connection.commit()
-            assert roles.schema_revision(connection) == roles.M2_4_REVISION
+            assert roles.schema_revision(connection) == roles.M3_1_REVISION
 
             _wire(connection, handle)
             assert _granted(connection, handle.application_role) == head_tables
@@ -914,7 +916,7 @@ def test_role_provisioning_survives_a_rollback_to_0003_and_back(environment):
 
             migrate.upgrade_to_head(connection, expected=expected)
             connection.commit()
-            assert roles.schema_revision(connection) == roles.M2_4_REVISION
+            assert roles.schema_revision(connection) == roles.M3_1_REVISION
             _wire(connection, handle)
             assert _granted(connection, handle.application_role) == head_tables
             assert _executable(connection, handle.application_role) == head_functions
@@ -937,6 +939,7 @@ def test_the_whole_ladder_reverses_and_reapplies(environment):
     from firmbatch.control_plane.db import roles
 
     ladder = (
+        roles.M3_1_REVISION,
         roles.M2_4_REVISION,
         roles.M2_3_REVISION,
         roles.M2_2_REVISION,
@@ -947,7 +950,7 @@ def test_the_whole_ladder_reverses_and_reapplies(environment):
     try:
         with migrate.migration_connection(handle.migration_url) as (connection, expected):
             for revision in ladder:
-                if revision != roles.M2_4_REVISION:
+                if revision != roles.M3_1_REVISION:
                     migrate.downgrade_to(connection, revision, expected=expected)
                     connection.commit()
                 if revision in roles.REVISION_PLANS:
@@ -961,7 +964,7 @@ def test_the_whole_ladder_reverses_and_reapplies(environment):
             assert migrate.current_revision(connection) is None
             assert migrate.upgrade_to_head(connection, expected=expected) == migrate.head_revision()
             connection.commit()
-            assert roles.schema_revision(connection) == roles.M2_4_REVISION
+            assert roles.schema_revision(connection) == roles.M3_1_REVISION
             _wire(connection, handle)
 
             # And the head schema is whole again: every Milestone 2.4 object is back, and
@@ -1090,7 +1093,9 @@ def test_the_head_plan_names_exactly_the_protected_tables_the_catalogue_does(env
     from firmbatch.control_plane.db import roles
     from firmbatch.control_plane.db.models import PROTECTED_TABLES
 
-    assert set(roles._M2_4_PROTECTED_TABLES) == set(PROTECTED_TABLES)
+    # Head is Milestone 3.1 since migration 0005; the earlier lists stay strict subsets.
+    assert set(roles._M3_1_PROTECTED_TABLES) == set(PROTECTED_TABLES)
+    assert set(roles._M2_4_PROTECTED_TABLES) < set(roles._M3_1_PROTECTED_TABLES)
     assert set(roles._M2_3_PROTECTED_TABLES) < set(roles._M2_4_PROTECTED_TABLES)
 
 
@@ -1213,8 +1218,10 @@ def test_the_plans_name_only_objects_their_revision_has(environment):
     handle = create_disposable_database(environment)
     try:
         with migrate.migration_connection(handle.migration_url) as (connection, expected):
-            for revision in (roles.M2_4_REVISION, roles.M2_3_REVISION, roles.M2_2_REVISION):
-                if revision != roles.M2_4_REVISION:
+            for revision in (
+                roles.M3_1_REVISION, roles.M2_4_REVISION, roles.M2_3_REVISION, roles.M2_2_REVISION
+            ):
+                if revision != roles.M3_1_REVISION:
                     migrate.downgrade_to(connection, revision, expected=expected)
                     connection.commit()
                 plan = roles.revision_plan(connection)

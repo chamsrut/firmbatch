@@ -66,8 +66,14 @@ authority of any kind. Provisioning creates a tenant and mints its first credent
 a job through its lifecycle is not that, and no documented requirement asks for it.
 
 **And the wiring is revision-aware.** Every statement below names a table or a function,
-and which of those exist depends on the schema revision. See ``RevisionPlan``: three
+and which of those exist depends on the schema revision. See ``RevisionPlan``: four
 supported revisions, an explicit plan for each, and a refusal for anything else.
+
+**Milestone 3.1 adds functions and protected relations, and no role.** The identity plane
+-- accounts, passwords, tokens, sessions, memberships, invitations -- is protected by the
+absence of grants exactly as ``auth_bindings`` is, and reached only through ``SECURITY
+DEFINER`` functions the schema owner owns, granted to the application role alone. The
+application role's table grants are unchanged from Milestone 2.4.
 
 **Nothing is inherited from a PostgreSQL default.** PUBLIC loses ``CREATE`` on every
 schema, ``TEMP`` on the database, ``EXECUTE`` on every authentication function, and all
@@ -297,14 +303,156 @@ INTERNAL_MAINTENANCE_FUNCTIONS: tuple[tuple[str, str], ...] = (
     ("sanitize_schema_privileges", ""),
 )
 
+#: Milestone 3.1's identity, membership, session and issuance functions, granted to the
+#: **application role only**. The provisioning role receives none of them: it creates
+#: tenants out of band and mints their first credential; it does not sign people in.
+#:
+#: Every one is a hardened ``SECURITY DEFINER`` function over protected relations (or, for
+#: ``membership_role_scopes``, a pure ``SECURITY INVOKER`` mapping). None takes a tenant,
+#: an account or a membership as the thing that decides what it acts on: the session
+#: secret, the challenge in this transaction, or the context an earlier bind established
+#: decides that, and an identifier a caller supplies only selects within what the context
+#: already reaches.
+IDENTITY_APPLICATION_FUNCTIONS: tuple[tuple[str, str], ...] = (
+    ("membership_role_scopes", "text"),
+    ("auth_session", ""),
+    ("bind_session_context", "text, text, text"),
+    # The one membership revalidation (Milestone 3.1 security correction, stale-scope
+    # finding): the workspace serialisation lock, then tenant, workspace, account,
+    # membership identity, both active states and the current role, re-read under it. Every
+    # workspace-mode function calls it, and so does the HTTP boundary for the one audit
+    # disclosure it performs itself. It discloses nothing the caller's own bind did not.
+    ("workspace_membership_authority", "text, boolean"),
+    ("account_profile", ""),
+    ("account_sessions", ""),
+    ("revoke_browser_session", "uuid"),
+    ("revoke_all_browser_sessions", "boolean"),
+    ("account_workspaces", ""),
+    ("create_workspace", "text, text, text"),
+    ("bind_session_workspace", "uuid"),
+    ("unbind_session_workspace", ""),
+    ("rename_workspace", "text, text"),
+    ("workspace_memberships", ""),
+    ("remove_membership", "uuid, text"),
+    ("change_membership_role", "uuid, text, text"),
+    ("create_invitation", "text, text, interval, text"),
+    ("revoke_invitation", "uuid, text"),
+    ("workspace_invitations", ""),
+    ("accept_invitation", "text, text"),
+    ("issue_api_credential", "text[], timestamptz, text, text"),
+    ("rotate_api_credential", "uuid, timestamptz, text"),
+    ("revoke_api_credential", "uuid, text"),
+    ("workspace_api_credentials", ""),
+    ("record_api_credential_use", ""),
+)
+
+#: The **trusted-issuer boundary** (Milestone 3.1 security correction). These pre-
+#: authentication functions verify a password (login), open a browser session from a login
+#: challenge, or mint and consume the two **mailbox-proof** secrets -- account recovery and
+#: email verification. They are granted to a **distinct authenticator role** and to the
+#: ordinary application role NOT AT ALL. The application role is the large runtime attack
+#: surface -- every workspace, credential and API request passes through it -- and this
+#: split means raw SQL as that role can neither harvest a stored password hash, mint a
+#: session for a victim account, request-and-consume a recovery secret to reset a victim
+#: password, nor issue-and-consume a verification token to mark an address it does not
+#: control verified.
+#:
+#: **Mailbox verification is a mailbox proof, exactly as recovery is** (this correction).
+#: ``signup_account`` and ``request_email_verification`` mint a verification secret and
+#: **return it in the result row**, and ``verify_account_email`` consumes one and flips the
+#: account to ``active``; a role holding all three can register an address it does not
+#: control, read the secret out of its own result, consume it, and hold a verified account
+#: -- which is the whole of the mailbox-control proof, and which then satisfies the
+#: verified-account precondition on workspace creation and invitation acceptance. Only the
+#: principal trusted to hand a raw secret to the email adapter may hold that authority, and
+#: that principal is the authenticator. Password verification still runs in the application
+#: process (PostgreSQL has no Argon2, ADR 0009 decision 6), but the authority to turn a
+#: verified password or a mailbox-proven secret into account state is now held by a narrow
+#: principal, not by the runtime that serves ordinary requests. ADR 0009 (revised) records
+#: this and the M3.3 process-separation it advances.
+IDENTITY_AUTHENTICATOR_FUNCTIONS: tuple[tuple[str, str], ...] = (
+    ("signup_account", "text, text, interval"),
+    ("request_email_verification", "text, interval"),
+    ("verify_account_email", "text"),
+    ("login_lookup", "text"),
+    ("open_browser_session", "interval"),
+    ("request_account_recovery", "text, interval"),
+    ("account_recovery_token_valid", "text"),
+    ("complete_account_recovery", "text, text"),
+)
+
+#: The read-side functions the authenticator needs beyond its own five, derived from the
+#: call graph rather than assumed, and closed over invoker-rights calls.
+#:
+#: ``db/engine.transaction()`` opens every transaction by asserting it inherited no context,
+#: and that assertion is ``current_tenant_context()`` executing
+#: ``SELECT firmbatch.auth_tenant_id()``. ``auth_tenant_id`` is one of migration ``0003``'s
+#: **SECURITY INVOKER** accessors -- its whole body is
+#: ``SELECT (firmbatch.auth_context()).tenant_id`` -- so the inner call runs as the *caller*
+#: and the caller needs ``EXECUTE`` on ``auth_context`` as well. ``auth_context`` is
+#: ``SECURITY DEFINER`` and reads the protected context relation as the schema owner, so the
+#: chain terminates there: two functions, both read-only, neither conferring any authority
+#: to establish a context. For the authenticator the answer is always "no context", because
+#: nothing on its path ever writes one.
+#:
+#: Nothing else on that path executes a Firmbatch function from Python: the writable-primary
+#: preflight reads ``pg_catalog.pg_is_in_recovery()`` and a GUC, the connect-time hardening
+#: sets ``search_path`` and inspects ``pg_catalog``, and the eight pre-authentication entry
+#: points are ``SECURITY DEFINER``, so the helpers *they* call
+#: (``auth_require_writable_primary``, ``identity_context_write``, ``identity_issue_token``,
+#: ``auth_context_begin`` and the rest) execute as the schema owner and need no grant here.
+#:
+#: Deliberately **not** the common runtime set: that tuple also carries
+#: ``bind_authenticated_context``, ``register_auth_binding``, ``revoke_auth_binding`` and
+#: ``append_audit_event``, none of which any authenticator call path reaches. Granting them
+#: would hand the trusted-issuer principal the ability to bind a bearer context and to reach
+#: the untied credential minter, which is the opposite of what this role exists to be.
+AUTHENTICATOR_READ_FUNCTIONS: tuple[tuple[str, str], ...] = (
+    ("auth_context", ""),
+    ("auth_tenant_id", ""),
+)
+
+#: Executable by **nobody**. ``identity_context_write`` writes the transaction's identity
+#: context, so a role that could call it could name any account and any session;
+#: ``identity_claim`` writes claims and events as the schema owner; the replay reader, the
+#: token issuer, the secret minter and the fingerprint helpers are reached only from inside
+#: the entry points; the four trigger functions need no grant to fire.
+IDENTITY_INTERNAL_FUNCTIONS: tuple[tuple[str, str], ...] = (
+    ("identity_normalize_email", "text"),
+    ("identity_mint_secret", "text"),
+    ("identity_fingerprint", "text"),
+    ("identity_request_fingerprint", "jsonb"),
+    ("identity_context", ""),
+    ("identity_context_write", "text, uuid, uuid, uuid, uuid, uuid, text, boolean, integer"),
+    ("identity_context_narrow", "text[]"),
+    ("identity_require_session", "text, boolean"),
+    ("identity_require_ttl", "interval, interval"),
+    ("identity_issue_token", "uuid, text, interval"),
+    ("identity_replay", "text, text, text"),
+    ("identity_claim", "text, text, text, jsonb, text, text, uuid, jsonb"),
+    ("identity_active_owner_count", "uuid, uuid"),
+    ("memberships_revocation_cascade", ""),
+    ("workspace_directory_sync", ""),
+    ("account_tokens_append_only", ""),
+    ("account_idempotency_records_append_only", ""),
+    ("purge_expired_unverified_accounts", "interval"),
+)
+
+ALL_IDENTITY_FUNCTIONS: tuple[tuple[str, str], ...] = (
+    IDENTITY_APPLICATION_FUNCTIONS + IDENTITY_AUTHENTICATOR_FUNCTIONS + IDENTITY_INTERNAL_FUNCTIONS
+)
+
 #: Every function this package's schema defines at head, and every one that no role may
-#: execute. Two inventories rather than five, so that the ACL sanitisation, the principal
+#: execute. Two inventories rather than six, so that the ACL sanitisation, the principal
 #: check and the hardening tests all walk the same list.
 ALL_FUNCTIONS: tuple[tuple[str, str], ...] = (
-    ALL_AUTH_FUNCTIONS + ALL_LIFECYCLE_FUNCTIONS + INTERNAL_MAINTENANCE_FUNCTIONS
+    ALL_AUTH_FUNCTIONS + ALL_LIFECYCLE_FUNCTIONS + INTERNAL_MAINTENANCE_FUNCTIONS + ALL_IDENTITY_FUNCTIONS
 )
 INTERNAL_FUNCTIONS: tuple[tuple[str, str], ...] = (
-    INTERNAL_AUTH_FUNCTIONS + INTERNAL_LIFECYCLE_FUNCTIONS + INTERNAL_MAINTENANCE_FUNCTIONS
+    INTERNAL_AUTH_FUNCTIONS
+    + INTERNAL_LIFECYCLE_FUNCTIONS
+    + INTERNAL_MAINTENANCE_FUNCTIONS
+    + IDENTITY_INTERNAL_FUNCTIONS
 )
 
 
@@ -330,6 +478,7 @@ INTERNAL_FUNCTIONS: tuple[tuple[str, str], ...] = (
 M2_2_REVISION = "0002_idempotency_and_outbox"
 M2_3_REVISION = "0003_auth_context_and_audit"
 M2_4_REVISION = "0004_lifecycle_state_machines"
+M3_1_REVISION = "0005_identity_and_membership"
 
 #: The protected relations each revision actually has. Written out per revision rather than
 #: derived from :data:`PROTECTED_TABLES`, which describes **head**: deriving it is what made
@@ -342,6 +491,18 @@ _M2_4_PROTECTED_TABLES: tuple[str, ...] = _M2_3_PROTECTED_TABLES + (
     "lifecycle_states",
     "lifecycle_transition_edges",
     "lifecycle_claim_provenance",
+)
+#: Milestone 3.1's identity plane: nine more protected relations, and the head list.
+_M3_1_PROTECTED_TABLES: tuple[str, ...] = _M2_4_PROTECTED_TABLES + (
+    "accounts",
+    "account_passwords",
+    "account_tokens",
+    "memberships",
+    "workspace_directory",
+    "browser_sessions",
+    "workspace_invitations",
+    "account_idempotency_records",
+    "identity_transaction_context",
 )
 
 #: The columns of a framework table the application role may write, at ``0004`` and not
@@ -522,6 +683,15 @@ class RevisionPlan:
     #: kernel, which provisioning deliberately receives no part of. Defaulted so the two
     #: earlier plans stay exactly what they were.
     application_functions: tuple[tuple[str, str], ...] = ()
+    #: Functions granted to the **authenticator** role alone (Milestone 3.1 security
+    #: correction). The pre-authentication trusted-issuer boundary -- login, session opening,
+    #: recovery request and completion -- which no other runtime role receives. Empty before
+    #: ``0005``, so every earlier plan is exactly what it was.
+    authenticator_functions: tuple[tuple[str, str], ...] = ()
+    #: The read-side functions the authenticator additionally needs to open a transaction at
+    #: all. A named, minimal set rather than the common runtime tuple: see
+    #: :data:`AUTHENTICATOR_READ_FUNCTIONS` for the call-graph derivation.
+    authenticator_common_functions: tuple[tuple[str, str], ...] = ()
     #: ``(table, privileges, columns)`` for the application role, applied after
     #: :attr:`application_grants`. Column-level rather than table-level so that the columns
     #: *not* named are unwritable -- primary keys above all. Defaulted empty, so ``0002``
@@ -647,6 +817,52 @@ _M2_4_PLAN = RevisionPlan(
     lifecycle_writer_column_grants=_M2_4_LIFECYCLE_WRITER_COLUMN_GRANTS,
 )
 
+#: Milestone 3.1. The Milestone 2.4 plan, plus the identity plane: nine protected
+#: relations the runtime holds nothing on, and fifty identity functions -- twenty-seven
+#: granted to the application role alone (:data:`IDENTITY_APPLICATION_FUNCTIONS`), five to
+#: the authenticator role alone (:data:`IDENTITY_AUTHENTICATOR_FUNCTIONS`, the
+#: trusted-issuer boundary), and eighteen executable by nobody
+#: (:data:`IDENTITY_INTERNAL_FUNCTIONS`). The tuples are the authority for those counts;
+#: if they disagree, the tuples are right and this comment is stale. The lifecycle writer's
+#: ownership and grants are exactly Milestone 2.4's -- the identity functions are owned by
+#: the schema owner, like Milestone 2.3's credential functions, and ADR 0009 records why a
+#: second dedicated writer role was not introduced for them.
+#:
+#: The application role's **table** grants are unchanged: every identity relation is
+#: reached through a function, and ``auth_bindings`` -- which gained six columns -- stays
+#: as ungranted as it was.
+_M3_1_PLAN = RevisionPlan(
+    revision=M3_1_REVISION,
+    tables=(
+        "tenants",
+        "workspaces",
+        "idempotency_records",
+        "outbox_events",
+        "audit_events",
+        "lifecycle_instances",
+        "lifecycle_transitions",
+        *_M3_1_PROTECTED_TABLES,
+    ),
+    common_functions=RUNTIME_AUTH_FUNCTIONS,
+    provisioning_functions=PROVISIONING_AUTH_FUNCTIONS,
+    application_functions=APPLICATION_LIFECYCLE_FUNCTIONS + IDENTITY_APPLICATION_FUNCTIONS,
+    authenticator_functions=IDENTITY_AUTHENTICATOR_FUNCTIONS,
+    authenticator_common_functions=AUTHENTICATOR_READ_FUNCTIONS,
+    internal_functions=(
+        INTERNAL_AUTH_FUNCTIONS
+        + INTERNAL_LIFECYCLE_FUNCTIONS
+        + INTERNAL_MAINTENANCE_FUNCTIONS
+        + IDENTITY_INTERNAL_FUNCTIONS
+    ),
+    application_grants=_M2_4_PLAN.application_grants,
+    application_column_grants=_M2_4_APPLICATION_COLUMN_GRANTS,
+    provisioning_grants=_M2_4_PLAN.provisioning_grants,
+    lifecycle_writer_functions=LIFECYCLE_WRITER_FUNCTIONS,
+    lifecycle_writer_helper_functions=LIFECYCLE_WRITER_HELPER_FUNCTIONS,
+    lifecycle_writer_grants=_M2_4_LIFECYCLE_WRITER_GRANTS,
+    lifecycle_writer_column_grants=_M2_4_LIFECYCLE_WRITER_COLUMN_GRANTS,
+)
+
 #: The revisions this module can wire. Anything else -- an older one, a newer one, a
 #: database with no version table, or a version table carrying more than one row -- is
 #: refused rather than guessed at.
@@ -654,6 +870,7 @@ REVISION_PLANS: dict[str, RevisionPlan] = {
     _M2_2_PLAN.revision: _M2_2_PLAN,
     _M2_3_PLAN.revision: _M2_3_PLAN,
     _M2_4_PLAN.revision: _M2_4_PLAN,
+    _M3_1_PLAN.revision: _M3_1_PLAN,
 }
 
 SUPPORTED_REVISIONS: tuple[str, ...] = tuple(sorted(REVISION_PLANS))
@@ -716,6 +933,8 @@ def revision_plan(connection: Connection) -> RevisionPlan:
         plan.common_functions
         + plan.provisioning_functions
         + plan.application_functions
+        + plan.authenticator_functions
+        + plan.authenticator_common_functions
         + plan.lifecycle_writer_functions
         + plan.lifecycle_writer_helper_functions
         + plan.internal_functions
@@ -1076,6 +1295,54 @@ def grant_application_role(connection: Connection, role: str) -> None:
     # is told what context it got. The transaction context is the mechanism itself -- a
     # role that could write it would name its own tenant, and one that could delete from it
     # would bind again as somebody else inside one transaction. See PROTECTED_TABLES.
+
+
+def grant_authenticator_role(connection: Connection, role: str) -> None:
+    """Give ``role`` the trusted-issuer boundary, and the least privilege that reaches it.
+
+    The grant is, exactly and exhaustively: ``USAGE`` on the schema, ``EXECUTE`` on
+    :data:`AUTHENTICATOR_READ_FUNCTIONS` (``auth_tenant_id``, which
+    ``db/engine.transaction()`` calls to assert a transaction inherited no context, and
+    ``auth_context``, which that invoker-rights accessor calls as the caller), and
+    ``EXECUTE`` on :data:`IDENTITY_AUTHENTICATOR_FUNCTIONS`, the eight pre-authentication
+    identity entry points -- signup and the two mailbox-proof paths (email verification and
+    account recovery), plus login and session opening. Ten functions. **No table privilege
+    of any kind**, and no column privilege: every relation behind those functions is
+    protected, and the entry points are hardened ``SECURITY DEFINER`` functions owned by the
+    schema owner, so the helpers they call internally execute as the owner and need no grant
+    here.
+
+    It deliberately does **not** receive the common runtime set the application and
+    provisioning roles hold. That tuple carries ``bind_authenticated_context``,
+    ``register_auth_binding``, ``revoke_auth_binding`` and ``append_audit_event``, and no
+    authenticator call path reaches any of them; granting them would let the trusted-issuer
+    principal establish a bearer context and reach the untied credential minter, which is
+    the opposite of what this role exists to be. It receives none of the application,
+    provisioning or lifecycle functions either, and it is a member of no role, so nothing is
+    reachable through ``SET ROLE``. ``tests/test_identity_protection.py`` asserts the whole
+    of that from the catalogue, function by function, rather than trusting this paragraph.
+
+    What the boundary buys: the **application** role holds none of the eight
+    pre-authentication functions, so raw SQL as the runtime that serves ordinary requests
+    can neither harvest a stored password hash, mint a browser session for a victim account,
+    obtain and consume a recovery secret, nor issue and consume a mailbox-verification token
+    for an address it does not control. That is the property the passwordless-session, the
+    recovery-without-mailbox and the mailbox-verification-authority findings require, and it
+    is a fact about grants rather than about what any Python caller remembers to check.
+    """
+    quoted = quote_identifier(role)
+    plan = revision_plan(connection)
+    # USAGE only -- harden_database took it from PUBLIC. Deliberately not _grant_common:
+    # the authenticator gets the named minimal read set below, not the common runtime tuple.
+    connection.execute(text(f"GRANT USAGE ON SCHEMA {quote_identifier(SCHEMA)} TO {quoted}"))
+    for name, signature in plan.authenticator_common_functions:
+        connection.execute(text(f"GRANT EXECUTE ON FUNCTION {_function(name, signature)} TO {quoted}"))
+    # And the trusted-issuer functions, which no other runtime role holds.
+    for name, signature in plan.authenticator_functions:
+        connection.execute(text(f"GRANT EXECUTE ON FUNCTION {_function(name, signature)} TO {quoted}"))
+    # Nothing else: no table grant, no column grant, and no application, provisioning,
+    # lifecycle or common runtime function. At a revision that declares neither authenticator
+    # tuple (every revision before 0005) this grants schema USAGE alone.
 
 
 def grant_provisioning_role(connection: Connection, role: str) -> None:

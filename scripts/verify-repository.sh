@@ -16,9 +16,10 @@
 #
 # It is NOT side-effect free any more. Since Milestone 2.1 the last gate runs the v1
 # foundation suite against a real PostgreSQL 16 server, where it creates a disposable
-# `firmbatch_test_<random>` database and four throwaway roles -- the per-run owner,
-# application and provisioning login roles, and since Milestone 2.4 a NOLOGIN lifecycle
-# writer that owns the two lifecycle entry points -- and drops them again. It
+# `firmbatch_test_<random>` database and five throwaway roles -- the per-run owner,
+# application, provisioning and, since Milestone 3.1, authenticator login roles, and since
+# Milestone 2.4 a NOLOGIN lifecycle writer that owns the two lifecycle entry points -- and
+# drops them again, six objects in all. It
 # touches nothing else: the helpers in control_plane/testing/bootstrap.py refuse any
 # database whose name does not match that pattern, refuse to run at all unless
 # FIRMBATCH_ENV=test, and issue the final DROP as the per-run database owner so that a
@@ -286,6 +287,38 @@ REQUIRED_FILES=(
   # The third M2.4 correction pass: the outbox-link guard and the lifecycle writer role.
   control_plane/tests/test_outbox_linkage.py
   control_plane/tests/test_lifecycle_writer.py
+  # --- membership-bound identity, sessions, credential issuance (Milestone 3.1) -----
+  # Still no new gate, for the same reason as M2.2, M2.3 and M2.4: the foundation-suite
+  # gate below runs the whole control_plane/tests directory, so these run with everything
+  # else. What is registered here is their existence, so that deleting one fails the
+  # layout gate instead of quietly shrinking the suite.
+  docs/adr/0009-membership-bound-identity-sessions-and-credential-issuance.md
+  control_plane/db/migrations/versions/0005_identity_and_membership.py
+  control_plane/db/accounts.py
+  control_plane/db/credentials.py
+  control_plane/db/membership.py
+  control_plane/security/passwords.py
+  control_plane/security/permissions.py
+  # The native v1 HTTP boundary. api/__main__.py is the loopback uvicorn entry point; it
+  # loads the application and authenticator settings and no privileged credential, which
+  # scripts/check-runtime-imports.py asserts.
+  control_plane/api/__init__.py
+  control_plane/api/__main__.py
+  control_plane/api/app.py
+  control_plane/api/email.py
+  control_plane/api/settings.py
+  control_plane/tests/identity_helpers.py
+  control_plane/tests/test_identity_accounts.py
+  control_plane/tests/test_identity_membership.py
+  control_plane/tests/test_identity_issuance.py
+  control_plane/tests/test_identity_protection.py
+  control_plane/tests/test_identity_migration.py
+  control_plane/tests/test_identity_permissions.py
+  control_plane/tests/test_identity_concurrency.py
+  control_plane/tests/test_api_http.py
+  # The M3.1 Codex security correction pass: the trusted-issuer boundary, the recovery
+  # epoch, the shared workspace serializer, bounded KDF admission and the streamed body cap.
+  control_plane/tests/test_identity_security_corrections.py
 )
 missing=()
 for f in "${REQUIRED_FILES[@]}"; do
@@ -509,8 +542,8 @@ gate_in "${REPO_ROOT}" "runtime import closure (production code vs requirements-
 # the same green as a passing one, and "cross-tenant access fails closed" is exactly the
 # claim this repository's evidence rules say may not rest on an unobserved run.
 #
-# The suite creates its own disposable `firmbatch_test_<random>` database and throwaway
-# roles from the maintenance URL below and drops them again; the helpers refuse any
+# The suite creates its own disposable `firmbatch_test_<random>` database and five throwaway
+# roles from the maintenance URL below and drops all six objects again; the helpers refuse any
 # database whose name does not match that pattern.
 if [ -z "${FIRMBATCH_TEST_DATABASE_URL:-}" ]; then
   fail "PostgreSQL foundation suite (control_plane, real PostgreSQL 16)" \
