@@ -188,6 +188,49 @@ MAX_LIFECYCLE_REASON_LENGTH = 200
 #: ``firmbatch.begin_tenant_provisioning()``.
 AUDIT_ACTOR_KINDS: tuple[str, ...] = ("credential", "provisioning")
 
+#: Milestone 3.1's third actor kind: a browser session bound to a workspace through an
+#: active membership. The principal is the account; there is no binding. Kept **beside**
+#: :data:`AUDIT_ACTOR_KINDS` rather than appended to it, because migrations ``0003`` and
+#: ``0004`` carry a copy of the Milestone 2 tuple that the tests hold to be equal, and the
+#: vocabulary the database enforces from ``0005`` on is :data:`ACTOR_KINDS`.
+SESSION_ACTOR_KIND = "session"
+ACTOR_KINDS: tuple[str, ...] = AUDIT_ACTOR_KINDS + (SESSION_ACTOR_KIND,)
+
+#: The shape every actor-carrying row has to satisfy, since ``0005``: a credential actor
+#: has a principal and a binding, a provisioning actor has neither, a session actor has a
+#: principal (the account) and no binding.
+ACTOR_SHAPE_SQL = (
+    "(actor_kind = 'credential' AND actor_principal_id IS NOT NULL AND actor_binding_id IS NOT NULL)"
+    " OR (actor_kind = 'provisioning' AND actor_principal_id IS NULL AND actor_binding_id IS NULL)"
+    " OR (actor_kind = 'session' AND actor_principal_id IS NOT NULL AND actor_binding_id IS NULL)"
+)
+
+# ------------------------------------------------------------------- Milestone 3.1
+
+#: A normalised email address: lower-cased, trimmed, one ``@``, a bounded local part and a
+#: dotted domain. ASCII-explicit so Python and PostgreSQL agree without consulting a
+#: locale; ``db/accounts`` applies it in Python and ``0005`` in the database.
+EMAIL_REGEX = r"^[a-z0-9._%+-]{1,64}@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$"
+EMAIL_MAX_LENGTH = 254
+
+#: The stored password form and its bound. Mirrors ``security/passwords``.
+PASSWORD_HASH_REGEX = (
+    r"^\$argon2id\$v=19\$m=[0-9]{1,9},t=[0-9]{1,4},p=[0-9]{1,3}"
+    r"\$[A-Za-z0-9+/]{16,}\$[A-Za-z0-9+/]{16,}$"
+)
+PASSWORD_HASH_MAX_LENGTH = 512
+
+ACCOUNT_STATUSES: tuple[str, ...] = ("active", "unverified")
+ACCOUNT_TOKEN_KINDS: tuple[str, ...] = ("account_recovery", "email_verification")
+
+#: The closed role model, sorted. The authoritative statement is
+#: ``security/permissions.MEMBERSHIP_ROLES``; this copy is what the check constraints
+#: below render, and a test holds the two equal.
+MEMBERSHIP_ROLES: tuple[str, ...] = ("admin", "member", "owner", "viewer")
+
+#: A customer-chosen credential label: short, and never a place for a secret.
+CREDENTIAL_LABEL_MAX_LENGTH = 100
+
 _UUID_PK = UUID(as_uuid=True)
 _TIMESTAMPTZ = TIMESTAMP(timezone=True)
 _JSONB = JSONB(none_as_null=True)
@@ -525,10 +568,46 @@ class AuthBinding(Base):
     #: Set by ``revoke_auth_binding``. Revocation is a state, not a deletion: a deleted
     #: binding would take the audit trail's foreign key with it.
     revoked_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ, nullable=True)
+    #: **Milestone 3.1.** The membership this credential was issued from, with the
+    #: workspace it belongs to, both NULL for a credential provisioned out of band. A
+    #: composite reference to ``(id, workspace_id, tenant_id)`` on ``memberships``, so the
+    #: binding cannot name a membership of another workspace or tenant. The ``BEFORE``
+    #: trigger on ``memberships`` revokes every binding that names a revoked membership in
+    #: the revoking statement's own sequence.
+    membership_id: Mapped[uuid.UUID | None] = mapped_column(_UUID_PK, nullable=True)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(_UUID_PK, nullable=True)
+    #: A customer-chosen label, bounded, and refused if it carries a secret shape.
+    label: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Written by ``record_api_credential_use()`` after a successful bind. A convenience
+    #: metric, not a security property.
+    last_used_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ, nullable=True)
+    #: The binding this one replaced, when it was minted by rotation.
+    rotated_from_id: Mapped[uuid.UUID | None] = mapped_column(_UUID_PK, nullable=True)
+    #: **Milestone 3.1 security correction.** The issuing account's security epoch at the
+    #: moment this credential was minted; NULL for a credential provisioned out of band.
+    #: ``bind_authenticated_context`` refuses a membership-bound credential whose stamped
+    #: epoch no longer equals the account's current one, which is how account recovery
+    #: evicts credentials issued before it.
+    principal_epoch: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("fingerprint", name="uq_auth_bindings_fingerprint"),
         UniqueConstraint("id", "tenant_id", name="uq_auth_bindings_id_tenant_id"),
+        ForeignKeyConstraint(
+            ["membership_id", "workspace_id", "tenant_id"],
+            [f"{SCHEMA}.memberships.id", f"{SCHEMA}.memberships.workspace_id", f"{SCHEMA}.memberships.tenant_id"],
+            name="fk_auth_bindings_membership_memberships",
+        ),
+        ForeignKeyConstraint(
+            ["rotated_from_id", "tenant_id"],
+            [f"{SCHEMA}.auth_bindings.id", f"{SCHEMA}.auth_bindings.tenant_id"],
+            name="fk_auth_bindings_rotated_from_auth_bindings",
+        ),
+        CheckConstraint("(membership_id IS NULL) = (workspace_id IS NULL)", name="membership_binding_complete"),
+        CheckConstraint(
+            f"label IS NULL OR length(label) BETWEEN 1 AND {CREDENTIAL_LABEL_MAX_LENGTH}", name="label_bounded"
+        ),
+        Index("ix_auth_bindings_tenant_id_workspace_id", "tenant_id", "workspace_id"),
         CheckConstraint(f"fingerprint ~ '{CREDENTIAL_FINGERPRINT_REGEX}'", name="fingerprint_format"),
         # One dimension, no NULL elements, bounded, and every element in the catalogue.
         CheckConstraint("array_ndims(scopes) = 1", name="scopes_one_dimension"),
@@ -653,16 +732,13 @@ class AuditEvent(Base):
             name="outcome_known",
         ),
         CheckConstraint(
-            "actor_kind IN (" + ", ".join(f"'{value}'" for value in AUDIT_ACTOR_KINDS) + ")",
+            "actor_kind IN (" + ", ".join(f"'{value}'" for value in ACTOR_KINDS) + ")",
             name="actor_kind_known",
         ),
-        # A credential actor has both identifiers; a provisioning actor has neither. A
+        # A credential actor has both identifiers; a provisioning actor has neither; a
+        # session actor (Milestone 3.1) has the account as principal and no binding. A
         # half-filled actor would be a record nobody could interpret.
-        CheckConstraint(
-            "(actor_kind = 'credential' AND actor_principal_id IS NOT NULL AND actor_binding_id IS NOT NULL)"
-            " OR (actor_kind = 'provisioning' AND actor_principal_id IS NULL AND actor_binding_id IS NULL)",
-            name="actor_shape",
-        ),
+        CheckConstraint(ACTOR_SHAPE_SQL, name="actor_shape"),
         *_metadata_constraints("details", "details"),
         # Both or neither, so a half-written tag cannot make a row look untagged to the
         # read policy while still naming a machine.
@@ -1008,14 +1084,10 @@ class LifecycleTransition(Base):
         CheckConstraint("from_revision >= 0", name="from_revision_not_negative"),
         CheckConstraint("to_revision = from_revision + 1", name="revision_advances_by_one"),
         CheckConstraint(
-            "actor_kind IN (" + ", ".join(f"'{value}'" for value in AUDIT_ACTOR_KINDS) + ")",
+            "actor_kind IN (" + ", ".join(f"'{value}'" for value in ACTOR_KINDS) + ")",
             name="actor_kind_known",
         ),
-        CheckConstraint(
-            "(actor_kind = 'credential' AND actor_principal_id IS NOT NULL AND actor_binding_id IS NOT NULL)"
-            " OR (actor_kind = 'provisioning' AND actor_principal_id IS NULL AND actor_binding_id IS NULL)",
-            name="actor_shape",
-        ),
+        CheckConstraint(ACTOR_SHAPE_SQL, name="actor_shape"),
         CheckConstraint(
             f"reason IS NULL OR length(reason) BETWEEN 1 AND {MAX_LIFECYCLE_REASON_LENGTH}",
             name="reason_bounded",
@@ -1109,6 +1181,380 @@ class LifecycleClaimProvenance(Base):
         CheckConstraint("to_revision = from_revision + 1", name="revision_advances_by_one"),
     )
 
+
+
+
+# ------------------------------------------------------------------- Milestone 3.1
+#
+# The identity plane. **Every relation below is protected, not policed**: no runtime or
+# provisioning role holds any privilege on any of them, exactly as for ``auth_bindings``,
+# and the only way in is a hardened SECURITY DEFINER function in migration ``0005``. They
+# carry no row-level security policy for the reason ``auth_bindings`` carries none -- a
+# policy bounds a role that holds privileges, and here none does -- and the tenant-owned
+# ones (memberships, invitations) carry ``tenant_id`` and composite foreign keys so the
+# rows the definer functions read and write cannot reach across tenants.
+
+
+class Account(Base):
+    """One customer identity, existing before any workspace does. **Protected.**
+
+    Global: an account is the outermost identity there is, so its normalised address is
+    globally unique in the way a tenant slug is. That uniqueness is never observable by a
+    runtime role -- nothing can query this table -- and the one function that could reveal
+    it through success-versus-failure, ``signup_account``, returns the same shape for a
+    new address and an existing one.
+    """
+
+    __tablename__ = "accounts"
+
+    id: Mapped[uuid.UUID] = mapped_column(_UUID_PK, primary_key=True, server_default=text("gen_random_uuid()"))
+    email_normalized: Mapped[str] = mapped_column(Text, nullable=False)
+    email_display: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'unverified'"))
+    email_verified_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ, nullable=True)
+    #: **Milestone 3.1 security correction.** Advanced by ``complete_account_recovery`` so
+    #: that every credential this account issued before the recovery -- checked at bearer
+    #: authentication against the epoch each was stamped with -- is durably evicted.
+    security_epoch: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False, server_default=text("now()"))
+    updated_at: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False, server_default=text("now()"))
+
+    __table_args__ = (
+        UniqueConstraint("email_normalized", name="uq_accounts_email_normalized"),
+        CheckConstraint(f"email_normalized ~ '{EMAIL_REGEX}'", name="email_normalized_format"),
+        # The grammar does not bound the total length -- its domain group repeats labels
+        # without an upper limit -- so the canonical maximum is its own constraint, matching
+        # the bound both normalisers apply.
+        CheckConstraint(
+            f"length(email_normalized) <= {EMAIL_MAX_LENGTH}", name="email_normalized_length"
+        ),
+        CheckConstraint(f"length(email_display) BETWEEN 3 AND {EMAIL_MAX_LENGTH}", name="email_display_length"),
+        CheckConstraint(
+            "status IN (" + ", ".join(f"'{value}'" for value in ACCOUNT_STATUSES) + ")", name="status_known"
+        ),
+        CheckConstraint("(status = 'active') = (email_verified_at IS NOT NULL)", name="verified_status_consistent"),
+    )
+
+
+class AccountPassword(Base):
+    """The Argon2id PHC hash of one account's password. **Protected.**
+
+    One row per account, replaced by recovery. The check constraint is what stops a writer
+    that reached the table another way storing a plaintext or a hash of another algorithm.
+    The hash is fetched by ``login_lookup`` for exactly one account per call and verified
+    in Python; see ``security/passwords``.
+    """
+
+    __tablename__ = "account_passwords"
+
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        _UUID_PK,
+        ForeignKey(f"{SCHEMA}.accounts.id", ondelete="CASCADE", name="fk_account_passwords_account_id_accounts"),
+        primary_key=True,
+    )
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    algorithm: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'argon2id'"))
+    updated_at: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False, server_default=text("now()"))
+
+    __table_args__ = (
+        CheckConstraint(f"password_hash ~ '{PASSWORD_HASH_REGEX}'", name="password_hash_format"),
+        CheckConstraint(f"length(password_hash) <= {PASSWORD_HASH_MAX_LENGTH}", name="password_hash_bounded"),
+        CheckConstraint("algorithm = 'argon2id'", name="algorithm_known"),
+    )
+
+
+class AccountToken(Base):
+    """One email-verification or recovery token, as a fingerprint. **Protected.**
+
+    Written once, and consumed or superseded once: a ``BEFORE UPDATE`` trigger refuses any
+    other change to a written row. Deletion is refused by the **absent grant** rather than
+    by that trigger -- no runtime role holds ``DELETE`` on this protected table -- and the
+    one deletion that does occur is the cascade from ``purge_expired_unverified_accounts``,
+    the owner-run reclaim of an expired unverified account (Milestone 3.1 security
+    correction). The secret itself is minted in the database, returned once to the
+    email-delivery boundary, and exists nowhere else.
+    """
+
+    __tablename__ = "account_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(_UUID_PK, primary_key=True, server_default=text("gen_random_uuid()"))
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        _UUID_PK,
+        ForeignKey(f"{SCHEMA}.accounts.id", ondelete="CASCADE", name="fk_account_tokens_account_id_accounts"),
+        nullable=False,
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False, server_default=text("now()"))
+    expires_at: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ, nullable=True)
+    superseded_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("fingerprint", name="uq_account_tokens_fingerprint"),
+        CheckConstraint(
+            "kind IN (" + ", ".join(f"'{value}'" for value in ACCOUNT_TOKEN_KINDS) + ")", name="kind_known"
+        ),
+        CheckConstraint(f"fingerprint ~ '{FINGERPRINT_REGEX}'", name="fingerprint_format"),
+        CheckConstraint("expires_at > created_at", name="expiry_after_creation"),
+        Index("ix_account_tokens_account_id", "account_id"),
+    )
+
+
+class Membership(Base):
+    """One account's role in one workspace of one tenant. **Protected.**
+
+    The row that answers ``AUTH-MEMBERSHIP-BOUND-IDENTITY``'s question -- which
+    workspaces may this person choose from -- and it is read only by the definer functions
+    that bind sessions and issue credentials, every time, never cached as an authorization.
+    Revocation is a state: the row stays, ``revoked_at`` is set once by a trigger that
+    refuses to unset it, and the same trigger revokes every credential the membership
+    issued and unbinds every session bound through it.
+    """
+
+    __tablename__ = "memberships"
+
+    id: Mapped[uuid.UUID] = mapped_column(_UUID_PK, primary_key=True, server_default=text("gen_random_uuid()"))
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        _UUID_PK,
+        ForeignKey(f"{SCHEMA}.tenants.id", ondelete="CASCADE", name="fk_memberships_tenant_id_tenants"),
+        nullable=False,
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(_UUID_PK, nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        _UUID_PK,
+        ForeignKey(f"{SCHEMA}.accounts.id", ondelete="CASCADE", name="fk_memberships_account_id_accounts"),
+        nullable=False,
+    )
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    invited_by_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        _UUID_PK,
+        ForeignKey(
+            f"{SCHEMA}.accounts.id", ondelete="SET NULL", name="fk_memberships_invited_by_account_id_accounts"
+        ),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False, server_default=text("now()"))
+    updated_at: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False, server_default=text("now()"))
+    revoked_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ, nullable=True)
+    revoked_by_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        _UUID_PK,
+        ForeignKey(
+            f"{SCHEMA}.accounts.id", ondelete="SET NULL", name="fk_memberships_revoked_by_account_id_accounts"
+        ),
+        nullable=True,
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["workspace_id", "tenant_id"],
+            [f"{SCHEMA}.workspaces.id", f"{SCHEMA}.workspaces.tenant_id"],
+            name="fk_memberships_workspace_id_tenant_id_workspaces",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("id", "tenant_id", name="uq_memberships_id_tenant_id"),
+        UniqueConstraint("id", "workspace_id", "tenant_id", name="uq_memberships_id_workspace_id_tenant_id"),
+        CheckConstraint(
+            "role IN (" + ", ".join(f"'{value}'" for value in MEMBERSHIP_ROLES) + ")", name="role_known"
+        ),
+        Index("ix_memberships_tenant_id", "tenant_id"),
+        Index("ix_memberships_account_id", "account_id"),
+        Index(
+            "uq_memberships_active_workspace_id_account_id",
+            "workspace_id",
+            "account_id",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+    )
+
+
+class WorkspaceDirectory(Base):
+    """A protected copy of each workspace's slug and name, keyed like the workspace.
+
+    Maintained by an ``AFTER`` trigger on ``workspaces`` for every writer, so it cannot
+    drift; read only by ``account_workspaces()``, which has to tell an account the names of
+    the workspaces it belongs to across tenants -- a read FORCE row security on
+    ``workspaces`` refuses to a transaction that holds no tenant context yet. No runtime
+    role holds anything on it.
+    """
+
+    __tablename__ = "workspace_directory"
+
+    id: Mapped[uuid.UUID] = mapped_column(_UUID_PK, primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(_UUID_PK, nullable=False)
+    slug: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["id", "tenant_id"],
+            [f"{SCHEMA}.workspaces.id", f"{SCHEMA}.workspaces.tenant_id"],
+            name="fk_workspace_directory_id_tenant_id_workspaces",
+            ondelete="CASCADE",
+        ),
+    )
+
+
+class BrowserSession(Base):
+    """One browser session, as fingerprints, with its optional workspace binding. **Protected.**
+
+    The session secret and the CSRF secret are minted in the database and returned once;
+    the row holds their digests. The binding names one membership together with its
+    workspace and tenant, so it cannot describe a membership of another workspace, and it
+    is re-derived on every bind rather than trusted.
+    """
+
+    __tablename__ = "browser_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(_UUID_PK, primary_key=True, server_default=text("gen_random_uuid()"))
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        _UUID_PK,
+        ForeignKey(f"{SCHEMA}.accounts.id", ondelete="CASCADE", name="fk_browser_sessions_account_id_accounts"),
+        nullable=False,
+    )
+    fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    csrf_fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False, server_default=text("now()"))
+    expires_at: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False)
+    last_seen_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ, nullable=True)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(_UUID_PK, nullable=True)
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(_UUID_PK, nullable=True)
+    membership_id: Mapped[uuid.UUID | None] = mapped_column(_UUID_PK, nullable=True)
+    bound_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ, nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["membership_id", "workspace_id", "tenant_id"],
+            [f"{SCHEMA}.memberships.id", f"{SCHEMA}.memberships.workspace_id", f"{SCHEMA}.memberships.tenant_id"],
+            name="fk_browser_sessions_membership_memberships",
+        ),
+        UniqueConstraint("fingerprint", name="uq_browser_sessions_fingerprint"),
+        CheckConstraint(f"fingerprint ~ '{FINGERPRINT_REGEX}'", name="fingerprint_format"),
+        CheckConstraint(f"csrf_fingerprint ~ '{FINGERPRINT_REGEX}'", name="csrf_fingerprint_format"),
+        CheckConstraint("expires_at > created_at", name="expiry_after_creation"),
+        CheckConstraint(
+            "((workspace_id IS NULL) = (tenant_id IS NULL)) AND ((workspace_id IS NULL) = (membership_id IS NULL))",
+            name="binding_complete",
+        ),
+        Index("ix_browser_sessions_account_id", "account_id"),
+    )
+
+
+class WorkspaceInvitation(Base):
+    """One invitation: workspace, tenant, recipient, role, expiry, one-time. **Protected.**"""
+
+    __tablename__ = "workspace_invitations"
+
+    id: Mapped[uuid.UUID] = mapped_column(_UUID_PK, primary_key=True, server_default=text("gen_random_uuid()"))
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        _UUID_PK,
+        ForeignKey(f"{SCHEMA}.tenants.id", ondelete="CASCADE", name="fk_workspace_invitations_tenant_id_tenants"),
+        nullable=False,
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(_UUID_PK, nullable=False)
+    email_normalized: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    invited_by_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        _UUID_PK,
+        ForeignKey(
+            f"{SCHEMA}.accounts.id",
+            ondelete="SET NULL",
+            name="fk_workspace_invitations_invited_by_account_id_accounts",
+        ),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False, server_default=text("now()"))
+    expires_at: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ, nullable=True)
+    accepted_membership_id: Mapped[uuid.UUID | None] = mapped_column(_UUID_PK, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(_TIMESTAMPTZ, nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["workspace_id", "tenant_id"],
+            [f"{SCHEMA}.workspaces.id", f"{SCHEMA}.workspaces.tenant_id"],
+            name="fk_workspace_invitations_workspace_id_tenant_id_workspaces",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["accepted_membership_id", "tenant_id"],
+            [f"{SCHEMA}.memberships.id", f"{SCHEMA}.memberships.tenant_id"],
+            name="fk_workspace_invitations_accepted_membership_memberships",
+        ),
+        UniqueConstraint("fingerprint", name="uq_workspace_invitations_fingerprint"),
+        UniqueConstraint("id", "tenant_id", name="uq_workspace_invitations_id_tenant_id"),
+        CheckConstraint(f"email_normalized ~ '{EMAIL_REGEX}'", name="email_normalized_format"),
+        CheckConstraint(
+            "role IN (" + ", ".join(f"'{value}'" for value in MEMBERSHIP_ROLES) + ")", name="role_known"
+        ),
+        CheckConstraint(f"fingerprint ~ '{FINGERPRINT_REGEX}'", name="fingerprint_format"),
+        CheckConstraint("expires_at > created_at", name="expiry_after_creation"),
+        Index("ix_workspace_invitations_tenant_id", "tenant_id"),
+        Index(
+            "uq_workspace_invitations_pending_workspace_id_email",
+            "workspace_id",
+            "email_normalized",
+            unique=True,
+            postgresql_where=text("accepted_at IS NULL AND revoked_at IS NULL"),
+        ),
+    )
+
+
+class AccountIdempotencyRecord(Base):
+    """The replay record for the two account-level mutations. **Protected**, append-only.
+
+    Milestone 2.2's claims are tenant-scoped, and an account creating its first workspace
+    or accepting an invitation has no tenant context until the operation has run. So the
+    replay lookup for those two operations is keyed by account here, and the tenant-scoped
+    claim and linked event are written as well once the tenant context exists.
+    """
+
+    __tablename__ = "account_idempotency_records"
+
+    id: Mapped[uuid.UUID] = mapped_column(_UUID_PK, primary_key=True, server_default=text("gen_random_uuid()"))
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        _UUID_PK,
+        ForeignKey(
+            f"{SCHEMA}.accounts.id", ondelete="CASCADE", name="fk_account_idempotency_records_account_id_accounts"
+        ),
+        nullable=False,
+    )
+    operation: Mapped[str] = mapped_column(Text, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    result: Mapped[dict[str, Any]] = mapped_column(_JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    created_at: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False, server_default=text("now()"))
+
+    __table_args__ = (
+        UniqueConstraint(
+            "account_id", "operation", "idempotency_key",
+            name="uq_account_idempotency_records_account_id_operation_key",
+        ),
+        CheckConstraint(f"operation ~ '{DOTTED_NAME_REGEX}'", name="operation_format"),
+        CheckConstraint(f"idempotency_key ~ '{IDEMPOTENCY_KEY_REGEX}'", name="idempotency_key_format"),
+        CheckConstraint(f"request_fingerprint ~ '{FINGERPRINT_REGEX}'", name="request_fingerprint_format"),
+        *_metadata_constraints("result", "result"),
+    )
+
+
+#: The Milestone 3.1 relations, all protected. Named so a test can walk them.
+IDENTITY_TABLES: frozenset[str] = frozenset(
+    {
+        Account.__tablename__,
+        AccountPassword.__tablename__,
+        AccountToken.__tablename__,
+        Membership.__tablename__,
+        WorkspaceDirectory.__tablename__,
+        BrowserSession.__tablename__,
+        WorkspaceInvitation.__tablename__,
+        AccountIdempotencyRecord.__tablename__,
+        # Unmodelled, like ``auth_transaction_context``: its key column is ``xid8``.
+        "identity_transaction_context",
+    }
+)
 
 #: Tables that carry tenant data and must therefore be under forced row-level security,
 #: mapped to the column the isolation policy compares against the **authenticated** tenant

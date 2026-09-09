@@ -80,6 +80,19 @@ RUNTIME_MODULES = (
     "security/__init__.py",
     "security/authorization.py",
     "security/secrets.py",
+    # --- Milestone 3.1: identity, membership, credential issuance and the HTTP boundary ----
+    # The runtime the native v1 API server imports. Each must reach no migration or test
+    # tooling and name no privileged credential, exactly like the Milestone 2 runtime.
+    "db/accounts.py",
+    "db/credentials.py",
+    "db/membership.py",
+    "security/passwords.py",
+    "security/permissions.py",
+    "api/__init__.py",
+    "api/app.py",
+    "api/settings.py",
+    "api/email.py",
+    "api/__main__.py",
 )
 
 #: What a runtime module may not import. ``migrate`` holds the owner credential path and

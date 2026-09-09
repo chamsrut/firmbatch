@@ -14,8 +14,11 @@ Five labels, kept strictly apart:
 - **NOT VERIFIED** — asserted, expected, or reasoned about, with no captured run behind it.
   Documentation, comments, and passing-in-the-moment are not evidence.
 
-Last updated: 2026-09-06, at `main` merge commit `4511f7d` (Milestone 2.4, PR #7), on the
-Milestone 3.0 documentation branch `docs/rev-d-phase-0-roadmap`. Milestone 1 merged at
+Last updated: 2026-09-09, on `feat/milestone-3-1-identity-membership` from `main` at
+`116b5ee` (Milestone 3.0, PR #8), with Milestone 3.1 implemented and tested in the working
+tree and **not committed**, after two independent review correction passes whose ten
+findings and two gaps (Codex) and six findings (GPT-5.6 Sol) are all corrected — see the two
+M3.1 correction-pass sections below. Milestone 1 merged at
 `6b4f341`; M2.1 merged at `712b51a` (implementation commit `521870b`, with the bootstrap
 trust-boundary correction `78eae1d` — see the CI correction section below); M2.2 merged at
 `b028f21` (implementation commit `d362717`); M2.3 merged at `dca2d49` (implementation
@@ -47,7 +50,8 @@ genuinely remaining choices in `docs/architecture/rev-d-decision-register.md`, a
 decision in ADR 0008. **Nothing rev D or D.1 adds is implemented.** The operator capacity
 agent remains separate operator-side software, now scheduled for Phase P (after a supplier
 signs) rather than Milestone 6. **Milestone 3.1 — membership-bound identity, sessions and
-credential issuance — is next.** See the "CURRENT — Milestone 3.0" section and PLANNED
+credential issuance — is implemented and tested on the branch, uncommitted, not merged,
+not deployed and not VERIFIED LIVE.** See the "CURRENT — Milestone 3.1" section and PLANNED
 below.
 
 ---
@@ -1127,7 +1131,7 @@ proof.
 
 ---
 
-## CURRENT — Milestone 3.0 revision D.1 documentation adoption — **reviewed, awaiting commit/PR**
+## CURRENT — Milestone 3.0 revision D.1 documentation adoption — **merged at `116b5ee` (PR #8)**
 
 Documentation only, on `docs/rev-d-phase-0-roadmap` from `main` at `4511f7d`. It changes
 no product behavior, no migration, no test, no dependency and no evidence, and it touches
@@ -1157,6 +1161,325 @@ expiry or any other value the authorities leave to configuration, contract or me
 It creates no cloud resource and authorizes no deployment, purchase, supplier contact or
 customer invitation. It reclassifies no evidence: Milestone 2 stays implemented and tested,
 not VERIFIED LIVE.
+
+---
+
+## CURRENT — Milestone 3.1 membership-bound identity, sessions and credential issuance — **implemented and tested on `feat/milestone-3-1-identity-membership`, uncommitted**
+
+Implemented on the branch from `main` at `116b5ee` (Milestone 3.0, PR #8); **not committed,
+not merged, not deployed, and not VERIFIED LIVE**. ADR 0009 records the design. Nothing in
+Milestone 2 is reopened: migrations `0001`–`0004` are unchanged, `bind_authenticated_context`
+is unchanged, and every existing test passes unchanged except the three named below.
+
+**What it is.** Forward migration `0005_identity_and_membership` adds nine **protected**
+tables — `accounts`, `account_passwords`, `account_tokens`, `memberships`,
+`workspace_directory`, `browser_sessions`, `workspace_invitations`,
+`account_idempotency_records` and the unlogged `identity_transaction_context` — with no
+grant, no policy and no column privilege for any runtime role, reached only through
+fifty owner-owned `SECURITY DEFINER` functions (twenty-seven application entry points,
+five granted to the authenticator role alone — the trusted-issuer boundary added by the
+security correction pass below — and eighteen internal helpers executable by nobody). A
+browser session is a third actor kind (`session`: principal = the account, no binding) that
+acquires an ordinary Milestone 2.3 tenant context through the owner-only `auth_context_begin`,
+with the membership **re-derived at every bind** and revoked **structurally** by a
+`BEFORE UPDATE OR DELETE` trigger on `memberships` that revokes every credential the
+membership issued and unbinds every session bound through it. A workspace is a tenant at
+this milestone; `create_workspace` provisions both plus the owner membership in one
+function. Roles are closed (`viewer`, `member`, `admin`, `owner`); `credential:issue`,
+`membership:read` and `membership:manage` are session-only permissions outside the
+Milestone 2.3 catalogue; no role grants `credential:manage`, so the M2.3 minter refuses every
+session. `issue_api_credential` re-reads the membership, bounds the scopes by the catalogue,
+the issuable subset and the member's own permissions, and mints a fresh `fbk_` secret;
+rotation is an atomic locked cutover; only the issuing member rotates, a manager revokes.
+Five secret kinds (`fbs_`, `fbc_`, `fbv_`, `fbr_`, `fbi_`) share the bearer credential's
+244-bit construction, are returned once, and are stored only as SHA-256 fingerprints;
+`secret_shape` gains one seventh pattern and is restored to `0003`'s exact text on
+downgrade. Passwords are Argon2id through `argon2-cffi`, verified in the application process
+(the harvestable-hash limitation is stated in ADR 0009 decision 6). `FB010` is the one neutral
+refusal, raised from one site per function. The native HTTP boundary is a Starlette
+application (`control_plane/api/`) with a host-only `HttpOnly`/`Secure`/`SameSite=Strict`
+cookie, `X-CSRF-Token` plus an `Origin` allow-list on every cookie mutation, credentialed CORS
+from the same explicit allow-list and never a wildcard, a separate bearer boundary that
+refuses cookies as the cookie boundary refuses bearer tokens, 16 KiB bounded bodies, neutral
+one-field error bodies, metadata-only logging, an email-delivery interface with a test-only
+capture adapter and a production adapter that raises, and no HTML.
+
+| Path | What |
+| --- | --- |
+| `control_plane/db/migrations/versions/0005_identity_and_membership.py` | New forward migration after `0004`: the nine tables, two composite types, the widened actor constraints, six columns and two constraints on `auth_bindings`, the seven-shape `secret_shape`, fifty functions, four triggers, and the revised `bind_authenticated_context`; a downgrade that restores the `0004` catalogue exactly |
+| `control_plane/db/models.py`, `security/authorization.py`, `db/roles.py` | Models and constants for the nine tables; nine protected resource rules; the `0005` revision plan (`M3_1_REVISION`) with the identity function inventories |
+| `control_plane/db/accounts.py`, `membership.py`, `credentials.py` | The Python wrappers: signup, verification, recovery, login, sessions; workspaces, binding, memberships, invitations; issuance, rotation, revocation, listing, last use |
+| `control_plane/security/passwords.py`, `permissions.py`, `secrets.py` | Argon2id policy; the closed role model and the issuable subset; the five identity secret prefixes and the appended shape |
+| `control_plane/api/` | `app.py` (the boundary and thirty-two routes), `settings.py` (`FIRMBATCH_API_ALLOWED_ORIGINS`, `FIRMBATCH_API_COOKIE_SECURE`, `FIRMBATCH_API_SESSION_TTL_SECONDS`), `email.py`, `__main__.py` (loopback uvicorn, application settings only) |
+| `control_plane/tests/` | Eight new modules (`test_identity_accounts`, `_membership`, `_issuance`, `_protection`, `_migration`, `_permissions`, `_concurrency`, `test_api_http`) and `identity_helpers.py`; `test_migrations.py`, `test_audit_events.py` and `test_protected_auth_state.py` extended for the new head, the appended shape and the nine tables |
+| `requirements-v1.txt`, `requirements-v1-dev.txt`, both lock files | `argon2-cffi==25.1.0`, `starlette==1.6.0`, `uvicorn==0.52.4` (runtime); `httpx==0.28.1` (dev); locks regenerated with `pip-compile --generate-hashes --strip-extras --no-header` in a throwaway environment |
+| `docs/adr/0009-…`, `.env.example`, `README.md` | The decision record; the three API variables; one status line |
+
+### What M3.1 proves
+
+Against PostgreSQL 16, every check as the restricted application role and failing closed:
+two unrelated tenants cannot observe or affect one another through any identity function; a
+non-member's account session binds nothing and issues nothing; a revoked membership is
+unbound, its credentials revoked, a stale pointer on the session row not honoured, and the
+row not reinstatable even by the schema owner; an invitation for one tenant grants nothing in
+another, and the wrong recipient, an expired, revoked, reused, forged or bearer-shaped
+invitation are one refusal; a session secret at the credential boundary and a credential at
+the session boundary are refused, the latter before the database is consulted; a credential
+context reaches no identity function; the M2.3 minter and revoker refuse every session; raw
+SQL as the owner's own workspace session cannot insert, update, delete or read a binding,
+membership, session or context, cannot call any internal function, and cannot widen or
+re-point a context; issuance is bounded by the membership as re-read, the catalogue and the
+issuable subset, with the membership permissions refused as non-catalogue values; rotation
+is atomic and the old secret stops in the same transaction; duplicate keyed requests produce
+one workspace, one membership, one binding, one claim and one linked event, with the contention
+observed on `pg_stat_activity`; concurrent owner removals leave exactly one owner and
+concurrent rotations exactly one successor; membership, credential and invitation identifiers
+are not oracles across tenants; no secret reaches any row, audit detail, outbox attribute,
+exception chain, HTTP response, log line or error body, and every secret is present only as
+its digest; the address normaliser, the role table and the password policy agree between
+Python and SQL; every identity function is owner-owned, path-pinned, `PUBLIC`-revoked, of the
+decided security type, free of dynamic SQL and schema-qualified, granted to exactly the
+application role or to nobody; the four triggers are installed and enabled; the ACL sanitiser
+strips a stray grant on the identity plane; and `0005` upgrades, downgrades to a catalogue
+equal to an independent downgrade, and re-upgrades, with role wiring at every revision.
+
+**The `AUTH-MEMBERSHIP-BOUND-IDENTITY` cases, each a named test:**
+
+| Gate case | Test |
+| --- | --- |
+| 1. A verified non-member keeps its account session, can create its first workspace, and cannot bind the unauthorized workspace or obtain a credential scoped to it by any route | `test_identity_membership.py::test_gate_case_1_a_non_member_keeps_its_account_session_and_cannot_bind_the_workspace` |
+| 2. Revoking a membership stops the identity acting in the workspace on the credential path's linearisation terms | `test_identity_membership.py::test_gate_case_2_revoking_a_membership_stops_the_identity_acting_in_the_workspace` |
+| 3. An invitation accepted for one tenant grants nothing in another | `test_identity_membership.py::test_gate_case_3_an_invitation_accepted_for_one_tenant_grants_nothing_in_another` |
+| 4. Sessions and API credentials are distinct types, never accepted at each other's boundary, never converted; issuance is an audited operation after membership and scopes are rechecked | `test_identity_issuance.py::test_gate_case_4_a_session_issues_a_credential_that_authenticates_as_its_membership_and_nothing_else` |
+
+**Verification at the implementation state (uncommitted working tree), 2026-09-09, after the
+second review correction pass, against the attested local PostgreSQL 16.15 cluster:** the
+PostgreSQL foundation suite **2,038 collected — 2,037 passed, 1 skipped** (the one skip is
+the pre-existing REPLICATION skip), a net increase of 76 over the first pass's 1,962 that is
+this pass's regression and concurrency coverage; `./scripts/verify-repository.sh` reports
+**14 gates passed, 0 failed**, with **119** required files in the layout gate; `git diff
+--check` is clean; the cluster carries no leaked `firmbatch_test_*` database, role or session
+afterwards. **No evidence artifact was captured**; these are HISTORICAL observations of a
+working tree, not VERIFIED LIVE. (The figures recorded for 2026-09-07 were 1,962 collected —
+1,961 passed, 1 skipped, and they are HISTORICAL to that state.)
+
+**Three existing tests changed, each because the head moved:** `test_migrations.py` (the head
+is `0005`, the ladder starts there, the protected-table chain gains a link, and the unmodelled
+`identity_transaction_context` joins its sibling), `test_audit_events.py` (`0003`'s six shapes
+are asserted as a strict prefix of the now-seven, with six corpus samples for the seventh),
+`test_protected_auth_state.py` (the nine tables join the parametrised protected-write
+refusals). No assertion was weakened.
+
+### The M3.1 Codex security correction pass — ten findings and two gaps, all closed
+
+A Codex security diff scan of the uncommitted M3.1 working tree raised ten findings (five
+medium, five low) and two review gaps. All are corrected on the branch, with regression
+tests. ADR 0009's "Security corrections" section records the changes that alter the design;
+the summary here is what the code now does.
+
+**The trusted-issuer boundary is a distinct database principal.** The pre-authentication
+functions are granted to a new restricted login role, the **authenticator**, and to the
+ordinary application role not at all. This pass moved five — `login_lookup`,
+`open_browser_session`, `request_account_recovery`, `account_recovery_token_valid`,
+`complete_account_recovery`; the second review pass below moved the three
+mailbox-verification ones, so the current inventory is **eight**. Raw SQL as the application
+role can no longer harvest a stored password hash, mint a session for a victim account
+(findings 1/5 in the report), or request and consume a recovery secret to reset a victim's
+password (finding 2). The API's signup, verification, login, recovery-request and
+recovery-completion routes run on a separate authenticator engine; every other route stays
+on the application engine. Password verification still runs in the process (PostgreSQL has
+no Argon2), so a compromised authenticator could still skip it — that trust is now confined
+to a narrow principal, and separating the process that holds its credential is M3.3's.
+
+**The authenticator's grant is the least that reaches those eight.** `USAGE` on the schema,
+`EXECUTE` on the eight pre-authentication functions, and `EXECUTE` on exactly two read-side
+accessors — `auth_tenant_id`, which `db/engine.transaction()` calls to assert a transaction
+inherited no context, and `auth_context`, which that invoker-rights accessor calls as the
+caller. Ten functions; no table privilege and no column privilege anywhere; a member of no
+role, so nothing is reachable through `SET ROLE`. It is deliberately **not** granted the
+common runtime set the application and provisioning roles hold, which also carries
+`bind_authenticated_context`, `register_auth_binding`, `revoke_auth_binding` and
+`append_audit_event` — none of which any authenticator call path reaches.
+`test_identity_protection.py` asserts this from the catalogue in four ways: the exhaustive
+executable set is exactly those ten **named**, each unreachable function is named
+individually, the role holds no relation privilege, and it is a member of nothing — and a
+fifth test drives the pre-authentication flows end to end, so a grant narrowed too far fails
+as loudly as one
+left too wide.
+
+**The canonical address maximum is enforced by the database.** `EMAIL_REGEX` bounds the
+local part and each domain label but repeats labels without an upper limit, so a
+255-character address matched the grammar while `EMAIL_MAX_LENGTH` is 254. `accounts`
+now carries `length(email_normalized) <= 254` as its own CHECK, mirroring the bound both
+`identity_normalize_email` and `db/accounts.normalize_email` already applied, so the three
+layers agree and a writer reaching the table another way cannot store what the normalisers
+would never produce. Proven at the lowest boundary that can answer it: the schema owner —
+the one identity that can insert into this protected table — stores a 254-character address
+and is refused a 255-character one by `email_normalized_length`, with both addresses
+grammar-valid so only the bound separates them.
+
+**Account recovery evicts credentials durably.** `accounts` gains a `security_epoch`;
+membership-bound credentials are stamped with it at issue and rotation
+(`auth_bindings.principal_epoch`); `complete_account_recovery` advances it and marks the
+visible bindings revoked; and `bind_authenticated_context` — the one M2.3 function this
+revision now replaces via `CREATE OR REPLACE`, restored byte-for-byte on downgrade — refuses
+a membership-bound credential whose stamped epoch is behind the account's, and rechecks that
+its membership is still active. A credential issued before a recovery, including one that
+raced it, no longer authenticates (findings 6, and defence-in-depth for 3/4 in the report).
+
+**Issuance and rotation share the workspace serializer.** `issue_api_credential` and
+`rotate_api_credential` now take the workspace row lock before reading membership and re-read
+the membership and role under it, so issuance, rotation, removal and demotion serialize on
+one lock in one order; no credential survives a completed removal or demotion (findings
+3/4). `change_membership_role`, `remove_membership` and `create_invitation` re-read the
+**caller's own** role under the lock, so a concurrently demoted owner cannot act on cached
+authority or restore itself (finding 5). (The second review pass below replaced these five
+separate re-reads with one shared mechanism and extended it to the six workspace operations
+this pass left reading the cached scope set.)
+
+**Unauthenticated work is bounded.** A memory-hard admission gate in `security/passwords.py`
+bounds concurrent Argon2 and returns a deterministic 503 under saturation without disclosing
+account existence (findings 8/10 in the report); recovery completion rejects malformed and
+non-existent tokens before hashing (finding 9); the HTTP boundary enforces its 16 KiB limit
+while consuming the ASGI receive stream rather than trusting Content-Length (finding 7); and
+`purge_expired_unverified_accounts` is an explicit owner-run expiry control against unbounded
+unverified-account growth (finding 10). These are the application-layer floor; ingress rate
+and size limits remain additive M3.3/M8 work.
+
+**The two review gaps.** The populated-data downgrade that failed with PostgreSQL error
+23514 is fixed: the `0005` downgrade reconciles `audit_events` and `lifecycle_transitions`
+session-actor rows (bypassing `FORCE` row security as the owner) before it re-adds the
+narrowed actor constraint, and a new test drives the populated downgrade/re-upgrade ladder
+end to end. The runtime-import inventory `scripts/check-runtime-imports.py` `RUNTIME_MODULES`
+now names every new M3.1 production module (`db/accounts.py`, `db/credentials.py`,
+`db/membership.py`, `security/passwords.py`, `security/permissions.py`, and `api/*`), so the
+import-closure gate checks that they reach no migration or test tooling and read no
+privileged credential.
+
+**Both protected inventories are extended, with the human's approval.**
+`scripts/verify-repository.sh` `REQUIRED_FILES` names every new M3.1 production module and
+test module — the layout gate reports **119** required files and fails if one is deleted —
+and `scripts/check-runtime-imports.py` `RUNTIME_MODULES` names every new production module.
+The paragraph that stood here said the layout gate had not been extended; that was true when
+this pass closed and stopped being true when the human approved the change, and it is
+corrected rather than left standing (second review pass, 2026-09-09).
+
+**A note on the append-only tokens trigger.** To let the owner-run purge cascade-delete an
+expired unverified account's tokens, `account_tokens_append_only` is now `BEFORE UPDATE`
+rather than `BEFORE UPDATE OR DELETE`; deletion of a token remains impossible for every
+runtime role by the absent grant, so no boundary is weakened.
+
+### The second M3.1 review correction pass — six findings, all closed
+
+A GPT-5.6 Sol review of the same uncommitted branch raised six findings. All are corrected
+with regression tests; ADR 0009's "Second review correction pass" section records the four
+that change the recorded design. Migrations `0001`–`0004` are untouched; `0005` is unmerged
+and was corrected in place. The theme is one the first pass began and did not finish: **a
+decision made once is not a decision that still holds.**
+
+**1. A login challenge is bound to the password version it was answered against.** Argon2
+verification runs in the process and takes hundreds of milliseconds; a recovery can commit in
+that window, after which the old password verifies against a hash the account no longer has
+and the session opens *after* `complete_account_recovery` revoked every session it could see.
+`login_lookup` now reads the stored hash and `accounts.security_epoch` in one statement and
+records both on the challenge; `open_browser_session` takes `SELECT … FOR UPDATE` on the
+account row — which conflicts with the recovery's own `UPDATE accounts` — re-reads the epoch
+under it, refuses a mismatch with the neutral refusal, and holds the lock to commit. Both
+transaction orderings are driven in `test_identity_concurrency.py`: with the verification
+paused and the recovery committed, the session opening is refused and no session row is left
+behind; with the session opening holding the lock, the recovery provably blocks (asserted
+through `pg_locks`) and then revokes the session it waited for.
+
+**2. Mailbox verification is a mailbox proof, and its authority moved to the authenticator.**
+`signup_account` and `request_email_verification` mint a verification secret and return it in
+the result row; `verify_account_email` consumes one and flips the account to `active`. A role
+holding all three needs no mailbox: it registers an address it does not control, reads the
+secret from its own result, consumes it, and holds a verified account — which satisfies the
+verified-account precondition on workspace creation and invitation acceptance. All three are
+now the authenticator's and the application role holds none of them (eight pre-authentication
+functions, ten with the two read-side accessors, named in the exhaustive privilege test). The
+HTTP signup and verification routes run on the trusted engine. Raw SQL under the application
+role can neither issue nor consume a verification token, and the supported signup →
+captured-delivery → verification flow is driven end to end alongside it; the raw secret
+reaches the configured email adapter and nothing else — no response body, log line, audit or
+outbox attribute, exception chain, or application-role result.
+
+**3. One membership revalidation, in the database, for every workspace operation.** Six
+operations still decided from `auth_has_scope(...)`, which reads the scope set the *bind*
+cached: `rename_workspace`, `revoke_invitation`, the manager-only invitation listing,
+`revoke_api_credential`, the credential listing (including its manager reach) and the
+credential-history route. `firmbatch.workspace_membership_authority(p_scope, p_lock)` is now
+the one mechanism, and every workspace-mode function goes through it, as does the HTTP
+boundary for the one disclosure it performs itself. It takes the serialisation point, re-reads
+tenant, workspace, account, membership identity, both active states and the current role under
+it, and requires the permission of *that* role — before any replay lookup, disclosure or
+mutation, so a demoted caller cannot replay its way to a result it may no longer ask for. A
+mutator locks the workspace row `FOR UPDATE`; a **reader** locks its own membership row `FOR
+SHARE`, because `workspaces` is under forced row security whose `UPDATE` policy requires
+`workspace:write` and PostgreSQL evaluates `UPDATE` policies for any `SELECT … FOR
+SHARE`/`FOR UPDATE` — so locking the workspace would refuse a viewer a listing it is entitled
+to — and because a reader's decision depends on its own authority alone. Concurrency tests
+bind an admin session, commit a demotion or a removal in another transaction, and assert the
+stale transaction is denied the former authority for a mutation, a manager-only listing, the
+manager *reach* of the credential listing, and the audit disclosure.
+
+**4. HTTP authentication happens before the body is interpreted.** The bounded stream read
+stays first — refusing after buffering would mean the buffer had already happened — and
+everything that interprets the bytes (media type, UTF-8, JSON, object shape) moved behind the
+credential into `RequestBody.json()`. Absent, malformed, unknown and mixed credentials are one
+`401 authentication_required` whatever the body is; previously a malformed body or an
+unsupported media type produced `400`/`415` for an unauthenticated caller. The cookie is also
+shape-checked before the origin and CSRF preconditions, so the three credential states are
+decided at one point.
+
+**5. A wrong CSRF token is not a missing workspace.** `_refused_bind` re-binds in account mode
+to tell a refused session from an unbound one, and dropped the CSRF secret when it did — so a
+forged mutation came back `412 workspace_required`, telling its sender the cookie was good.
+The retry now carries the proof the request carried: an incorrect token is `401`, and a
+genuinely unbound session presenting its own token still receives the `412`. `keep_current` on
+`POST /v1/account/sessions/revoke-all` is a strict JSON Boolean; strings, numbers, arrays,
+objects and `null` are `422 invalid_request` with no session changed, `false` revokes the
+current session and clears its cookie, and `true` retains both.
+
+**A seventh thing, found by the leak check rather than by the review.** Confirming that the
+suite leaves the cluster clean turned up one or two surviving `firmbatch_test_auth_*` roles
+after every full run. Four teardown call sites spell the per-run role list out by hand — in
+`test_bootstrap_safety.py` and `test_bootstrap_lifecycle.py`, tests that deliberately break
+the bootstrap and then clean up themselves — and each was written before the authenticator
+existed, so it dropped four of the five roles. `conftest.drop_handle_objects` and
+`bootstrap._cleanup` were already correct; only the hand-written lists were stale. All four
+now name the authenticator, and the group they live in leaves no role and no database behind.
+
+**6. Revoked and expired are one credential state.** The credential listing derived "active"
+from `revoked_at` alone, so an elapsed credential the bearer boundary already refuses was
+shown as usable; and rotation replaced an elapsed inherited expiry with `NULL`, promoting a
+dying credential into one that never expires. `workspace_api_credentials()` now returns the
+lifecycle state computed by PostgreSQL against the same `clock_timestamp()` the bind compares
+against, and rotation refuses an expired predecessor with the neutral refusal a revoked one
+gets — the narrowest fail-closed reading of ADR 0009 decision 5, because rotation carries the
+predecessor's scopes forward without rebounding them by the member's current role. Rotation
+with an explicitly supplied future expiry does not lift that refusal; re-issuance is the way
+back. The elapsed-expiry guard is kept as a refusal rather than deleted, so a future edit
+cannot silently reintroduce the `NULL`.
+
+### Not implemented in M3.1 — deliberately
+
+The customer application and any HTML (M3.2); password change while signed in (needs M3.2's
+re-authentication design); deployment, TLS, the separated issuer credential and real secrets
+delivery (M3.3); a real email provider, rate limiting, metrics (M8, a subset pulled forward
+by M3.3); account deletion and archival (no milestone has taken the retention decision);
+account-level events in a tenant audit trail (signup, verification, recovery and session
+revocation have no tenant); more than one workspace per tenant.
+
+### What M3.1 does not claim
+
+It is not committed, not merged, not deployed and not VERIFIED LIVE. The gate's "through the
+UI" route is M3.2's to build and test; the four cases are met here at the database and HTTP
+boundaries. Password verification runs in the application process, so a compromised runtime
+can read one Argon2id hash per address it names — a stated limitation, not a solved one, now
+confined to the narrow authenticator principal. Starlette 1.6 emits a deprecation warning
+preferring `httpx2` for its test client; the pinned `httpx` 0.28.1 works and the warning is
+informational.
 
 ---
 
@@ -1293,6 +1616,7 @@ capture new artifacts with provenance matching the committed tree.
 | The M2.2 idempotency and outbox properties hold in PostgreSQL: an identical retry returns the stored result and invokes the mutation once; four identical calls leave one workspace, one claim and one linked event; a conflicting reuse is rejected; two callers observed contending on a real lock commit one effect and one event, and the loser replays; a failure before commit leaves nothing and does not block the retry; a mutation callback cannot commit or roll back the primitive's transaction and an escape by any other route is detected; unflushed ORM state at entry is rejected; malformed operations and keys are refused before the mutation runs; the same key is independent between tenants; cross-tenant reads and writes on both new tables fail closed; missing context fails closed; a committed event is immutable to the application role and matches zero rows even for the owner; an internal state change appends an event with no idempotency record and a rollback removes both; and no value of the request identity reaches a row. **At M2.2 this was 511 passing checks with 1 skipped, of which 130 were new; the same properties are asserted at M2.3 inside a suite of 806.** | `/record-evidence` → `docs/evidence/m2/idempotency-outbox-suite.txt`, at or after Milestone 2.2 implementation commit `d362717`. Until then this is a re-runnable claim with no captured artifact, and M2.2 is **not** VERIFIED LIVE. |
 | The M2.3 authenticated-context, authorization, audit and secrets properties hold in PostgreSQL: a forged `app.tenant_id` or any fabricated setting grants nothing; a fabricated tenant, binding id, fingerprint, actor or scope grants nothing; the function that writes a context is executable by nobody; a relation forged where the context lives is ignored because it is not owned by the schema owner; unknown, malformed, revoked and expired credentials fail closed with one indistinguishable message; binding twice or switching identity is refused; context survives no commit, rollback, failed statement, pool reuse or `Session` reuse, and a Connection-bound `Session` is refused; a valid credential reaches its own tenant and no other; the credential is never stored; authorization is deny-by-default with read/write scope distinctions, minimal framework capabilities and no non-customer scope; every `SECURITY DEFINER` function is owned, path-pinned, `PUBLIC`-revoked, minimally granted and free of dynamic SQL; the registry has no grants and no policy; audit events derive tenant and actor, refuse a supplied alternative, cannot be backdated, are immutable, roll back with their action and reject secret-shaped metadata; secrets never render themselves and production fails closed; and the migration reverses to the M2.2 shape and back. **1,314 pytest checks pass, 1 skipped**, a net increase of 803 collected checks over M2.2's 512 -- five new modules, plus every existing module moved onto the authenticated mechanism, plus a handful of M2.1 tests replaced by the stronger property that superseded them. | `/record-evidence` → `docs/evidence/m2/authenticated-context-suite.txt`, at or after Milestone 2.3 implementation commit `89fbdd9`. No evidence artifact has been captured, so this remains a re-runnable claim and M2.3 is **implemented and tested**, **not** VERIFIED LIVE. |
 | The M2.4 lifecycle properties hold in PostgreSQL: a malformed definition is refused in Python and again by the schema; a registered version is immutable for the owner too; migration `0004` seeds no machine; an instance starts at revision zero in its machine's initial state and cannot be created elsewhere; its tenant, machine and version are immutable and its revision advances by exactly one; cross-tenant reads, writes and moves fail closed and produce the same refusal an invented id does; the required capability is read from the protected definition and a caller cannot name, lower or manufacture one; every declared edge can be taken and an undeclared one, a terminal source, a stale state and a stale revision each change nothing; one transition writes exactly one revision, history row, audit event and outbox intent, and a rollback removes all four; two callers racing from one revision with different idempotency keys produce one move, with the contention observed on `pg_stat_activity`; an identical retry replays and moves nothing; no runtime role may write either lifecycle table directly, register a machine, add an edge or call an internal reader; a grant or column grant on a definition table refuses the connection at connect time; and `0004` upgrades, downgrades and re-upgrades with exact role wiring at each revision. And, after the six-finding correction pass: a definition is invisible and unusable until it is published, cannot be published unless every one of its rows was written by the publishing transaction, and cannot be revised, unpublished or extended afterwards; a raw-SQL caller cannot commit a lifecycle move without its history row, audit event and outbox intent, and neither can a caller that catches the database's refusal; `mutation:execute` alone reads no lifecycle claim or event; two identical concurrent requests produce one move and two replays while a stale, cross-tenant or wrong-identity conflict still conflicts; a stale revision gets the common conflict rather than a graph diagnosis; and no unit-of-work method can be redirected to another `Session` operation. And, after the five-finding second pass: a replay is refused unless the protected provenance linking the claim, the transition, the instance, the revisions and the event checks out, so a fabricated generic claim carrying a plausible lifecycle result replays nothing; the operation name and the request fingerprint are derived inside PostgreSQL, so raw SQL cannot bind a claim to a request it did not make; `audit:read` alone reads no lifecycle audit row, its resource identifiers or its details; a hand-written `UPDATE` publishing a machine runs exactly the validation the supported function runs, a pre-published `INSERT` is refused, and publication and every child mutation serialise on one machine-row lock with the contention observed on `pg_stat_activity` and no deadlock; and a chosen primary key and a reserved-namespace claim are both refused before any index could answer whether a hidden row exists. And, after the two-finding third pass: a generic outbox link naming a hidden lifecycle claim and one naming an absent identifier are refused identically, before the foreign key, the one-event-per-claim index and the `ON CONFLICT` arbiter, in the plain and the `ON CONFLICT` forms; and every lifecycle-derived write — the three machine tags, the provenance row and the lifecycle outbox link — is refused to every identity but the dedicated `NOLOGIN` lifecycle writer, the schema owner's own DML and its own definer functions included, while migration `0003` stays untouched history and a database taken from head down to `0003` is catalogue-for-catalogue identical to one migrated freshly to it. **1,746 pytest checks are collected — 1,745 pass and 1 is skipped**, a net increase of 431 collected checks over M2.3's 1,315 — eight new modules plus new migration, rollback, catalogue, append-only, column-privilege, ownership, role-count and unit-of-work assertions in the existing ones. | `/record-evidence` → `docs/evidence/m2/lifecycle-state-machine-suite.txt`, **at or after Milestone 2.4 implementation commit `d91e4f2`**. No evidence artifact has been captured, so this remains a re-runnable claim and M2.4 is **implemented and tested**, **not** VERIFIED LIVE. |
+| The M3.1 identity properties hold in PostgreSQL — the four `AUTH-MEMBERSHIP-BOUND-IDENTITY` cases and everything listed under "What M3.1 proves": **2,038 pytest checks collected, 2,037 pass, 1 skipped** in the working tree on 2026-09-09, after the second review correction pass — a net increase over M2.4's 1,746 that is the eight new modules, the extended migration, shape and protected-state assertions, and the two correction passes' regression and concurrency coverage. | `/record-evidence` → `docs/evidence/m3/identity-membership-suite.txt`, at or after the Milestone 3.1 implementation commit, once one exists. Uncommitted work has no commit to cite, so this is a re-runnable claim and M3.1 is **implemented and tested**, **not** VERIFIED LIVE. |
 | The destructive-safety properties hold: a forged, altered, cross-server, or foreign-cluster teardown handle is refused and the database survives; an unattested server refuses both creation and teardown; a failure after creation removes the database and both roles; a generated password never reaches exception text, stdout, or stderr. Covered by `control_plane/tests/test_bootstrap_safety.py`. | Same artifact as the row above. |
 | The shared policy engine denies the R0 accident classes across both adapter protocols — multi-line blocks classified line by line, `git -C`/`git -c`, `gh` and `aws` global options, `env`/`timeout` prefixes, `cd`/`cd -`/`pushd`/`popd`/`||` sequences, subshell grouping, argparse-abbreviated provider selection, evidence-tree ancestors including glob and `mv` forms, source and destination operands, in-place archivers, `git restore`/`checkout` over a path, credential reads on every surface including the `.env.*` family, wrapper- and prefix-depth exhaustion, unparseable input, unknown tool names carrying a payload, and engine exceptions. 247 synthetic checks pass. | `/record-evidence` → `docs/evidence/r0/policy-tests.txt`, after the R0 commit. |
 
@@ -1429,11 +1753,15 @@ milestone's declared scope is wider than its gate, and the last item of it — e
 lifecycle state machines — is what M2.4 built. Milestone 2 is complete when its scope is, not
 when the gate sentence is quotable.
 
-**Milestone 3 is active.** M3.0, the revision D.1 documentation adoption, is this branch.
-**Next is M3.1: membership-bound identity, sessions and credential issuance** — signup,
-verification, recovery, browser sessions, workspace membership and roles, and the trusted
-issuance path from a verified identity and an active membership to the protected M2.3
-database context, with browser sessions kept distinct from scoped API credentials. Then
+**Milestone 3 is active.** M3.0, the revision D.1 documentation adoption, merged at
+`116b5ee` (PR #8). **M3.1 — membership-bound identity, sessions and credential issuance —
+is implemented and tested on `feat/milestone-3-1-identity-membership`**, uncommitted and
+not merged: signup, verification, recovery, browser sessions, workspace membership and
+roles, and the trusted issuance path from a verified identity and an active membership to
+the protected M2.3 database context, with browser sessions distinct from scoped API
+credentials (see "CURRENT — Milestone 3.1" and ADR 0009). The four completion cases pass as
+named tests at the database and HTTP boundaries; the gate's UI route is M3.2's, and
+customer-facing deployment stays blocked until M3.2 and an authorized M3.3. Next is
 M3.2, the authenticated customer application with honest empty states for later features,
 and M3.3, a protected AWS staging preview pulled forward from Milestone 8 — **planned, and
 not authorized**: a reviewed infrastructure plan, a cost estimate and an explicit go-ahead

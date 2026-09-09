@@ -10,10 +10,13 @@ import pathlib
 import re
 
 import pytest
+from sqlalchemy import make_url
 
 from firmbatch.control_plane import config
 
 PACKAGE_ROOT = pathlib.Path(config.__file__).resolve().parent
+REPO_ROOT = PACKAGE_ROOT.parent
+ENV_EXAMPLE = REPO_ROOT / ".env.example"
 
 
 def test_environment_must_be_stated_explicitly():
@@ -107,6 +110,8 @@ def test_only_disposable_roles_are_accepted():
     assert config.require_disposable_role("firmbatch_test_prov_0123456789ab")
     assert config.require_disposable_role("firmbatch_test_own_0123456789ab")
     assert config.require_disposable_role("firmbatch_test_lcw_0123456789ab")
+    # Milestone 3.1: the authenticator, the fifth per-run role.
+    assert config.require_disposable_role("firmbatch_test_auth_0123456789ab")
     for role in ("postgres", "firmbatch_app", "firmbatch_test_app_", "app"):
         with pytest.raises(config.UnsafeTestDatabaseError):
             config.require_disposable_role(role)
@@ -148,6 +153,102 @@ def test_no_credential_bearing_url_is_committed_in_the_package():
             if pattern.search(line):
                 offenders.append(f"{path.relative_to(PACKAGE_ROOT)}:{lineno}")
     assert offenders == [], f"credential-bearing database URL committed at: {offenders}"
+
+
+# ------------------------------- the documented template loads every API database URL
+#
+# Milestone 3.1 security correction. The API process builds **two** restricted engines: the
+# application role, and the distinct authenticator role that alone may execute the
+# pre-authentication identity functions (login lookup, browser-session opening, account
+# recovery request and completion). A template that documented only the first left the API
+# unable to start at all -- ``load_authenticator_url`` refuses an unset variable -- which is
+# exactly how the authenticator variable came to be missing from ``.env.example``. These
+# tests make the template's completeness a checked fact rather than a habit.
+
+
+def _documented_environment() -> "dict[str, str]":
+    """The uncommented assignments in ``.env.example``, as a mapping.
+
+    Only the live lines: a commented-out alternative is documentation about another
+    deployment shape, not the value this template hands a reader.
+    """
+    values: dict[str, str] = {}
+    for line in ENV_EXAMPLE.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, _, value = line.partition("=")
+        values[name.strip()] = value.split("#", 1)[0].strip()
+    return values
+
+
+def test_the_documented_template_loads_every_api_database_url():
+    """Both database URLs the API needs are documented and load through the real loaders.
+
+    Loading is itself the proof that no connection field is implicit: both loaders go
+    through ``require_postgresql_url``, which refuses a URL that omits a field libpq would
+    then take from ``PGUSER``/``PGHOST``/``PGPORT``/``PGDATABASE``, refuses a routing
+    override in the query string, and refuses a multi-host failover list. The explicit
+    assertions below say the same thing out loud so a reader does not have to infer it.
+    """
+    documented = _documented_environment()
+    for variable in (
+        config.ENVIRONMENT_VAR,
+        config.APPLICATION_URL_VAR,
+        config.AUTHENTICATOR_URL_VAR,
+    ):
+        assert variable in documented, f"{variable} is not documented in .env.example"
+
+    environment = {
+        config.ENVIRONMENT_VAR: documented[config.ENVIRONMENT_VAR],
+        config.APPLICATION_URL_VAR: documented[config.APPLICATION_URL_VAR],
+        config.AUTHENTICATOR_URL_VAR: documented[config.AUTHENTICATOR_URL_VAR],
+    }
+    application = config.load_application_settings(environment).application_url
+    authenticator = config.load_authenticator_url(environment)
+
+    for label, url in (("application", application), ("authenticator", authenticator)):
+        parsed = make_url(url)
+        assert parsed.username, f"the {label} URL names no user; libpq would take PGUSER"
+        assert parsed.host, f"the {label} URL names no host; libpq would take PGHOST"
+        assert parsed.port, f"the {label} URL names no port; libpq would take PGPORT"
+        assert parsed.database, f"the {label} URL names no database; libpq would take PGDATABASE"
+
+    # The whole point of the split: two different login roles, not one credential reused.
+    # An authenticator that connected as the application role would collapse the
+    # trusted-issuer boundary back into the principal it exists to be separate from.
+    assert make_url(application).username != make_url(authenticator).username, (
+        "the authenticator URL must name its own role, not the application role"
+    )
+
+
+def test_the_documented_api_urls_carry_no_secret():
+    """Every value in the template is a non-secret placeholder, as its own header promises."""
+    documented = _documented_environment()
+    placeholder = re.compile(r"^[A-Z][A-Z0-9_]*$")
+    for variable in (config.APPLICATION_URL_VAR, config.AUTHENTICATOR_URL_VAR):
+        parsed = make_url(documented[variable])
+        for field, value in (("user", parsed.username), ("password", parsed.password)):
+            assert value is not None, f"{variable} documents no {field}"
+            assert placeholder.match(value), (
+                f"{variable} carries a {field} that is not an obvious placeholder; the "
+                "template must never commit a real credential"
+            )
+
+
+def test_the_api_refuses_to_start_without_the_authenticator_url():
+    """The variable is required, not optional: omitting it is a refusal, never a fallback
+    onto the application role's credential."""
+    environment = {
+        config.ENVIRONMENT_VAR: "production",
+        config.APPLICATION_URL_VAR: "postgresql://app@db.example:5432/firmbatch",
+    }
+    # The application URL still loads on its own ...
+    assert config.load_application_settings(environment).application_url
+    # ... and the authenticator URL is its own requirement.
+    with pytest.raises(config.ConfigurationError) as exc:
+        config.load_authenticator_url(environment)
+    assert config.AUTHENTICATOR_URL_VAR in str(exc.value)
 
 
 # ------------------------------------- connection-parameter overrides (finding 1)

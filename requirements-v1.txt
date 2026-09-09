@@ -13,3 +13,17 @@
 SQLAlchemy==2.0.44
 alembic==1.16.5
 psycopg[binary]==3.2.10
+
+# --- Milestone 3.1: identity, membership and credential issuance ------------------
+# argon2-cffi: the maintained Argon2id binding. Customer passwords are hashed with a
+# memory-hard KDF in Python (PostgreSQL has no Argon2), and Firmbatch implements no
+# cryptography of its own. ADR 0009.
+argon2-cffi==25.1.0
+# starlette: the ASGI framework the native v1 HTTP boundary is built on. Chosen over the
+# frozen v0 prototype's FastAPI because the M3.1 boundary hand-validates every input
+# against explicit bounds and returns neutral errors; a schema layer that renders field
+# values into error bodies is the wrong default for an authentication surface. ADR 0009.
+starlette==1.6.0
+# uvicorn: the ASGI server `python3 -m firmbatch.control_plane.api` runs under. Binds
+# loopback unless told otherwise; the hosted shape is Milestone 3.3's.
+uvicorn==0.52.4

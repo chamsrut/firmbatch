@@ -10,3 +10,7 @@
 
 pytest==8.4.2
 ruff==0.16.5   # same pin the R0 lint gate was verified against
+# Milestone 3.1: starlette's TestClient drives the HTTP boundary tests through httpx.
+# Development only -- production code never imports it, and the runtime import gate
+# refuses if it ever does.
+httpx==0.28.1

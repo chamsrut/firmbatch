@@ -2,7 +2,9 @@
 
 > [!IMPORTANT]
 > **Current code:** v0 prototype, plus the merged Milestone 2 v1 foundation under
-> `control_plane/` (not deployed). **Target:** Firmbatch v1 revision D.1.
+> `control_plane/` (not deployed), plus Milestone 3.1 identity, membership and
+> credential issuance on a branch (implemented and tested, not merged, not deployed).
+> **Target:** Firmbatch v1 revision D.1.
 >
 > The canonical target is `docs/architecture/v1-target-architecture.md`.
 > The implementation sequence is `docs/firmbatch-v1-roadmap.md`.

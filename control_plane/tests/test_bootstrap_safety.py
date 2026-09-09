@@ -180,6 +180,50 @@ def test_a_handle_with_a_non_disposable_role_name_is_refused(disposable_database
     assert _database_exists(environment, disposable_database.database)
 
 
+def test_the_authenticator_role_and_url_get_the_same_teardown_checks_as_every_other_role(
+    disposable_database, environment
+):
+    """Milestone 3.1's fifth role is validated by the same layered checks as the other four.
+
+    The catch-all handle-fingerprint comparison would refuse a tampered handle anyway, but
+    the per-object checks are the layer that fires first and names what is wrong. The
+    authenticator was added to the handle without being added to them, so this pins the
+    three it now gets: the disposable-name pattern, the URL-names-this-database check, and
+    the URL-is-at-the-recorded-endpoint check.
+    """
+    # A role name outside the disposable pattern is refused by name, and nothing is dropped.
+    forged = dataclasses.replace(disposable_database, authenticator_role="postgres")
+    with pytest.raises(config.UnsafeTestDatabaseError):
+        bootstrap.drop_disposable_database(forged)
+    assert _role_exists(environment, "postgres"), "the postgres role was dropped"
+
+    # An authenticator URL pointing at another database is refused, naming that URL.
+    elsewhere = dataclasses.replace(
+        disposable_database,
+        authenticator_url=bootstrap._swap_database(disposable_database.authenticator_url, "postgres"),
+    )
+    with pytest.raises(bootstrap.DisposableDatabaseError) as exc:
+        bootstrap.drop_disposable_database(elsewhere)
+    # The per-object check, not the catch-all: the catch-all only says the handle was
+    # "altered", which would pass a weaker assertion even with the check absent.
+    assert "the authenticator URL names database" in str(exc.value)
+
+    # And one at a different endpoint is refused as a handle spanning two servers.
+    host, port = disposable_database.endpoint
+    moved = dataclasses.replace(
+        disposable_database,
+        authenticator_url=disposable_database.authenticator_url.replace(f":{port}/", f":{port + 1}/"),
+    )
+    with pytest.raises(bootstrap.DisposableDatabaseError) as exc:
+        bootstrap.drop_disposable_database(moved)
+    assert "the authenticator URL is at" in str(exc.value)
+    assert "spans two servers" in str(exc.value)
+
+    # The real database is untouched by any of the three refusals.
+    assert _database_exists(environment, disposable_database.database)
+    assert _role_exists(environment, disposable_database.authenticator_role)
+
+
 # ------------------------------------------------------- attestation (finding 6)
 
 
@@ -421,6 +465,8 @@ def test_created_objects_carry_an_oid_and_a_provenance_marker(disposable_databas
         disposable_database.application_role,
         disposable_database.provisioning_role,
         disposable_database.lifecycle_writer_role,
+        # Milestone 3.1 security correction: the trusted-issuer (authenticator) login role.
+        disposable_database.authenticator_role,
     }
     for recorded in disposable_database.created:
         assert recorded.oid > 0
@@ -476,6 +522,7 @@ def test_teardown_refuses_a_database_replaced_under_the_same_name(environment):
                 handle.provisioning_role,
                 handle.owner_role,
                 handle.lifecycle_writer_role,
+                handle.authenticator_role,
             ),
         )
 
@@ -512,6 +559,7 @@ def test_teardown_refuses_a_role_replaced_under_the_same_name(environment):
                 handle.provisioning_role,
                 handle.owner_role,
                 handle.lifecycle_writer_role,
+                handle.authenticator_role,
             ),
         )
 
@@ -645,5 +693,6 @@ def test_cleanup_leaves_objects_alone_when_the_attestation_is_gone(environment, 
                 f"firmbatch_test_prov_{suffix}",
                 f"firmbatch_test_own_{suffix}",
                 f"firmbatch_test_lcw_{suffix}",
+                f"firmbatch_test_auth_{suffix}",
             ),
         )

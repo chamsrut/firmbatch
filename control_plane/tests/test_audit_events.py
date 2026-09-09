@@ -1493,7 +1493,12 @@ def test_the_migration_carries_the_identical_pattern_text():
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)
 
-    assert tuple(migration.SECRET_SHAPES) == tuple(secrets_module.SECRET_SHAPE_PATTERNS)
+    # Milestone 3.1 appended one shape (the five identity secret kinds) and migration
+    # 0005 carries the whole tuple; 0003's copy is the Milestone 2.3 prefix, character
+    # for character, and the order is what keeps every rank the same.
+    legacy = tuple(migration.SECRET_SHAPES)
+    assert legacy == tuple(secrets_module.SECRET_SHAPE_PATTERNS)[: len(legacy)]
+    assert len(secrets_module.SECRET_SHAPE_PATTERNS) == len(legacy) + 1
     assert migration.ASCII_UPPERCASE == secrets_module.ASCII_UPPERCASE
     assert migration.ASCII_LOWERCASE == secrets_module.ASCII_LOWERCASE
     assert (
@@ -1544,6 +1549,13 @@ CASE_FOLD_CORPUS: tuple[str, ...] = (
     "AsIaIOSFODNN7EXAMPLE",
     "POSTGRESQL://u:p@h/db",
     "postgresql://u:p@h/db",
+    # Milestone 3.1: the five identity secret kinds share one shape, in both cases.
+    "FBS_" + "a" * 43,
+    "fbs_" + "A" * 43,
+    "fbc_" + "b" * 43,
+    "FBV_" + "c" * 43,
+    "fbr_" + "D" * 43,
+    "fbi_" + "e" * 43,
     # The two reported homoglyphs, which must now be answered the same way by both --
     # and the answer is "not recognised", which is the stated limitation.
     "\u017Fecret=x",

@@ -13,22 +13,27 @@ connection (``.../postgres``):
    carries the disposable-cluster marker (``attestation.py``).
 2. Records the cluster fingerprint -- system identifier, port, database, version -- so
    teardown can prove it is talking to the same server it created on.
-3. Creates ``firmbatch_test_<12 random hex>`` plus **three** per-run login roles with
-   random passwords -- owner, application, provisioning -- all ``NOSUPERUSER NOCREATEDB
-   NOCREATEROLE NOBYPASSRLS NOREPLICATION``, and a **fourth, ``NOLOGIN``** role with no
-   credential at all -- the lifecycle writer -- each created in its own transaction and
-   recorded with its OID and a random provenance marker.
+3. Creates ``firmbatch_test_<12 random hex>`` plus **four** per-run login roles with
+   random passwords -- owner, application, provisioning and, since Milestone 3.1,
+   authenticator -- all ``NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION``,
+   and a **fifth, ``NOLOGIN``** role with no credential at all -- the lifecycle writer --
+   each created in its own transaction and recorded with its OID and a random provenance
+   marker.
 4. Revokes ``CONNECT`` and ``TEMPORARY`` from ``PUBLIC`` and grants ``CONNECT`` to the
-   three login roles only.
+   four login roles only.
 5. Applies every migration as the owner, after confirming the owner connection is
    attached to the database just created.
-6. Grants the application and provisioning roles exactly the privileges in ``db/roles.py``,
+6. Grants the application, provisioning and authenticator roles exactly the privileges in
+   ``db/roles.py`` -- the authenticator receiving only its eight trusted-issuer identity
+   functions plus the two read-side accessors its call graph reaches, and no table or column
+   privilege at all --
    then hands the two lifecycle entry points to the lifecycle writer: the administrator
    grants the owner a ``SET``-only membership in the writer for the duration of
    ``roles.install_lifecycle_writer()`` and revokes it immediately after, and a fresh
    connection confirms nothing of it survived (:func:`wire_roles`).
 
-Teardown removes all five objects. The one thing it must never remove is the persistent
+Teardown removes all six objects -- the database and the five roles. The one thing it must
+never remove is the persistent
 ``firmbatch_disposable_test_cluster`` attestation marker, which is what makes any of this
 permissible on a given server; it does not match the disposable-role pattern, so cleanup
 cannot reach it.
@@ -58,8 +63,8 @@ bootstrap administrator is isolated from the roles it creates.
 What *is* asserted is narrower, catalogue-level, and true of either kind of admin: the
 temporary ``SET`` membership taken for one statement is given back, so no explicit
 ``set_option`` or ``inherit_option`` row survives where PostgreSQL permits revoking it.
-The untrusted side of the boundary -- the per-run owner, application and provisioning
-roles -- stays separated from the admin's credentials and from each other.
+The untrusted side of the boundary -- the per-run owner, application, provisioning and
+authenticator roles -- stays separated from the admin's credentials and from each other.
 
 **Generated passwords never reach a log.** They are composed with psycopg's literal
 quoting rather than f-string interpolation, and every exception raised out of role
@@ -182,6 +187,12 @@ class DisposableDatabase:
     #: entry points and nothing else, and nothing can ``SET ROLE`` to it once the bootstrap
     #: has finished. Recorded so that teardown drops it and validation can name it.
     lifecycle_writer_role: str = ""
+    #: The authenticator: a restricted login role (Milestone 3.1 security correction) holding
+    #: the trusted-issuer functions -- signup, mailbox verification, login, session opening,
+    #: recovery -- that the ordinary application role no longer does. Non-owner, NOBYPASSRLS,
+    #: like the application role.
+    authenticator_role: str = ""
+    authenticator_url: str = ""
     token: str = field(default_factory=lambda: secrets.token_hex(16))
 
     def __repr__(self) -> str:  # pragma: no cover - exercised through str()
@@ -208,6 +219,8 @@ def _identity_fields(handle: DisposableDatabase) -> dict[str, str]:
         "owner_role": handle.owner_role,
         "owner_maintenance_url": handle.owner_maintenance_url,
         "lifecycle_writer_role": handle.lifecycle_writer_role,
+        "authenticator_role": handle.authenticator_role,
+        "authenticator_url": handle.authenticator_url,
         "endpoint": repr(handle.endpoint),
         "fingerprint": repr(handle.fingerprint),
         "created": repr(handle.created),
@@ -780,6 +793,7 @@ def wire_roles(
     application_role: str,
     provisioning_role: str,
     lifecycle_writer_role: str,
+    authenticator_role: str = "",
 ) -> None:
     """The whole role wiring, in the one order it is correct in, on an owner connection.
 
@@ -797,6 +811,11 @@ def wire_roles(
     roles.revoke_public_table_privileges(connection)
     roles.grant_application_role(connection, application_role)
     roles.grant_provisioning_role(connection, provisioning_role)
+    # The trusted-issuer boundary (Milestone 3.1). Only wired where an authenticator role
+    # exists; every revision carries one from 0005 on, and the wiring is skipped cleanly for
+    # a database with no such role (older callers, or a plan that declares none).
+    if authenticator_role:
+        roles.grant_authenticator_role(connection, authenticator_role)
     with temporary_set_membership(admin_url, role=lifecycle_writer_role, member=owner_role):
         roles.install_lifecycle_writer(connection, lifecycle_writer_role, application_role)
 
@@ -811,6 +830,7 @@ def wire_handle_roles(connection, handle: "DisposableDatabase") -> None:
         application_role=handle.application_role,
         provisioning_role=handle.provisioning_role,
         lifecycle_writer_role=handle.lifecycle_writer_role,
+        authenticator_role=handle.authenticator_role,
     )
 
 
@@ -1137,15 +1157,19 @@ def create_disposable_database(env: Mapping[str, str] | None = None) -> Disposab
     # like the other three because roles are cluster-wide and two suites sharing a cluster
     # must not share -- or fight over -- the role that owns their lifecycle entry points.
     lifecycle_writer_role = f"firmbatch_test_lcw_{suffix}"
-    owner_password, application_password, provisioning_password = (secrets.token_hex(16) for _ in range(3))
-    passwords = (owner_password, application_password, provisioning_password)
+    # The authenticator: a per-run login role holding the trusted-issuer boundary (M3.1).
+    authenticator_role = f"firmbatch_test_auth_{suffix}"
+    owner_password, application_password, provisioning_password, authenticator_password = (
+        secrets.token_hex(16) for _ in range(4)
+    )
+    passwords = (owner_password, application_password, provisioning_password, authenticator_password)
     marker = f"firmbatch-disposable-{secrets.token_hex(16)}"
 
     # Re-validate the names we just generated. If the patterns and the generator ever
     # drift apart, this fails before anything exists rather than at teardown, when a drop
     # would be refused and the database would be left behind.
     config.require_disposable_database(_swap_database(admin_url, database))
-    for role in (owner_role, application_role, provisioning_role, lifecycle_writer_role):
+    for role in (owner_role, application_role, provisioning_role, lifecycle_writer_role, authenticator_role):
         config.require_disposable_role(role)
 
     # ------------------------------------------------------------------ state machine
@@ -1208,8 +1232,11 @@ def create_disposable_database(env: Mapping[str, str] | None = None) -> Disposab
             require_supported_server_version(fingerprint.server_version_num)
             host, port = _tcp_endpoint(admin_url, connection)
 
-        # --- S0 -> S1: the four roles, each in its own transaction --------------------
-        for role, password in zip((owner_role, application_role, provisioning_role), passwords):
+        # --- S0 -> S1: the five roles, each in its own transaction --------------------
+        for role, password in zip(
+            (owner_role, application_role, provisioning_role, authenticator_role),
+            (owner_password, application_password, provisioning_password, authenticator_password),
+        ):
             _create_login_role(transactional, role, password, marker, created.append)
         # The lifecycle writer last, and with no credential: nothing connects as it.
         _create_nologin_role(transactional, lifecycle_writer_role, marker, created.append)
@@ -1219,7 +1246,7 @@ def create_disposable_database(env: Mapping[str, str] | None = None) -> Disposab
         # runs owner -> app/prov, never the other way, so neither runtime role gains any
         # reach towards the owner (db/principal.py checks exactly that direction).
         with admin.connect() as connection:
-            for role in (application_role, provisioning_role):
+            for role in (application_role, provisioning_role, authenticator_role):
                 connection.execute(
                     text(
                         f"GRANT {roles.quote_identifier(role)} TO "
@@ -1290,7 +1317,7 @@ def create_disposable_database(env: Mapping[str, str] | None = None) -> Disposab
 
                 connection.execute(text(f"REVOKE CONNECT ON DATABASE {quoted_db} FROM PUBLIC"))
                 connection.execute(text(f"REVOKE TEMPORARY ON DATABASE {quoted_db} FROM PUBLIC"))
-                for role in (owner_role, application_role, provisioning_role):
+                for role in (owner_role, application_role, provisioning_role, authenticator_role):
                     connection.execute(
                         text(
                             f"GRANT CONNECT ON DATABASE {quoted_db} TO "
@@ -1363,6 +1390,7 @@ def create_disposable_database(env: Mapping[str, str] | None = None) -> Disposab
                     application_role=application_role,
                     provisioning_role=provisioning_role,
                     lifecycle_writer_role=lifecycle_writer_role,
+                    authenticator_role=authenticator_role,
                 )
                 connection.commit()
         finally:
@@ -1389,6 +1417,8 @@ def create_disposable_database(env: Mapping[str, str] | None = None) -> Disposab
         created=tuple(created),
         owner_maintenance_url=owner_maintenance_url,
         lifecycle_writer_role=lifecycle_writer_role,
+        authenticator_role=authenticator_role,
+        authenticator_url=_role_url(authenticator_role, authenticator_password, host, port, database),
     )
     _PROVISIONED[handle.token] = _identity_fields(handle)
     return handle
@@ -1413,6 +1443,7 @@ def _validate_teardown_target(handle: DisposableDatabase, connection) -> None:
     config.require_disposable_role(handle.provisioning_role)
     config.require_disposable_role(handle.owner_role)
     config.require_disposable_role(handle.lifecycle_writer_role)
+    config.require_disposable_role(handle.authenticator_role)
 
     # --- the handle must be internally consistent ------------------------------------
     migration_database = config.database_name(handle.migration_url)
@@ -1425,6 +1456,7 @@ def _validate_teardown_target(handle: DisposableDatabase, connection) -> None:
         ("migration", handle.migration_url),
         ("application", handle.application_url),
         ("provisioning", handle.provisioning_url),
+        ("authenticator", handle.authenticator_url),
     ):
         name = config.database_name(url)
         if name != handle.database:
@@ -1435,7 +1467,11 @@ def _validate_teardown_target(handle: DisposableDatabase, connection) -> None:
     # Every runtime URL must point at the endpoint recorded when the roles were created.
     # Compared against the recorded value rather than inet_server_port(), which is NULL on
     # a unix-socket admin connection -- a real gap that let a mismatched handle through.
-    for label, url in (("application", handle.application_url), ("provisioning", handle.provisioning_url)):
+    for label, url in (
+        ("application", handle.application_url),
+        ("provisioning", handle.provisioning_url),
+        ("authenticator", handle.authenticator_url),
+    ):
         host, port = _endpoint(url)
         if (host, port) != handle.endpoint:
             raise DisposableDatabaseError(

@@ -302,6 +302,47 @@ def is_well_formed_credential(value: object) -> bool:
     return isinstance(value, str) and BEARER_CREDENTIAL_REGEX.fullmatch(value) is not None
 
 
+# ------------------------------------------------------------- identity secrets (M3.1)
+
+#: The five secret kinds Milestone 3.1 adds, each a distinct type with its own prefix so
+#: that one is recognisable on sight and **none is accepted where another belongs**: a
+#: session secret presented at the API-credential boundary fails the credential format
+#: check before it is sent anywhere, and vice versa. All five are minted inside PostgreSQL
+#: from the same 244-bit construction ``firmbatch.register_auth_binding`` uses, rendered as
+#: the same 43 URL-safe characters, and stored only as a SHA-256 fingerprint computed in
+#: the database. The raw value exists once, in the result row of the call that minted it.
+IDENTITY_SECRET_PREFIXES: dict[str, str] = {
+    "session": "fbs_",
+    "csrf": "fbc_",
+    "email_verification": "fbv_",
+    "account_recovery": "fbr_",
+    "invitation": "fbi_",
+}
+
+_IDENTITY_SECRET_PATTERNS: dict[str, "re.Pattern[str]"] = {
+    kind: re.compile("^" + re.escape(prefix) + r"[A-Za-z0-9_-]{43}$")
+    for kind, prefix in IDENTITY_SECRET_PREFIXES.items()
+}
+
+
+def is_well_formed_identity_secret(value: object, kind: str) -> bool:
+    """Whether ``value`` has the shape of the Milestone 3.1 secret ``kind``.
+
+    The same job :func:`is_well_formed_credential` does for a bearer credential: refuse a
+    malformed value before it reaches a statement a server could log. ``kind`` is one of
+    :data:`IDENTITY_SECRET_PREFIXES`; an unknown kind is a programming error and raises.
+    A bearer credential is **not** a well-formed secret of any identity kind, and no
+    identity secret is a well-formed bearer credential -- that is what keeps the two
+    credential types out of each other's boundary at the cheapest possible point.
+    """
+    pattern = _IDENTITY_SECRET_PATTERNS.get(kind)
+    if pattern is None:
+        raise SecretError("that is not a Milestone 3.1 secret kind")
+    if isinstance(value, Secret):
+        value = value.reveal()
+    return isinstance(value, str) and pattern.fullmatch(value) is not None
+
+
 # ------------------------------------------------------------- shape recognition
 
 #: Every code point this package treats as whitespace, stated as data rather than
@@ -468,6 +509,15 @@ SECRET_SHAPE_PATTERNS: tuple[tuple[str, str], ...] = (
     (
         "a private key or token assignment",
         ASCII_WORD_BOUNDARY_BEFORE + r"(secret|password|token|api[_-]?key) *[=:] *[^ ]",
+    ),
+    # Milestone 3.1 **appends** and never reorders: migration ``0003`` carries a copy of the
+    # six entries above and ``tests/test_audit_events.py`` asserts they are a strict prefix
+    # of this tuple, while migration ``0005`` carries the whole tuple. The five identity
+    # secret kinds share one rendering with the bearer credential and differ only in their
+    # type letter -- see :data:`IDENTITY_SECRET_PREFIXES`.
+    (
+        "a Firmbatch session, CSRF, verification, recovery or invitation secret",
+        r"fb[cirsv]_[a-z0-9_-]{43}",
     ),
 )
 

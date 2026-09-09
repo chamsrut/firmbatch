@@ -523,6 +523,7 @@ def test_cleanup_reports_a_safe_leak_rather_than_forcing(environment, monkeypatc
                 handle.provisioning_role,
                 handle.owner_role,
                 handle.lifecycle_writer_role,
+                handle.authenticator_role,
             ),
         )
 
@@ -571,7 +572,7 @@ def _per_run_objects(environment) -> tuple[list[str], list[str]]:
                 for row in connection.execute(
                     text(
                         "SELECT rolname FROM pg_roles "
-                        "WHERE rolname ~ '^firmbatch_test_(own|app|prov|lcw)_[0-9a-f]{12}$' ORDER BY 1"
+                        "WHERE rolname ~ '^firmbatch_test_(own|app|prov|lcw|auth)_[0-9a-f]{12}$' ORDER BY 1"
                     )
                 )
             ]
@@ -609,9 +610,11 @@ def test_a_full_lifecycle_leaks_no_per_run_object_and_keeps_the_marker(environme
         handle.application_role,
         handle.provisioning_role,
         handle.lifecycle_writer_role,
+        # Milestone 3.1 security correction: the trusted-issuer (authenticator) role.
+        handle.authenticator_role,
     )
-    assert len({role.rsplit("_", 2)[1] for role in created_roles}) == 4, (
-        "the four per-run roles must be distinguishable by kind"
+    assert len({role.rsplit("_", 2)[1] for role in created_roles}) == 5, (
+        "the five per-run roles must be distinguishable by kind"
     )
 
     databases, roles = _per_run_objects(environment)

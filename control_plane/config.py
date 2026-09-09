@@ -38,6 +38,12 @@ from sqlalchemy import URL
 
 ENVIRONMENT_VAR = "FIRMBATCH_ENV"
 APPLICATION_URL_VAR = "FIRMBATCH_DATABASE_URL"
+#: The trusted-issuer boundary's restricted URL (Milestone 3.1 security correction). A
+#: distinct, non-owner login role -- the authenticator -- holding only the pre-authentication
+#: identity functions (login, session opening, recovery). Restricted exactly like the
+#: application role: it is not privileged, so it is loaded the same way and is not among the
+#: credentials a runtime module is forbidden from naming.
+AUTHENTICATOR_URL_VAR = "FIRMBATCH_AUTHENTICATOR_DATABASE_URL"
 MIGRATION_URL_VAR = "FIRMBATCH_MIGRATION_DATABASE_URL"
 TEST_ADMIN_URL_VAR = "FIRMBATCH_TEST_DATABASE_URL"
 
@@ -55,7 +61,7 @@ DISPOSABLE_DATABASE_PATTERN = re.compile(r"^firmbatch_test_[0-9a-f]{12}$")
 #: database owner, which is also the migration principal and the deletion authority; lcw =
 #: the lifecycle writer, a NOLOGIN role that owns the two lifecycle entry points and that
 #: nobody can SET ROLE to.
-DISPOSABLE_ROLE_PATTERN = re.compile(r"^firmbatch_test_(?:app|prov|own|lcw)_[0-9a-f]{12}$")
+DISPOSABLE_ROLE_PATTERN = re.compile(r"^firmbatch_test_(?:app|prov|own|lcw|auth)_[0-9a-f]{12}$")
 
 #: Databases an admin test URL is allowed to point at. It is a *maintenance* connection,
 #: used only to CREATE and DROP the disposable database and its roles; no Firmbatch table
@@ -978,6 +984,21 @@ def load_application_settings(env: Mapping[str, str]) -> ApplicationSettings:
         application_url=require_postgresql_url(
             env.get(APPLICATION_URL_VAR, ""), variable=APPLICATION_URL_VAR
         ),
+    )
+
+
+def load_authenticator_url(env: Mapping[str, str]) -> str:
+    """The authenticator role's restricted URL, validated (Milestone 3.1 security correction).
+
+    Returns a bare URL string, not a settings object, because the API builds the
+    authenticator engine through the same ``create_application_engine`` the application
+    engine uses -- both are restricted, non-owner, NOBYPASSRLS roles, and the engine's
+    principal check refuses either if it turns out to be privileged. Reads only
+    ``FIRMBATCH_AUTHENTICATOR_DATABASE_URL``; it does not read, require, or retain any
+    migration, bootstrap, or admin URL.
+    """
+    return require_postgresql_url(
+        env.get(AUTHENTICATOR_URL_VAR, ""), variable=AUTHENTICATOR_URL_VAR
     )
 
 

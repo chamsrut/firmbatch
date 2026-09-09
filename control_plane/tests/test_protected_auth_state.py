@@ -245,6 +245,16 @@ def test_the_runtime_functions_are_granted_to_exactly_the_runtime_roles(
             disposable_database.application_role,
             disposable_database.provisioning_role,
         }
+        # Milestone 3.1 security correction: the authenticator holds exactly ONE function
+        # from this tuple -- auth_tenant_id, which db/engine.transaction() calls to assert a
+        # transaction inherited no context. Every other common runtime function, including
+        # bind_authenticated_context and the untied credential minter, is out of its reach.
+        if (name, _signature) in roles.AUTHENTICATOR_READ_FUNCTIONS:
+            permitted.add(disposable_database.authenticator_role)
+        else:
+            assert disposable_database.authenticator_role not in grantees, (
+                f"{name} must not be executable by the authenticator role"
+            )
         # The lifecycle writer holds the context accessors the policies and the entry-point
         # bodies call, and none of the credential, binding or generic audit functions.
         if name in writer_helpers:
@@ -390,6 +400,67 @@ _PROTECTED_WRITES = {
         "VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), "
         "'forged', 1, 0, 1, gen_random_uuid())",
         "UPDATE {schema}.lifecycle_claim_provenance SET lifecycle_transition_id = gen_random_uuid()",
+    ),
+    # --------------------------------------------------------------- Milestone 3.1
+    #
+    # The identity plane. Each statement is the exploit that relation would permit.
+    "accounts": (
+        # An account nobody signed up, or a verification nobody completed.
+        "INSERT INTO {schema}.accounts (email_normalized, email_display, status, email_verified_at) "
+        "VALUES ('forged@example.com', 'forged@example.com', 'active', now())",
+        "UPDATE {schema}.accounts SET status = 'active', email_verified_at = now()",
+    ),
+    "account_passwords": (
+        # A password set for somebody else's account, or a hash read for an offline attack.
+        "INSERT INTO {schema}.account_passwords (account_id, password_hash) "
+        "VALUES (gen_random_uuid(), '$argon2id$v=19$m=65536,t=3,p=4$" + "a" * 22 + "$" + "b" * 43 + "')",
+        "UPDATE {schema}.account_passwords SET password_hash = password_hash",
+    ),
+    "account_tokens": (
+        # A verification or recovery token with a fingerprint the caller chose.
+        "INSERT INTO {schema}.account_tokens (account_id, kind, fingerprint, expires_at) "
+        "VALUES (gen_random_uuid(), 'account_recovery', repeat('a', 64), now() + interval '1 hour')",
+        "UPDATE {schema}.account_tokens SET consumed_at = NULL, superseded_at = NULL",
+    ),
+    "memberships": (
+        # The forged membership: any account, any workspace, any tenant, any role.
+        "INSERT INTO {schema}.memberships (tenant_id, workspace_id, account_id, role) "
+        "VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 'owner')",
+        "UPDATE {schema}.memberships SET revoked_at = NULL, role = 'owner'",
+    ),
+    "workspace_directory": (
+        "INSERT INTO {schema}.workspace_directory (id, tenant_id, slug, name) "
+        "VALUES (gen_random_uuid(), gen_random_uuid(), 'forged', 'forged')",
+        "UPDATE {schema}.workspace_directory SET name = 'forged'",
+    ),
+    "browser_sessions": (
+        # A session with a fingerprint the caller chose, or a binding to any workspace.
+        "INSERT INTO {schema}.browser_sessions (account_id, fingerprint, csrf_fingerprint, expires_at) "
+        "VALUES (gen_random_uuid(), repeat('a', 64), repeat('b', 64), now() + interval '1 hour')",
+        "UPDATE {schema}.browser_sessions SET workspace_id = gen_random_uuid()",
+    ),
+    "workspace_invitations": (
+        "INSERT INTO {schema}.workspace_invitations "
+        "(tenant_id, workspace_id, email_normalized, role, fingerprint, expires_at) "
+        "VALUES (gen_random_uuid(), gen_random_uuid(), 'forged@example.com', 'owner', repeat('a', 64), "
+        "now() + interval '1 hour')",
+        "UPDATE {schema}.workspace_invitations SET accepted_at = NULL, revoked_at = NULL",
+    ),
+    "account_idempotency_records": (
+        "INSERT INTO {schema}.account_idempotency_records "
+        "(account_id, operation, idempotency_key, request_fingerprint, result) "
+        "VALUES (gen_random_uuid(), 'workspace.create', 'forged-key-0001', repeat('a', 64), '{{}}'::jsonb)",
+        "UPDATE {schema}.account_idempotency_records SET result = '{{}}'::jsonb",
+    ),
+    "identity_transaction_context": (
+        # The forged session context: this backend, this transaction, any account and any
+        # workspace binding the caller likes, with the CSRF check claimed verified.
+        "INSERT INTO {schema}.identity_transaction_context "
+        "(backend_pid, xact_id, kind, account_id, session_id, workspace_id, tenant_id, membership_id, "
+        "role, csrf_verified, bound_at) "
+        "VALUES (pg_backend_pid(), pg_current_xact_id(), 'session', gen_random_uuid(), gen_random_uuid(), "
+        "gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 'owner', true, now())",
+        "UPDATE {schema}.identity_transaction_context SET tenant_id = gen_random_uuid()",
     ),
 }
 
