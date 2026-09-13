@@ -283,7 +283,7 @@ sources, and none blocks Milestone 3.
 | Endpoint pricing unit (share of NCR or per-token) | Quoted by the endpoint supplier (endpoint RFQ Q3) | Endpoint extension, per signed supplier |
 | Model band default (8B vs 27–35B) | Measurement outcome of the evaluation harness and Gate 1, not a document decision | M6.2 measurements |
 | Gate 1 threshold revisions | Owned by the plan; a revision is a plan change | Business plan |
-| AWS staging region, access, cost estimate and explicit authorization | Human deployment decision | M3.3 |
+| AWS staging **deployment parameters** — the account ID; the region (recommended `eu-central-1`, unconfirmed); the domains; the CIDRs, including the reviewer allow-list and its maximum address-space allowance; the SES identity; the alert recipient; the budget threshold; RDS sizing and the PostgreSQL 16 minor; the saved-plan lifetime (24 hours recommended) and the reviewers of the two GitHub environments; the staging identities to bind; the retention of AWS-managed logs that can hold identity data — plus the current cost estimate and explicit deployment authorization. The staging architecture itself (one origin, Cognito behind an identity broker, Terraform, four slices) is decided by ADR 0011 (2026-09-13, M3.3a) and is no longer open | Human deployment decision | M3.3d, confirmed immediately before plan and apply |
 | Rust vs Go for the operator agent | Focused ADR when Phase P is commissioned | Phase P |
 
 ## 4. Sequencing decisions taken by this adoption
@@ -294,6 +294,13 @@ Recorded here and in ADR 0008; unchanged by the move from D to D.1:
    M3.0 is the documentation adoption.
 2. A protected AWS staging preview is placed at M3.3, pulling a limited subset of M8 controls
    forward. It is a recommendation, not a D.1 requirement, and it created no cloud resource.
+   *Amended 2026-09-13 (ADR 0011, M3.3a, corrected the same day after review):* M3.3 is
+   four slices — architecture adoption; Terraform and task scaffolding; the broker,
+   bootstrap and identity-binding programs with the identity mapping and dependencies;
+   authorized deployment with evidence — on one customer origin, with Cognito authenticating behind a
+   Firmbatch identity broker and Terraform delivering it; only the fourth slice may create a
+   resource, after a reviewed plan, a current cost estimate and explicit authorization.
+   Still no cloud resource.
 3. The quote-versus-measurement cycle is broken by D.1's **qualification tier**: admitted,
    explicitly capped, human-authorised internal jobs after the M4 and M5 contracts and the
    M6.1 controls exist. No idle speculative fleet; qualification profiles are test-allowlisted

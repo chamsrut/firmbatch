@@ -14,19 +14,22 @@ Five labels, kept strictly apart:
 - **NOT VERIFIED** — asserted, expected, or reasoned about, with no captured run behind it.
   Documentation, comments, and passing-in-the-moment are not evidence.
 
-Last updated: 2026-09-13, on `feat/milestone-3-2-customer-portal` from `main` at
-`87159d5` (Milestone 3.1, PR #9), with **Milestone 3.2 — the customer-only product portal —
-implemented, tested and independently reviewed at implementation commit `ce097cb`, and
-awaiting pull request and merge**. Every actionable finding from its four review passes —
-the independent review's eleven, the three remaining logout findings and the
-session-generation race, the clean-context review's eight, and the final review's two P3
-findings — is closed (see the M3.2 correction sections below). **Milestone 3.1 is merged**
-at `87159d5` (PR #9, implementation commit `f92ecb9`, status commit `c841f77`), after two
-independent review correction passes whose ten findings and two gaps (Codex) and six findings
-(GPT-5.6 Sol) are all corrected, and a third, clean independent review (GPT-5.6 Sol at xhigh
-effort) that verified all six of those findings as fixed and raised no actionable regression —
-see the three M3.1 review sections below. M3.2 is **not merged, not deployed and not
-VERIFIED LIVE**, and no evidence artifact has been captured for it.
+Last updated: 2026-09-13, on `docs/milestone-3-3-aws-terraform-architecture` from `main` at
+`ae61747` (Milestone 3.2, PR #10), with **Milestone 3.3a — the AWS staging, Cognito and
+Terraform architecture adoption — as the current slice, documentation only** (ADR 0011).
+**Milestone 3.2 — the customer-only product portal — is merged** through PR #10 at
+`ae61747` (implementation commit `ce097cb`, status commit `59d82a7`), implemented, tested
+and independently reviewed: every actionable finding from its four review passes — the
+independent review's eleven, the three remaining logout findings and the session-generation
+race, the clean-context review's eight, and the final review's two P3 findings — is closed
+(see the M3.2 correction sections below). **Milestone 3.1 is merged** at `87159d5` (PR #9,
+implementation commit `f92ecb9`, status commit `c841f77`), after two independent review
+correction passes whose ten findings and two gaps (Codex) and six findings (GPT-5.6 Sol) are
+all corrected, and a third, clean independent review (GPT-5.6 Sol at xhigh effort) that
+verified all six of those findings as fixed and raised no actionable regression — see the
+three M3.1 review sections below. M3.2 is **not deployed and not VERIFIED LIVE**, and no
+evidence artifact has been captured for it. **No AWS deployment and no deployment evidence
+exists.**
 Milestone 1 merged at
 `6b4f341`; M2.1 merged at `712b51a` (implementation commit `521870b`, with the bootstrap
 trust-boundary correction `78eae1d` — see the CI correction section below); M2.2 merged at
@@ -49,7 +52,7 @@ Those are HISTORICAL observations at those commits, not this document's claim ab
 later commit — see "Asserted — artifact pending" for the run at the current one. Every
 actionable M2.4 review finding is corrected and migration `0003` is unchanged history.
 
-**Architecture revision D.1 is adopted as PLANNED (Milestone 3.0, this branch).** The
+**Architecture revision D.1 is adopted as PLANNED (Milestone 3.0, merged at `116b5ee`, PR #8).** The
 target is now `docs/architecture/v1-target-architecture.md` at revision D.1 (Phase 0
 purchased capacity, evaluation and internal qualification tiers, bridge envelope with gross
 accrued enforcement, purchase and measurement records, cost-aware routing, and the ten rev D
@@ -60,11 +63,14 @@ decision in ADR 0008. **Nothing rev D or D.1 adds is implemented.** The operator
 agent remains separate operator-side software, now scheduled for Phase P (after a supplier
 signs) rather than Milestone 6. **Milestone 3.1 — membership-bound identity, sessions and
 credential issuance — is merged at `87159d5` (PR #9); it is not deployed and not VERIFIED
-LIVE.** **Milestone 3.2 — the customer-only product portal — is implemented, tested and
-independently reviewed at `ce097cb` on `feat/milestone-3-2-customer-portal`, awaiting pull
-request and merge; it is not deployed and not VERIFIED LIVE** (ADR 0010). **M3.3 is next**:
-the protected AWS staging preview, carrying the Cognito adoption decision to be recorded
-there. See the two CURRENT sections and PLANNED below.
+LIVE.** **Milestone 3.2 — the customer-only product portal — is merged at `ae61747` (PR #10,
+implementation `ce097cb`); implemented, tested and independently reviewed, not deployed and
+not VERIFIED LIVE** (ADR 0010). **Milestone 3 remains active and M3.3a is the current
+slice**: the AWS staging, Cognito and Terraform architecture adoption (ADR 0011), which
+records the Cognito adoption decision and splits M3.3 into four slices — M3.3a architecture,
+M3.3b Terraform and task scaffolding, M3.3c the bootstrap, identity-binding and broker programs with the identity mapping and dependencies, M3.3d
+authorized deployment and evidence. Nothing of it is implemented or deployed; the customer
+can see the real hosted portal only after M3.3d. See the CURRENT sections and PLANNED below.
 
 ---
 
@@ -1182,7 +1188,7 @@ Implemented on the branch from `main` at `116b5ee` (Milestone 3.0, PR #8), commi
 **`f92ecb9`** and merged to `main` at **`87159d5`** (PR #9, status commit `c841f77`); **not
 deployed, and not VERIFIED LIVE**. ADR 0009 records the
 design. Nothing in Milestone 2 is reopened: migrations `0001`–`0004` are unchanged —
-migration `0005` is where the whole, still unmerged M3.1 implementation lives —
+migration `0005` is where the whole M3.1 implementation lives, merged since at `87159d5` —
 `bind_authenticated_context` is unchanged, and every existing test passes unchanged except
 the three named below.
 
@@ -1388,8 +1394,8 @@ runtime role by the absent grant, so no boundary is weakened.
 
 A GPT-5.6 Sol review of the same uncommitted branch raised six findings. All are corrected
 with regression tests; ADR 0009's "Second review correction pass" section records the four
-that change the recorded design. Migrations `0001`–`0004` are untouched; `0005` is unmerged
-and was corrected in place. The theme is one the first pass began and did not finish: **a
+that change the recorded design. Migrations `0001`–`0004` are untouched; `0005` was then unmerged
+and was corrected in place (merged since at `87159d5`). The theme is one the first pass began and did not finish: **a
 decision made once is not a decision that still holds.**
 
 **1. A login challenge is bound to the password version it was answered against.** Argon2
@@ -1498,10 +1504,10 @@ implementation (unmerged at the time of that review; merged since at `87159d5`).
 disposable database, role or session remained on the cluster after the
 run.
 
-**M3.1 is implemented, tested, independently reviewed and ready for pull request and merge.**
-It is still **not merged, not deployed and not VERIFIED LIVE**: no deployment exists and no
-evidence artifact has been captured, and neither a passing suite nor a clean review is
-evidence under this repository's standard.
+**M3.1 was, at that review, implemented, tested, independently reviewed and ready for pull
+request and merge; it has since merged at `87159d5` (PR #9).** It remains **not deployed and
+not VERIFIED LIVE**: no deployment exists and no evidence artifact has been captured, and
+neither a passing suite nor a clean review is evidence under this repository's standard.
 
 ### Not implemented in M3.1 — deliberately
 
@@ -1527,10 +1533,11 @@ informational.
 
 ---
 
-## CURRENT — Milestone 3.2 the customer-only product portal — **implemented, tested and independently reviewed at `ce097cb` on `feat/milestone-3-2-customer-portal`, awaiting pull request and merge**
+## CURRENT — Milestone 3.2 the customer-only product portal — **implemented, tested and independently reviewed at `ce097cb`; merged at `ae61747` (PR #10)**
 
-Built on the branch from `main` at `87159d5` (Milestone 3.1, PR #9) and committed as
-**implementation commit `ce097cb`**. **Not merged, not deployed, and not VERIFIED LIVE**: no
+Built on `feat/milestone-3-2-customer-portal` from `main` at `87159d5` (Milestone 3.1,
+PR #9), committed as **implementation commit `ce097cb`** and merged to `main` at
+**`ae61747`** (PR #10, status commit `59d82a7`). **Not deployed, and not VERIFIED LIVE**: no
 evidence artifact has been captured. ADR 0010 records the design and its four rounds of
 corrections, and every actionable finding is closed — the independent review's eleven
 (2026-09-10), the three remaining logout findings and the session-generation race
@@ -1942,9 +1949,9 @@ below.
 
 ### What M3.2 does not claim
 
-It is committed at `ce097cb` and **not merged, not deployed and not VERIFIED LIVE**: no
-deployment exists and no evidence artifact has been captured, and neither a passing suite nor
-a clean build is evidence under this repository's standard.
+It is committed at `ce097cb` and merged at `ae61747` (PR #10), and it is **not deployed and
+not VERIFIED LIVE**: no deployment exists and no evidence artifact has been captured, and
+neither a passing suite nor a clean build is evidence under this repository's standard.
 
 **No real browser has run this portal.** The cookie contract is asserted at the header level
 against real PostgreSQL, and the client behaviour is asserted in jsdom with a real cookie
@@ -1967,6 +1974,147 @@ contract fields that make the same ideas binding.
 so a compromised runtime can read one Argon2id hash per address it names. M3.2 adds a second
 path that reads one — the signed-in change — and puts it on the same narrow authenticator
 principal, which neither worsens nor solves the limitation ADR 0009 decision 6 states.
+
+---
+
+## CURRENT — Milestone 3.3a AWS staging, Cognito and Terraform architecture adoption — **this branch, documentation only**
+
+Documentation only, on `docs/milestone-3-3-aws-terraform-architecture` from `main` at
+`ae61747` (Milestone 3.2, PR #10). It changes no product behaviour, no migration, no test,
+no dependency, no CI or verification script and no evidence; it creates no AWS resource, no
+Terraform and no image; it touches no protected agent, policy, workflow or verification
+file; and the two architecture source snapshots under `docs/architecture/sources/` are
+byte-identical to `main`. ADR 0011 records the decisions; the topology document draws them.
+
+| Document | What changed |
+| --- | --- |
+| `docs/adr/0011-aws-staging-cognito-and-terraform-delivery.md` | New, and corrected the same day after an independent review (below). M3.3 split into four slices — a architecture; b Terraform and task scaffolding only, not operational until c passes review; c every program the scaffolding runs — database bootstrap, identity binding, the broker and its Cognito, JWT and KMS clients — with the identity mapping, the cookie and route changes, the reviewed dependencies, lock files and tests; d reviewed plan, cost estimate, explicit authorization, apply and evidence — with Milestone 3 closing only after M3.3d; a dedicated staging account with account-ID enforcement, `eu-central-1` recommended and unconfirmed, synthetic data only, Budgets as alerts not a cap; one customer origin `https://staging.app.firmbatch.com` with ALB routing `/` and `/v1/*` to the web/API service and `/auth/*` to the identity broker, the compiled portal served from the web/API image, CloudFront and static S3 deferred; one Cognito User Pool per environment behind the broker (confidential client, code grant with PKCE, exact URLs, `openid email`, invite-only, email usernames, password plus required TOTP, `PreventUserExistenceErrors`, refresh rotation, five-minute tokens, eight-hour window, Managed Login at a custom domain with its certificate in `us-east-1`), no Identity Pools, no ALB `authenticate-cognito`, no groups for roles, no JWT at the core API, no social providers, no token in the browser; `__Host-fb_session` with `SameSite=Strict` and an opaque `__Host-fb_oidc` handle with `SameSite=Lax` that is not a session; every callback a `303` to a fixed clean URL; `/auth/logout` replacing the browser's `/v1/account/logout` in AWS mode; the `auth_identity(issuer, subject)` mapping bound explicitly by a manually invoked `identity-binding` one-off task and never by email, no legacy-password migration, KMS-encrypted refresh tokens in protected state; the network rules; RDS PostgreSQL 16 with the managed-RDS qualification list, the RDS-managed master secret for the bootstrap task only, database passwords written by a one-off task and never into Terraform state, the Cognito client secret as the acknowledged state exception; the Terraform layout and rules; the OIDC delivery model with two separately protected GitHub environments and saved plans kept as encrypted, short-lived objects that are never GitHub artifacts; metadata-only application logging with ALB access logs off, and AWS-managed records that can hold identity data inventoried at M3.3d; production hostnames left to Milestone 8; the explicit deferrals; the deployment parameters a human confirms at M3.3d; and, from a final correction pass, a dedicated identity-binding database boundary, `main`-only environments with distinct roles and required M3.3b acceptance tests, plan approval independent of plan-produced metadata in an Object-Locked plan bucket separate from state, structural reviewer allow-list validation, and credential-safe browser evidence |
+| `docs/architecture/m3-3-aws-staging-topology.md` | New, and corrected with the ADR. The picture, the routing table, the two services and three one-off tasks with their credentials and security groups, network, RDS, the cookie table, the login, callback and logout flows, the identity mapping and the binding task, secrets, state and plans, the Terraform tree with module expectations, the pipeline with its two environments, the application and AWS-managed logging rules, the browser-evidence rules, the M3.3d evidence list, slice gates with the M3.3b acceptance tests and the M3.3c binding-boundary and evidence-tooling tests, deferrals and the parameter table |
+| `docs/firmbatch-v1-roadmap.md` | Baseline `ae61747`; M3.0, M3.1 and M3.2 marked merged; production public hostnames marked a Milestone 8 decision, with the portal always same-origin and any separate API hostname for non-browser clients or reviewed edge routing; M3.3 rewritten as M3.3a–d with gates and `staging.api.firmbatch.com` superseded; the Milestone 3 gate closing at M3.3d; the remaining-decisions row narrowed to deployment parameters; the immediate order |
+| `docs/architecture/v1-target-architecture.md` | New §14.1 **[M3.3a]** describing the staging subset of §14; a "repository amendments after D.1" note in §18. §17 byte-identical to `main` |
+| `docs/architecture/rev-d-decision-register.md` | The AWS staging row in §3 narrowed to the deployment parameters with the architecture recorded as decided; §4 item 2 amended |
+| `docs/STATE.md`, `docs/tasks/current.md`, `README.md` | Status: M3.2 merged at `ae61747` (PR #10), not deployed, not VERIFIED LIVE; Milestone 3 active; M3.3a current; the Cognito decision recorded; no AWS deployment or evidence; the stale M3.1 "still not merged" sentence and the task file's stale M3.0 "this branch" wording in its M2.4 section corrected |
+
+**What this adoption does not do.** It deploys nothing and authorizes nothing: no AWS
+account, DNS record, certificate, Cognito pool, bucket, database or task exists because of
+it. It implements no broker, no bootstrap or identity-binding command, no identity mapping, no
+cookie rename, no route change, no Terraform, no image and no pipeline, and it chooses no
+JOSE/JWT library, HTTP client or AWS SDK. It fixes no deployment parameter — the account ID,
+region, domains, CIDRs including the reviewer allow-list and its address-space allowance, SES
+identity, alert recipient, budget threshold, RDS sizing and minor, the saved-plan lifetime and
+the two GitHub environments' reviewers, the staging identities to bind, the retention of
+AWS-managed identity logs, and the cost estimate are confirmed by a human at M3.3d. It verifies no AWS price or
+behaviour. It reclassifies no evidence: M3.1 and M3.2 stay implemented, tested and
+reviewed, not VERIFIED LIVE; nothing in M3.3 is VERIFIED LIVE before M3.3d captures it.
+
+**Verification for this slice** is recorded in `docs/tasks/current.md` under M3.3a: `git
+diff --check`; the two source snapshots and migrations `0001`–`0006` compared to `main` by
+SHA-256; `./scripts/verify-repository.sh` at the working tree. It is a run, not an evidence
+artifact. The final correction pass is verified by the same script at the finished, staged
+tree, and that result is reported with the change rather than written here, so that the tree
+the script verified is the tree recorded.
+
+### M3.3a review corrections (2026-09-13) — four P2 and eleven P3 findings, all applied
+
+An independent review of the M3.3a architecture raised four P2 and eleven P3 findings. All
+were accepted and corrected in the same eight documentation files; no code, migration,
+lock file, CI, script, source snapshot or §17 text changed. ADR 0011 "Review corrections"
+maps each to the decision that now carries it.
+
+- **P2-1 The saved Terraform plan.** It carries prior state and the Cognito client secret, so
+  it lives only as an encrypted object under `plans/` in the KMS-encrypted infrastructure
+  bucket, with a short lifecycle (proposed 24 hours), a recorded SHA-256, Terraform version,
+  provider-lock digest, source commit and state serial and lineage, all verified by an apply
+  that never re-plans; expired or mismatched plans are refused and deleted; GitHub shows only
+  action counts, policy results, cost summary and checksum; the full plan is reviewed in a
+  separately authenticated operator session. State and plans are equally sensitive. The
+  M3.3d evidence list now records the sanitized summary, never the plan. *Superseded in part
+  by the final correction pass below:* plans now live in a separate, Object-Locked plan
+  bucket rather than under a prefix of a shared bucket, apply verifies an approved object
+  version independently rather than recorded metadata, and a refused or expired plan is left
+  to lifecycle expiry, because a delete in a versioned bucket does not remove every copy.
+- **P2-2 The session cookie.** Recorded for M3.3c: `__Host-fb_session` wherever cookies are
+  `Secure` (`Secure`, `HttpOnly`, `Path=/`, no `Domain`, `Strict`), unprefixed only as a
+  development name, tests and configuration updated, no deployed-cookie migration. The
+  topology's claim that host-only stops a sibling host is corrected: the prefix does. The
+  `__Host-fb_oidc` handle is specified — `Lax` deliberately, opaque, single-use,
+  short-lived, holding no token, code, nonce or verifier.
+- **P2-3 Identity binding.** A fifth, one-off `identity-binding` task definition, manually
+  invoked, with its credential, Cognito permission, non-secret invocation metadata, audited
+  success and refusal, neutral refusals, and no endpoint or service — in the topology, the
+  task and credential tables, the Terraform module expectations, M3.3c and M3.3d.
+- **P2-4 Slice ownership.** M3.3b is scaffolding only and is not operational until M3.3c's
+  programs, dependencies and image pass review; every executable program, client,
+  dependency, lock file, entry point and test is M3.3c's; no library is chosen in M3.3a.
+- **P3 corrections.** RDS ingress from all five security groups; no WAF added to the
+  ALB; the authentication host under the same registrable domain with the `Strict`
+  session and `Lax` handle stated; `/v1/account/logout` disabled for the browser in AWS mode
+  in favour of `/auth/logout`; two GitHub environments, `staging-plan` and `staging-apply`,
+  both human-approved with exact-`sub` OIDC trust; the broker's executable code moved from
+  M3.3b to M3.3c; CloudTrail, Cognito logging and export, SES records and the Cognito WAF's
+  logs inventoried at M3.3d as possible holders of identity data; port 80 on the same
+  allow-list, redirect only; every callback a `303` to a fixed clean URL with the handle
+  cleared, `no-store` and `no-referrer`; the unhandled-error logging finding recorded for
+  M3.3c, widened after the corrections when the access line was found to fall back to the raw
+  path as well; and the stale M3.0 wording and the production-hostname language reconciled.
+
+A security review and an evidence audit run after the corrections raised further questions.
+Six were decided in the final correction pass below. The rest remain open, with their owning
+slice, under "Open questions carried into Milestone 3" in `docs/tasks/current.md`.
+
+### M3.3a final correction pass (2026-09-13) — six architecture questions decided
+
+Documentation only, in the same eight files; no code, migration, dependency, Terraform,
+workflow, verification script, source snapshot or §17 text changed. ADR 0011 "Final correction
+pass" maps each decision to where it lives.
+
+- **The identity-binding credential.** The binding task no longer receives the authenticator
+  credential. M3.3c adds a dedicated identity-binding login role with no table privilege and
+  no role membership, holding `EXECUTE` on one `SECURITY DEFINER` binding function, with a
+  separate `NOLOGIN` owner where review needs one. The function binds one explicit
+  `(issuer, subject)` to one explicit unused invitation or account, never by email; it is
+  idempotent, refuses conflicts, and commits its audit event atomically. The task's command is
+  assumed overridable, so the credential is designed to be harmless beyond binding; the
+  operator's run permission covers only this task definition and its own roles. The task,
+  credential, security-group and RDS-qualification tables are updated. The ordinary
+  transaction preamble calls two identity accessors, so the binding command's database path
+  must not rely on it.
+- **The GitHub environments.** Both `staging-plan` and `staging-apply` allow only `main`,
+  require reviewers, prevent self-review where supported and hold no permanent AWS credential.
+  The workflows are manually dispatched from the default branch, check `refs/heads/main` and
+  the source commit's reachability and approval, are protected by `CODEOWNERS` and branch
+  protection, and are disabled for forks and pull requests. OIDC trust names the exact
+  repository and environment, the plan and apply roles are distinct, and the apply role has a
+  permissions boundary and cannot be assumed through `staging-plan`. Each is a required M3.3b
+  acceptance test.
+- **Plan approval.** Saved plans move to a dedicated plan bucket, separate from state, with
+  content-addressed keys, versioning and Object Lock governance retention. The plan role can
+  create objects but cannot overwrite, unlock or apply. The human starts apply with the
+  reviewed object's key, version ID and expected SHA-256, visible in the approval request.
+  Apply recomputes and checks everything itself and fails closed; plan-produced metadata is no
+  authority.
+- **Plan retention.** A proposed one-day governance retention tied to the saved-plan lifetime,
+  24 hours recommended; lifecycle expiry of current and noncurrent plan versions and delete
+  markers; no bypass or historical read by either role; apply refuses a plan past the allowed
+  age; state keeps its own retention and never expires with plans. The earlier wording that a
+  refused plan is deleted is replaced: a delete in a versioned bucket only adds a marker.
+- **The reviewer allow-list.** Fail-closed structural validation by Terraform and an
+  independently tested policy check: canonical CIDRs, IPv4 `/24` or narrower, IPv6 `/64` or
+  narrower, at most 16 entries proposed, no non-routable, duplicate or overlapping entries, a
+  maximum address-space allowance, never empty; human review; no committed CIDRs; the same
+  list on ports 80 and 443; the broker's NAT EIP added separately as a `/32` to the Cognito WAF
+  only.
+- **Browser evidence.** No raw traces, HAR files, videos, storage-state files, console or
+  network dumps or failure screenshots from authentication journeys; persistence disabled; an
+  allow-listed summary; fixed failure classifications and opaque correlation IDs; sanitized
+  callback and logout assertions; separately approved screenshots of clean synthetic routes
+  only; a blocking secret scan before commit; raw artifacts never uploaded. M3.3c builds the
+  tooling and M3.3d's evidence list asks only for sanitized summaries and approved images.
+
+The deployment-parameter lists are reconciled to the genuine human decisions: account, region,
+domains, CIDRs, SES identity, alert recipient, budget, RDS sizing and minor, plan lifetime and
+reviewers, identities to bind, AWS-managed log retention, the current cost estimate and the
+deployment authorization.
 
 ---
 
@@ -2098,7 +2246,7 @@ capture new artifacts with provenance matching the committed tree.
 
 | Claim | How to settle it |
 | --- | --- |
-| All **fourteen** gates in `scripts/verify-repository.sh` pass — **14 passed, 0 failed**: layout (**119** required files since Milestone 3.1 registered its production and test modules; 97 at Milestone 2.4), agent configuration, hygiene, v0 property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 247/247, the runtime import closure check, and the PostgreSQL foundation suite **1,746 collected — 1,745 passed, 1 skipped** locally — the one skip is the pre-existing REPLICATION skip (granting REPLICATION needs a superuser admin, which CI has and the developer cluster does not. On CI that test runs and two others skip instead -- the owner-only-refusal assertions, which have no meaning for a superuser bootstrap administrator). Observed locally on 2026-09-06, after all three correction passes, against PostgreSQL 16.15 on the developer's WSL machine, at Milestone 2.4 implementation commit `d91e4f2` — that suite count is HISTORICAL to that commit. **Re-run for Milestone 3.0** on 2026-09-06 at `main` `4511f7d`, twice — once with the rev D documentation changes uncommitted in the working tree, and again after the correction to rev D.1 with the documentation changes staged — against the same attested PostgreSQL 16.15 cluster: **14 gates passed, 0 failed** both times, 97 required files; the script's passing output does not print the foundation suite's collected/passed/skipped counts, so no new count is claimed here. Still no artifact. **Re-run for Milestone 3.1** on 2026-09-09 at implementation commit `f92ecb9`, against the same attested PostgreSQL 16.15 cluster: **14 gates passed, 0 failed**, with **119** required files in the layout gate, and no disposable database, role or session left behind. The foundation-suite figure current at that commit is the **2,038 collected — 2,037 passed, 1 environment-dependent REPLICATION skip** recorded in the Milestone 3.1 row below; the 1,746 above stays HISTORICAL to `d91e4f2`. **No milestone from M2.2 to M3.1 added a gate**; the foundation-suite gate already runs the whole `control_plane/tests` directory, so each of those milestones' new modules runs inside it. **Milestone 3.2 is the first since M2.1 to add one** — the customer portal is TypeScript and the foundation-suite gate cannot reach it — taking the count to **fifteen**; see the Milestone 3.2 row below. | `/record-evidence` → `docs/evidence/r0/gates.txt` (and a Milestone 2 artifact for the foundation suite). Not yet captured. |
+| All gates in `scripts/verify-repository.sh` pass — **fifteen** gates over **167** required files since Milestone 3.2, **15 passed, 0 failed** at the 2026-09-13 Milestone 3.3a run recorded at the end of this cell. The lineage, kept as history: at Milestone 2.4 there were **fourteen** gates, **14 passed, 0 failed**: layout (**119** required files since Milestone 3.1 registered its production and test modules; 97 at Milestone 2.4), agent configuration, hygiene, v0 property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 247/247, the runtime import closure check, and the PostgreSQL foundation suite **1,746 collected — 1,745 passed, 1 skipped** locally — the one skip is the pre-existing REPLICATION skip (granting REPLICATION needs a superuser admin, which CI has and the developer cluster does not. On CI that test runs and two others skip instead -- the owner-only-refusal assertions, which have no meaning for a superuser bootstrap administrator). Observed locally on 2026-09-06, after all three correction passes, against PostgreSQL 16.15 on the developer's WSL machine, at Milestone 2.4 implementation commit `d91e4f2` — that suite count is HISTORICAL to that commit. **Re-run for Milestone 3.0** on 2026-09-06 at `main` `4511f7d`, twice — once with the rev D documentation changes uncommitted in the working tree, and again after the correction to rev D.1 with the documentation changes staged — against the same attested PostgreSQL 16.15 cluster: **14 gates passed, 0 failed** both times, 97 required files; the script's passing output does not print the foundation suite's collected/passed/skipped counts, so no new count is claimed here. Still no artifact. **Re-run for Milestone 3.1** on 2026-09-09 at implementation commit `f92ecb9`, against the same attested PostgreSQL 16.15 cluster: **14 gates passed, 0 failed**, with **119** required files in the layout gate, and no disposable database, role or session left behind. The foundation-suite figure current at that commit is the **2,038 collected — 2,037 passed, 1 environment-dependent REPLICATION skip** recorded in the Milestone 3.1 row below; the 1,746 above stays HISTORICAL to `d91e4f2`. **No milestone from M2.2 to M3.1 added a gate**; the foundation-suite gate already runs the whole `control_plane/tests` directory, so each of those milestones' new modules runs inside it. **Milestone 3.2 is the first since M2.1 to add one** — the customer portal is TypeScript and the foundation-suite gate cannot reach it — taking the count to **fifteen**; see the Milestone 3.2 row below. **Re-run for Milestone 3.3a** on 2026-09-13 at the working tree over `main` `ae61747`, with the documentation changes uncommitted, against the same attested PostgreSQL 16 cluster: **15 gates passed, 0 failed**, 167 required files; the passing output prints no suite counts, so none is claimed for this run. **Re-run after the M3.3a review corrections** the same day, at the corrected working tree before it was re-staged, against PostgreSQL 16.15 and Node 24.19.0: **15 gates passed, 0 failed**, 167 required files. Wording fixes prompted by the post-correction reviews, all in the eight M3.3a markdown files, came after that run. Still no artifact. | `/record-evidence` → `docs/evidence/r0/gates.txt` (and a Milestone 2 artifact for the foundation suite). Not yet captured. |
 | The M2.1 tenant-isolation properties hold in PostgreSQL: absent context reads nothing and writes nothing; tenant A cannot read, insert, update or delete tenant B's rows; a fabricated cross-tenant or dangling foreign key is rejected; tenant context is not inherited from a session value, a pooled connection, or a URL option; a reused ORM `Session` cannot serve a previous tenant's object; a temporary relation cannot shadow a Firmbatch table; the application role is non-owner, `NOSUPERUSER`, `NOBYPASSRLS`, is refused at connect time if it were any of those, cannot disable a policy, cannot create tables or temporary tables, cannot read the schema history, and cannot create a tenant even with matching context; workspace uniqueness is tenant-local. | `/record-evidence` → `docs/evidence/m2/tenant-isolation-suite.txt`, after the Milestone 2.1 commit. Until then this is a re-runnable claim with no captured artifact. |
 | The M2.2 idempotency and outbox properties hold in PostgreSQL: an identical retry returns the stored result and invokes the mutation once; four identical calls leave one workspace, one claim and one linked event; a conflicting reuse is rejected; two callers observed contending on a real lock commit one effect and one event, and the loser replays; a failure before commit leaves nothing and does not block the retry; a mutation callback cannot commit or roll back the primitive's transaction and an escape by any other route is detected; unflushed ORM state at entry is rejected; malformed operations and keys are refused before the mutation runs; the same key is independent between tenants; cross-tenant reads and writes on both new tables fail closed; missing context fails closed; a committed event is immutable to the application role and matches zero rows even for the owner; an internal state change appends an event with no idempotency record and a rollback removes both; and no value of the request identity reaches a row. **At M2.2 this was 511 passing checks with 1 skipped, of which 130 were new; the same properties are asserted at M2.3 inside a suite of 806.** | `/record-evidence` → `docs/evidence/m2/idempotency-outbox-suite.txt`, at or after Milestone 2.2 implementation commit `d362717`. Until then this is a re-runnable claim with no captured artifact, and M2.2 is **not** VERIFIED LIVE. |
 | The M2.3 authenticated-context, authorization, audit and secrets properties hold in PostgreSQL: a forged `app.tenant_id` or any fabricated setting grants nothing; a fabricated tenant, binding id, fingerprint, actor or scope grants nothing; the function that writes a context is executable by nobody; a relation forged where the context lives is ignored because it is not owned by the schema owner; unknown, malformed, revoked and expired credentials fail closed with one indistinguishable message; binding twice or switching identity is refused; context survives no commit, rollback, failed statement, pool reuse or `Session` reuse, and a Connection-bound `Session` is refused; a valid credential reaches its own tenant and no other; the credential is never stored; authorization is deny-by-default with read/write scope distinctions, minimal framework capabilities and no non-customer scope; every `SECURITY DEFINER` function is owned, path-pinned, `PUBLIC`-revoked, minimally granted and free of dynamic SQL; the registry has no grants and no policy; audit events derive tenant and actor, refuse a supplied alternative, cannot be backdated, are immutable, roll back with their action and reject secret-shaped metadata; secrets never render themselves and production fails closed; and the migration reverses to the M2.2 shape and back. **1,314 pytest checks pass, 1 skipped**, a net increase of 803 collected checks over M2.2's 512 -- five new modules, plus every existing module moved onto the authenticated mechanism, plus a handful of M2.1 tests replaced by the stronger property that superseded them. | `/record-evidence` → `docs/evidence/m2/authenticated-context-suite.txt`, at or after Milestone 2.3 implementation commit `89fbdd9`. No evidence artifact has been captured, so this remains a re-runnable claim and M2.3 is **implemented and tested**, **not** VERIFIED LIVE. |
@@ -2249,20 +2397,31 @@ membership to
 the protected M2.3 database context, with browser sessions distinct from scoped API
 credentials (see "CURRENT — Milestone 3.1" and ADR 0009). The four completion cases pass as
 named tests at the database and HTTP boundaries. **M3.2 — the customer-only portal — is
-implemented, tested and independently reviewed at `ce097cb`, awaiting pull request and
-merge** (see "CURRENT — Milestone 3.2" and ADR 0010): the
-authenticated customer application with honest empty states for later features, the four
-gate cases now also exercised through the interface's own journeys, one new tenant-plane
-relation for the customer's stated policy, and the signed-in password change M3.1 left to it.
-**Customer-facing deployment stays blocked until an authorized M3.3.** **M3.3 is next**: a
-protected AWS staging preview pulled forward from Milestone 8, **planned, and not
-authorized** — a reviewed infrastructure plan, a cost estimate and an explicit go-ahead
-precede creating any resource, and no GPU driver is enabled by it — together with the
-**Cognito adoption decision**, to be recorded as an ADR there: Amazon Cognito is to own
-customer authentication, while Firmbatch retains its server-side browser session, the CSRF
-cookie, workspace authorization, row-level security, the audit trail, consent and API
-credentials. Nothing of that decision is implemented in this repository; M3.2 signs
-customers in through the M3.1 path.
+merged at `ae61747` (PR #10, implementation `ce097cb`)** (see "CURRENT — Milestone 3.2" and
+ADR 0010): the authenticated customer application with honest empty states for later
+features, the four gate cases now also exercised through the interface's own journeys, one
+new tenant-plane relation for the customer's stated policy, and the signed-in password change
+M3.1 left to it. **Customer-facing deployment stays blocked until an authorized M3.3d.**
+**M3.3 is in progress as four slices (ADR 0011).** **M3.3a**, the current slice, adopts the
+AWS staging, Cognito and Terraform architecture — one customer origin,
+`https://staging.app.firmbatch.com`, with the API same-origin under `/v1/*`; Cognito
+authenticating behind a Firmbatch identity broker on `/auth/*` with no token in the browser;
+an `(issuer, subject)` identity mapping bound explicitly by a manually invoked identity-binding task that holds only a dedicated one-function binding credential, and never by email; RDS PostgreSQL 16
+with a managed-RDS qualification; Terraform in separate roots with an S3 lockfile backend;
+OIDC delivery through two protected GitHub environments with saved plans kept out of GitHub — and records the **Cognito adoption decision**: Amazon Cognito owns
+customer authentication (password, required TOTP, recovery and verification email in AWS
+mode), while Firmbatch retains its server-side browser session, the CSRF cookie, workspace
+authorization, row-level security, the audit trail, consent and API credentials. **M3.3b**
+builds Terraform and task scaffolding with static checks only, and is not operational until
+M3.3c passes review; **M3.3c** builds every program that scaffolding runs — database
+bootstrap, identity binding, the broker and its Cognito, JWT and KMS clients — with migration
+`0007`, the `__Host-fb_session` rename, the AWS-mode route changes, the portal adaptation,
+the reviewed dependencies and lock files, and the security tests;
+**M3.3d** — and only M3.3d, after a reviewed plan, a current cost estimate and the human's
+explicit authorization — deploys, qualifies RDS, runs the browser journey and captures
+evidence. **Nothing of M3.3 is implemented or deployed**: no AWS resource, no Terraform and
+no evidence exists; M3.2 signs customers in through the M3.1 path; the customer can see the
+real hosted portal only after M3.3d.
 
 **The portal Milestone 3 builds is the customer application and nothing else.** The
 **operator capacity agent remains separate operator-side software**: a static Rust or Go
