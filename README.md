@@ -3,8 +3,9 @@
 > [!IMPORTANT]
 > **Current code:** v0 prototype, plus the merged Milestone 2 v1 foundation and Milestone 3.1
 > identity, membership and credential issuance under `control_plane/` (not deployed), plus the
-> Milestone 3.2 customer portal under `portal/` on a branch (implemented and tested, not
-> committed, not deployed). To run the portal locally, see `portal/README.md`.
+> Milestone 3.2 customer portal under `portal/` on a branch (implemented, tested and
+> independently reviewed at commit `ce097cb`, awaiting PR and merge; not deployed and not
+> VERIFIED LIVE). To run the portal locally, see `portal/README.md`.
 > **Target:** Firmbatch v1 revision D.1.
 >
 > The canonical target is `docs/architecture/v1-target-architecture.md`.

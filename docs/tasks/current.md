@@ -2,15 +2,15 @@
 
 Active work and open questions. Updated at the end of each task, alongside `docs/STATE.md`.
 
-Last updated: 2026-09-11, on `feat/milestone-3-2-customer-portal` from `main` at `87159d5`
-(Milestone 3.1, PR #9), with **Milestone 3.2 — the customer-only product portal — implemented
-and tested in the working tree, corrected against an independent review's eleven findings,
-and not committed**. **Milestone 3.1 is merged** at `87159d5`
+Last updated: 2026-09-13, on `feat/milestone-3-2-customer-portal` from `main` at `87159d5`
+(Milestone 3.1, PR #9), with **Milestone 3.2 — the customer-only product portal — implemented,
+tested and independently reviewed at implementation commit `ce097cb`, every actionable
+finding closed, and awaiting pull request and merge**. **Milestone 3.1 is merged** at `87159d5`
 (PR #9, implementation commit `f92ecb9`, status commit `c841f77`) — after two review
 correction passes closing ten findings and two gaps (Codex) and six findings (GPT-5.6 Sol),
 and a third, clean independent review (GPT-5.6 Sol at xhigh effort) that verified all six of
-those findings as fixed and raised no actionable regression. M3.2 is not committed, not
-merged, not deployed and not VERIFIED LIVE. Milestone 1 merged at
+those findings as fixed and raised no actionable regression. M3.2 is not merged, not
+deployed and not VERIFIED LIVE, and no evidence artifact has been captured. Milestone 1 merged at
 `6b4f341`; M2.1 merged at `712b51a` (implementation commit `521870b`, plus the bootstrap
 trust-boundary correction `78eae1d`); M2.2 merged at `b028f21` (implementation commit
 `d362717`); M2.3 merged at `dca2d49` (implementation commit `89fbdd9`), after a fourth
@@ -34,8 +34,8 @@ triggers; the target is at revision D.1 with verbatim source snapshots (D.1 curr
 historical) and a review register that records each rev D review item's D.1 resolution;
 ADR 0008 records the decision; M3.0 merged at `116b5ee` (PR #8). **Milestone 3.1 —
 membership-bound identity, sessions and credential issuance — is implemented, tested and
-independently reviewed at `f92ecb9` on this branch, ready for pull request and merge, and
-not merged, not deployed and not VERIFIED LIVE** (ADR 0009).
+independently reviewed at `f92ecb9` and merged at `87159d5` (PR #9); it is not deployed and
+not VERIFIED LIVE** (ADR 0009).
 
 ---
 
@@ -44,8 +44,9 @@ not merged, not deployed and not VERIFIED LIVE** (ADR 0009).
 Milestones 0, 1 and 2 are complete. Milestone 3 is the active milestone, under the
 revision D.1 roadmap. Its slices: **M3.0** documentation adoption (merged, PR #8), **M3.1**
 identity, membership and credential issuance (merged, PR #9), **M3.2** the customer
-application (**this branch**, implemented and tested, not committed), **M3.3** the protected
-AWS staging preview (later, and not authorized).
+application (**this branch**, implemented, tested and independently reviewed at `ce097cb`,
+awaiting pull request and merge), **M3.3** the protected AWS staging preview with the
+Cognito adoption decision (next, and not yet authorized).
 
 ### M3.0 — revision D.1 documentation adoption — **merged at `116b5ee` (PR #8)**
 
@@ -119,16 +120,17 @@ Order for the human, from here (item 1 done at the 2026-09-07 review):
    per-run authorisations. These are the human's decisions; the documents leave them open on
    purpose.
 
-### M3.1 — identity, workspace membership and credential issuance — **implemented, tested and reviewed at `f92ecb9`, ready for PR**
+### M3.1 — identity, workspace membership and credential issuance — **implemented, tested and reviewed at `f92ecb9`; merged at `87159d5` (PR #9)**
 
-Implemented on `feat/milestone-3-1-identity-membership` from `main` at `116b5ee` and
-**committed at `f92ecb9`**. Nothing is pushed, no PR is opened, nothing is merged, nothing is
-deployed, no provider is contacted and no cloud spend is incurred. Migrations `0001`–`0004`
-are unchanged; migration `0005` carries the unmerged M3.1 implementation. ADR 0009 records
-the design; `docs/STATE.md` "CURRENT — Milestone 3.1" records what it is and what it proves.
+Implemented on `feat/milestone-3-1-identity-membership` from `main` at `116b5ee`,
+**committed at `f92ecb9`** and merged to `main` at `87159d5` (PR #9, status commit
+`c841f77`). Nothing is deployed, no provider is contacted and no cloud spend is incurred.
+Migrations `0001`–`0004` are unchanged; migration `0005` carries the M3.1 implementation.
+ADR 0009 records the design; `docs/STATE.md` "CURRENT — Milestone 3.1" records what it is
+and what it proves.
 
-**Where it stands:** implemented, tested, independently reviewed and **ready for pull request
-and merge**. It is **not merged, not deployed and not VERIFIED LIVE** — no deployment exists
+**Where it stands:** implemented, tested, independently reviewed and **merged** (PR #9). It
+is **not deployed and not VERIFIED LIVE** — no deployment exists
 and no evidence artifact has been captured, so the standard's VERIFIED LIVE label does not
 apply however green the suite is.
 
@@ -263,20 +265,25 @@ The slice as it was proposed, for the record:
   real PostgreSQL 16, each failing closed — plus every existing M2 protection passing
   unchanged. Not blocked by any open register entry.
 
-M3.1 merged at `87159d5` (PR #9). **M3.2 is the active slice** — see the section below.
-**M3.3 remains later**: its AWS staging needs a reviewed infrastructure and cost plan and
-explicit authorization before any resource is created. The **operator capacity agent remains
+M3.1 merged at `87159d5` (PR #9). **M3.2 is implemented, tested and independently reviewed
+at `ce097cb`, awaiting pull request and merge** — see the section below. **M3.3 is next**:
+its AWS staging needs a reviewed infrastructure and cost plan and explicit authorization
+before any resource is created, and it carries the **Cognito adoption decision** — Cognito
+to own customer authentication, Firmbatch retaining its server-side browser session, CSRF,
+workspace authorization, RLS, audit, consent and API credentials — to be recorded as an ADR
+before anything is built on it. The **operator capacity agent remains
 separate operator-side software** and is not part of the customer portal — it is Phase P
 work, after a supplier signs, and the M3.2 portal contains no route, navigation entry,
 setting or scope that would reach one.
 
-### M3.2 — the customer-only product portal — **implemented and tested, not committed**
+### M3.2 — the customer-only product portal — **implemented, tested and independently reviewed at `ce097cb`, awaiting pull request and merge**
 
 The authenticated customer application, `portal/`: TypeScript, Vite and React, with React and
 ReactDOM as its only runtime packages (`portal/package.json` is the authority), served
-**same-origin with the API** behind a proxy. ADR 0010 records the design and the corrections
-made after the independent review of 2026-09-10; `docs/STATE.md` records what it proves and
-what it does not claim.
+**same-origin with the API** behind a proxy. Committed as implementation commit `ce097cb`.
+ADR 0010 records the design and the corrections made after its four review passes
+(2026-09-10 to 2026-09-12), every actionable finding of which is closed; `docs/STATE.md`
+records what it proves and what it does not claim.
 
 - **Customer journeys:** signup and email confirmation; sign-in, sign-out and recovery; the
   first workspace, for a verified account that is a member of nothing; workspace selection and
@@ -350,7 +357,9 @@ what it does not claim.
   foundation suite **2,188 passed, 1 skipped** of 2,189 collected; the portal suite **392
   tests across 10 files** (327 before the redirect corpus grew), on Node 24.21.0 LTS.
   Migrations `0001`–`0005` are byte-identical to `main`. `git diff --check` clean. No
-  evidence artifact captured.
+  evidence artifact captured. That code is **implementation commit `ce097cb`**; the
+  canonical script re-run at `ce097cb` on 2026-09-13, with only this status update in the
+  working tree, reports the same **15 gates passed, 0 failed** over 167 required files.
 
 **Two protected files were changed, both with the human's explicit prior approval**, and both
 narrowly: `scripts/verify-repository.sh` gains the customer-portal gate and forty-eight
@@ -369,14 +378,18 @@ fails rather than skips when its prerequisites are absent — checked, not assum
   needed before M3.
 - **AWS staging authorization** (M3.3): region, access model, cost estimate, managed-RDS role
   and migration feasibility, and the human's explicit go-ahead.
+- **The Cognito adoption decision** (M3.3): the ADR recording that Cognito owns customer
+  authentication while Firmbatch retains its server-side browser session, CSRF, workspace
+  authorization, RLS, audit, consent and API credentials — and what that means for the M3.1
+  authentication path and the M3.2 pages that drive it, decided there rather than here.
 - **Evidence promotion:** Milestone 2 could be promoted to VERIFIED LIVE by capturing the
   foundation-suite run with `/record-evidence` under `docs/evidence/m2/`. Until then the
   **implemented and tested** classification stands for all four slices. M3.1 is
   **implemented, tested and independently reviewed** at `f92ecb9` and could be promoted the
   same way, by capturing its foundation-suite run under `docs/evidence/m3/` at or after that
   commit; until an artifact and a deployment exist it is not VERIFIED LIVE. **M3.2** is in
-  the same position and cannot be captured yet at all: an artifact needs a commit to be
-  provenanced against, and M3.2 is not committed.
+  the same position at `ce097cb`, and now has a commit to provenance an artifact against;
+  until an artifact and a deployment exist it is not VERIFIED LIVE either.
 - **M3.1 follow-ups needing approval:** whether the hash-harvest limitation of
   application-side password verification (ADR 0009 decision 6) is acceptable through M3.3 or
   needs a separated verifier process there. **M3.2 does not change this**: the signed-in
