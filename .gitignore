@@ -12,3 +12,9 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .claude/settings.local.json
+
+# The customer portal's installed dependencies and build output (Milestone 3.2).
+# package-lock.json IS tracked: it is what `npm ci` installs from, and what makes the
+# portal gate reproducible for a human and in CI.
+portal/node_modules/
+portal/dist/

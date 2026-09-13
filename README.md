@@ -1,9 +1,10 @@
 # firmbatch
 
 > [!IMPORTANT]
-> **Current code:** v0 prototype, plus the merged Milestone 2 v1 foundation under
-> `control_plane/` (not deployed), plus Milestone 3.1 identity, membership and
-> credential issuance on a branch (implemented and tested, not merged, not deployed).
+> **Current code:** v0 prototype, plus the merged Milestone 2 v1 foundation and Milestone 3.1
+> identity, membership and credential issuance under `control_plane/` (not deployed), plus the
+> Milestone 3.2 customer portal under `portal/` on a branch (implemented and tested, not
+> committed, not deployed). To run the portal locally, see `portal/README.md`.
 > **Target:** Firmbatch v1 revision D.1.
 >
 > The canonical target is `docs/architecture/v1-target-architecture.md`.
@@ -218,6 +219,13 @@ providers/verda.py   Verda adapter + bootstrap script        ~150
 worker/agent.py      standalone, requests-only, disposable   ~200
 fb.py                CLI: serve submit run watch chaos report ~220
 tests/               the invariants, deterministically         ~110
+```
+
+The v1 build sits beside it, untouched by any of the above (ADR 0003):
+
+```
+control_plane/       PostgreSQL foundation, identity, the native v1 API
+portal/              the authenticated customer portal — TypeScript, see portal/README.md
 ```
 
 ## Deliberately absent

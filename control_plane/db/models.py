@@ -231,9 +231,81 @@ MEMBERSHIP_ROLES: tuple[str, ...] = ("admin", "member", "owner", "viewer")
 #: A customer-chosen credential label: short, and never a place for a secret.
 CREDENTIAL_LABEL_MAX_LENGTH = 100
 
+# --------------------------------------------------------- Milestone 3.2 preferences
+#
+# The vocabularies ``workspace_preferences`` is closed over. Every one is taken from the
+# target architecture; none is invented here, and none is a *setting* that changes what the
+# system does. A row in that table is what the customer told us they intend, and the
+# roadmap's M3.2 line qualifies it: captured "for later use **without claiming a quote or an
+# execution**". Migration ``0006`` renders these as check constraints and
+# ``tests/test_portal_migration.py`` holds the two copies equal.
+
+#: Region groups a customer may state in ``region_policy``. **Closed, and deliberately
+#: short.** The canonical JobSpec (target §5.2) names exactly one, ``EU``. The target's
+#: own header says regions quoted from the sources "require fresh verification before use",
+#: so adding ``US`` or ``APAC`` here would be inventing configuration no authority states. An
+#: empty array means "no region constraint stated", which is the default.
+REGION_GROUPS: tuple[str, ...] = ("EU",)
+
+#: Provider classes a customer may exclude through ``provider_policy``. Named by target
+#: §5.4 ("Phase 0 runs on Google, Microsoft and Amazon"), §4.4's spot drivers and the
+#: roadmap's hosting paragraph, which adds Verda as qualified.
+#:
+#: ``amazon`` is the exclusion v1 **cannot honour**: ``provider_policy`` governs execution
+#: placement only, and the payload plane is S3 for every tenant until a bucket per supplier
+#: cloud region exists (§3.3, §5.4, §17 invariant 13). The value is accepted and recorded
+#: anyway, because a customer who requires it is a fact worth having; what the portal must
+#: not do is accept it silently, and the consent text says so exactly.
+PROVIDER_CLASSES: tuple[str, ...] = ("amazon", "google", "microsoft", "verda")
+
+#: Whether the customer intends to run the free 1,000-request evaluation (target §5.3).
+#: Intent only: the evaluation tier, its caps, its corpus rule and its report are M4.1 and
+#: M5, and nothing reads this to admit, quote or schedule anything.
+EVALUATION_INTENTS: tuple[str, ...] = (
+    "undecided",
+    "planning_evaluation",
+    "evaluation_not_needed",
+)
+
+#: The consent and subprocessor statements a row may acknowledge. The text itself lives in
+#: ``api/consent.py`` and is served by ``GET /v1/consent``; this is the closed set of
+#: versions, so assent cannot be recorded to text that does not exist.
+CONSENT_VERSIONS: tuple[str, ...] = ("provider-policy-v1-d.1",)
+
+#: A free-text note about the model and runtime profile the customer expects to run. Free
+#: text on purpose: the certified profile registry with measured throughput is M6, the model
+#: band is an open measurement decision (review register §3), and offering a closed list of
+#: model ids here would present the target's *illustrative* examples as an available
+#: catalogue. Bounded, and never a place for a secret.
+MODEL_PROFILE_NOTE_MAX_LENGTH = 200
+
 _UUID_PK = UUID(as_uuid=True)
 _TIMESTAMPTZ = TIMESTAMP(timezone=True)
 _JSONB = JSONB(none_as_null=True)
+
+
+def _closed_array_check(column: str, values: tuple[str, ...]) -> str:
+    """``column`` holds only values from a closed set, no null, and no more than the set.
+
+    Three conditions rather than one, and the second and third are not redundant. ``<@``
+    alone says nothing about a **null** element -- ``ARRAY['EU', NULL] <@ ARRAY['EU']`` is
+    neither true nor false, and a check constraint admits a row whose predicate evaluates to
+    NULL -- so the null is excluded explicitly.
+
+    The third bounds the length at the size of the vocabulary. What one would rather write is
+    "and no duplicates", but PostgreSQL refuses a subquery in a check constraint and there is
+    no subquery-free way to say it, so the choice was a helper function in the schema or
+    this. This, because a repeated element denotes the same set and is a tidiness problem
+    rather than an isolation one, while an unbounded array of repeats is a storage problem
+    and is what the bound actually closes. ``db/preferences.py`` normalises every array to a
+    sorted set on the way in, so a stored duplicate means a writer that bypassed it.
+    """
+    rendered = ", ".join(f"'{value}'" for value in values)
+    return (
+        f"{column} <@ ARRAY[{rendered}]::text[] "
+        f"AND array_position({column}, NULL) IS NULL "
+        f"AND cardinality({column}) <= {len(values)}"
+    )
 
 
 def _metadata_constraints(column: str, prefix: str) -> tuple[CheckConstraint, ...]:
@@ -293,6 +365,123 @@ class Workspace(Base):
         CheckConstraint(f"slug ~ '{SLUG_REGEX}'", name="slug_format"),
         CheckConstraint("length(name) between 1 and 200", name="name_length"),
         Index("ix_workspaces_tenant_id", "tenant_id"),
+    )
+
+
+class WorkspacePreferences(Base):
+    """What one workspace's customer says they intend. Tenant-scoped, policed, not protected.
+
+    Milestone 3.2. The roadmap asks M3.2 to "capture the customer's desired policy, profile
+    and preferences for later use **without claiming a quote or an execution**", and the
+    qualification is the design: this row is a *statement*. It is not a ``JobSpec``, it
+    reserves no capacity, it prices nothing, and no admission or routing path reads it. M5
+    owns the contract fields that carry the same ideas into something binding.
+
+    **Why the foreign key is composite.** ``(workspace_id, tenant_id)`` references
+    ``workspaces (id, tenant_id)``, not ``workspaces (id)``. PostgreSQL performs
+    referential-integrity checks with row security bypassed, so a single-column reference
+    would let a row name a workspace in one tenant while carrying another's ``tenant_id``,
+    and the isolation predicate -- which compares ``tenant_id`` against the authenticated
+    context -- would then be comparing a column the writer chose. Referencing the pair makes
+    the consistency a database fact.
+
+    **Why the consent columns are derived.** ``consent_acknowledged_at`` and
+    ``consent_account_id`` are written by ``firmbatch.acknowledge_workspace_consent`` from
+    ``clock_timestamp()`` and ``firmbatch.auth_principal_id()``, and re-derived by a ``BEFORE
+    INSERT OR UPDATE`` trigger behind it, exactly as ``audit_events.occurred_at`` is, and for
+    the same reason: a caller that could state who consented and when could state them
+    wrongly. The row carries the acknowledgement **in force**; the history of
+    acknowledgements is in ``audit_events``, which is append-only and immutable.
+
+    **Why the application role cannot write it.** The role holds ``SELECT`` on this table and
+    nothing else. Every write goes through one of two ``SECURITY DEFINER`` functions in
+    migration ``0006`` -- ``state_workspace_preferences`` and
+    ``acknowledge_workspace_consent`` -- which require a CSRF-verified workspace session,
+    re-derive the caller's membership under the workspace lock, check the workspace the
+    caller's page expected against the one the session is bound to, and append the audit
+    event and write the row in one call. A statement the runtime role wrote itself is refused
+    at permission-check time, before any policy or trigger is reached.
+    """
+
+    __tablename__ = "workspace_preferences"
+
+    id: Mapped[uuid.UUID] = mapped_column(_UUID_PK, primary_key=True, server_default=text("gen_random_uuid()"))
+    workspace_id: Mapped[uuid.UUID] = mapped_column(_UUID_PK, nullable=False)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(_UUID_PK, nullable=False)
+    #: Region groups the customer wants execution confined to. Empty means none stated.
+    region_policy: Mapped[list[str]] = mapped_column(
+        ARRAY(Text()), nullable=False, server_default=text("'{}'::text[]")
+    )
+    #: Provider classes the customer excludes. Execution placement only; see
+    #: :data:`PROVIDER_CLASSES` for the one exclusion v1 cannot honour.
+    excluded_provider_classes: Mapped[list[str]] = mapped_column(
+        ARRAY(Text()), nullable=False, server_default=text("'{}'::text[]")
+    )
+    model_profile_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evaluation_intent: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'undecided'")
+    )
+    consent_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Server-derived by the trigger, like ``audit_events.occurred_at``.
+    consent_acknowledged_at: Mapped[datetime | None] = mapped_column(
+        _TIMESTAMPTZ, nullable=True, server_default=FetchedValue(), server_onupdate=FetchedValue()
+    )
+    #: Server-derived by the trigger from the authenticated context. No foreign key: the
+    #: identity plane is protected, and a reference from a policed relation into it would put
+    #: a protected table's contents behind a constraint error message.
+    consent_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        _UUID_PK, nullable=True, server_default=FetchedValue(), server_onupdate=FetchedValue()
+    )
+    created_at: Mapped[datetime] = mapped_column(_TIMESTAMPTZ, nullable=False, server_default=text("now()"))
+    updated_at: Mapped[datetime] = mapped_column(
+        _TIMESTAMPTZ, nullable=False, server_default=text("now()"), server_onupdate=FetchedValue()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["workspace_id", "tenant_id"],
+            [f"{SCHEMA}.workspaces.id", f"{SCHEMA}.workspaces.tenant_id"],
+            ondelete="CASCADE",
+            name="fk_workspace_preferences_workspace_id_tenant_id_workspaces",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            [f"{SCHEMA}.tenants.id"],
+            ondelete="CASCADE",
+            name="fk_workspace_preferences_tenant_id_tenants",
+        ),
+        UniqueConstraint("workspace_id", name="uq_workspace_preferences_workspace_id"),
+        UniqueConstraint("id", "tenant_id", name="uq_workspace_preferences_id_tenant_id"),
+        CheckConstraint(_closed_array_check("region_policy", REGION_GROUPS), name="region_policy_known"),
+        CheckConstraint(
+            _closed_array_check("excluded_provider_classes", PROVIDER_CLASSES),
+            name="excluded_provider_classes_known",
+        ),
+        CheckConstraint(
+            "evaluation_intent IN (" + ", ".join(f"'{value}'" for value in EVALUATION_INTENTS) + ")",
+            name="evaluation_intent_known",
+        ),
+        CheckConstraint(
+            "model_profile_note IS NULL OR length(model_profile_note) BETWEEN 1 AND "
+            f"{MODEL_PROFILE_NOTE_MAX_LENGTH}",
+            name="model_profile_note_bounded",
+        ),
+        CheckConstraint(
+            "consent_version IS NULL OR consent_version IN ("
+            + ", ".join(f"'{value}'" for value in CONSENT_VERSIONS)
+            + ")",
+            name="consent_version_known",
+        ),
+        # The three consent columns move together. The trigger keeps them consistent; this
+        # makes an inconsistent row unstorable even without it.
+        CheckConstraint(
+            "(consent_version IS NULL AND consent_acknowledged_at IS NULL "
+            "AND consent_account_id IS NULL) "
+            "OR (consent_version IS NOT NULL AND consent_acknowledged_at IS NOT NULL "
+            "AND consent_account_id IS NOT NULL)",
+            name="consent_complete_or_absent",
+        ),
+        Index("ix_workspace_preferences_tenant_id", "tenant_id"),
     )
 
 
@@ -1570,6 +1759,7 @@ IDENTITY_TABLES: frozenset[str] = frozenset(
 TENANT_SCOPED_TABLES: dict[str, str] = {
     Tenant.__tablename__: "id",
     Workspace.__tablename__: "tenant_id",
+    WorkspacePreferences.__tablename__: "tenant_id",
     IdempotencyRecord.__tablename__: "tenant_id",
     OutboxEvent.__tablename__: "tenant_id",
     AuditEvent.__tablename__: "tenant_id",

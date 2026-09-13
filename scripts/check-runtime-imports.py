@@ -93,6 +93,14 @@ RUNTIME_MODULES = (
     "api/settings.py",
     "api/email.py",
     "api/__main__.py",
+    # --- Milestone 3.2: workspace preferences, consent, and the customer portal -----------
+    # ``db/preferences.py`` is the Python side of the one relation 0006 adds; ``api/consent.py``
+    # holds the consent and subprocessor statement the API serves and the database validates
+    # an acknowledgement against. Both are imported by the API server, so both are held to the
+    # same rule: no migration or test tooling, and no privileged credential. The portal itself
+    # is TypeScript under ``portal/`` and is not in this graph at all.
+    "db/preferences.py",
+    "api/consent.py",
 )
 
 #: What a runtime module may not import. ``migrate`` holds the owner credential path and

@@ -139,11 +139,27 @@ jobs:
         with:
           python-version: "3.11"
 
+      # Node 24 LTS, matching what portal/package.json requires through `engines` and
+      # `engine-strict`. Pinned to a major rather than floating, so the portal gate runs on
+      # the same runtime here and on a developer's machine (Milestone 3.2).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
       # The development lock, which includes the runtime closure. The `locks` job above has
       # already proven the runtime lock stands on its own; this job needs pytest too.
       - name: Install pinned v1 test dependencies
         working-directory: firmbatch
         run: python -m pip install --require-hashes -r requirements-v1-dev-lock.txt
+
+      # `npm ci` rather than `npm install`: it installs exactly the tracked
+      # package-lock.json and fails if the lock and the manifest disagree, which is the same
+      # property --require-hashes gives the Python locks above. The verify script's portal
+      # gate FAILS rather than skips if this step is removed, so the gate cannot quietly
+      # stop running.
+      - name: Install pinned portal dependencies
+        working-directory: firmbatch/portal
+        run: npm ci
 
       # The test helpers refuse to create or drop anything on a server that is not
       # explicitly attested as disposable -- every PostgreSQL cluster has a `postgres`

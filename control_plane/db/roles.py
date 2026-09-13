@@ -381,8 +381,26 @@ IDENTITY_AUTHENTICATOR_FUNCTIONS: tuple[tuple[str, str], ...] = (
     ("complete_account_recovery", "text, text"),
 )
 
-#: The read-side functions the authenticator needs beyond its own five, derived from the
-#: call graph rather than assumed, and closed over invoker-rights calls.
+#: The two Milestone 3.2 additions to the trusted-issuer boundary, granted to the
+#: authenticator role alone and to the application role not at all -- the same split, for
+#: the same reason, as the eight above. A signed-in password change reads a stored Argon2id
+#: hash and replaces it, which is precisely the authority the M3.1 correction moved off the
+#: large runtime surface.
+#:
+#: This grants the authenticator **no capability it did not already have**: it already holds
+#: ``request_account_recovery`` and ``complete_account_recovery``, so it could already mint
+#: and consume a recovery secret and replace any account's password. What these add is a
+#: path that additionally requires proof of the *current* password (verified in Python
+#: against the hash ``password_change_lookup`` returns) and a live browser session for the
+#: account, which is strictly narrower than the recovery path beside it.
+IDENTITY_PASSWORD_CHANGE_FUNCTIONS: tuple[tuple[str, str], ...] = (
+    ("password_change_lookup", "uuid, uuid"),
+    ("change_account_password", "text, text, interval"),
+)
+
+#: The read-side functions the authenticator needs beyond its own entry points (eight at
+#: ``0005``, ten from ``0006``), derived from the call graph rather than assumed, and closed
+#: over invoker-rights calls.
 #:
 #: ``db/engine.transaction()`` opens every transaction by asserting it inherited no context,
 #: and that assertion is ``current_tenant_context()`` executing
@@ -438,21 +456,71 @@ IDENTITY_INTERNAL_FUNCTIONS: tuple[tuple[str, str], ...] = (
     ("purge_expired_unverified_accounts", "interval"),
 )
 
+#: Milestone 3.2's three functions for the application role: the two **mutation entry
+#: points** for ``workspace_preferences`` and the expected-workspace writer. The entry points
+#: are granted to the application role alone -- the same shape as ``append_audit_event``, and
+#: for the same reason. The application role holds ``SELECT`` on the relation and nothing
+#: else, so the only way a runtime role writes a preference or an acknowledgement is through
+#: these, and each one requires a CSRF-verified workspace-bound session, re-derives the
+#: caller's membership under the workspace lock, checks the workspace the caller's page
+#: expected against the one the session is bound to, decides no-op or transition under that
+#: lock, and appends its audit event and writes the row in one call (independent Milestone
+#: 3.2 review, findings 2-4 and 9).
+PORTAL_APPLICATION_FUNCTIONS: tuple[tuple[str, str], ...] = (
+    ("state_workspace_preferences", "uuid, text[], text[], text, text"),
+    ("acknowledge_workspace_consent", "uuid, text"),
+    # The expected-workspace contract's writer: the boundary records, once per workspace
+    # mutation, the workspace the page or action began under, and every ``0005`` workspace
+    # mutation compares it with the binding inside ``workspace_membership_authority``.
+    ("identity_expect_workspace", "uuid"),
+)
+
+#: Milestone 3.2's one trigger function, executable by nobody like the four above it: a
+#: trigger fires as the table owner and needs no grant, and a role that could call this one
+#: directly could stamp a consent record with any actor. After the review it is defence in
+#: depth behind the two functions above, not the boundary.
+PORTAL_INTERNAL_FUNCTIONS: tuple[tuple[str, str], ...] = (
+    ("workspace_preferences_set_consent", ""),
+)
+
+#: Every function migration ``0005`` defines, and **only** those. Milestone 3.2's six live
+#: in :data:`ALL_PORTAL_FUNCTIONS` instead, so that ``tests/test_identity_migration.py`` can
+#: keep asserting that ``0005``'s own inventory equals this one exactly -- an assertion that
+#: would have had to be loosened to "is a subset of" if a later milestone's functions were
+#: folded in here, and a subset assertion would no longer catch a function dropped from
+#: ``0005``. Migration ``0006`` **replaces the bodies** of three of these
+#: (``verify_account_email`` and ``complete_account_recovery``, to bring them under the
+#: account-plane lock order, and ``workspace_membership_authority``, to compare the recorded
+#: expected workspace with the binding) and restores all three on downgrade; their names,
+#: signatures and audience are unchanged, so they stay here.
 ALL_IDENTITY_FUNCTIONS: tuple[tuple[str, str], ...] = (
     IDENTITY_APPLICATION_FUNCTIONS + IDENTITY_AUTHENTICATOR_FUNCTIONS + IDENTITY_INTERNAL_FUNCTIONS
+)
+
+#: Every function migration ``0006`` **adds** -- six: the two password-change entry points on
+#: the trusted-issuer boundary, the three the application role holds (the two preference
+#: mutations and the expected-workspace writer), and the one trigger function nobody may
+#: execute.
+ALL_PORTAL_FUNCTIONS: tuple[tuple[str, str], ...] = (
+    IDENTITY_PASSWORD_CHANGE_FUNCTIONS + PORTAL_APPLICATION_FUNCTIONS + PORTAL_INTERNAL_FUNCTIONS
 )
 
 #: Every function this package's schema defines at head, and every one that no role may
 #: execute. Two inventories rather than six, so that the ACL sanitisation, the principal
 #: check and the hardening tests all walk the same list.
 ALL_FUNCTIONS: tuple[tuple[str, str], ...] = (
-    ALL_AUTH_FUNCTIONS + ALL_LIFECYCLE_FUNCTIONS + INTERNAL_MAINTENANCE_FUNCTIONS + ALL_IDENTITY_FUNCTIONS
+    ALL_AUTH_FUNCTIONS
+    + ALL_LIFECYCLE_FUNCTIONS
+    + INTERNAL_MAINTENANCE_FUNCTIONS
+    + ALL_IDENTITY_FUNCTIONS
+    + ALL_PORTAL_FUNCTIONS
 )
 INTERNAL_FUNCTIONS: tuple[tuple[str, str], ...] = (
     INTERNAL_AUTH_FUNCTIONS
     + INTERNAL_LIFECYCLE_FUNCTIONS
     + INTERNAL_MAINTENANCE_FUNCTIONS
     + IDENTITY_INTERNAL_FUNCTIONS
+    + PORTAL_INTERNAL_FUNCTIONS
 )
 
 
@@ -479,6 +547,7 @@ M2_2_REVISION = "0002_idempotency_and_outbox"
 M2_3_REVISION = "0003_auth_context_and_audit"
 M2_4_REVISION = "0004_lifecycle_state_machines"
 M3_1_REVISION = "0005_identity_and_membership"
+M3_2_REVISION = "0006_preferences_and_password"
 
 #: The protected relations each revision actually has. Written out per revision rather than
 #: derived from :data:`PROTECTED_TABLES`, which describes **head**: deriving it is what made
@@ -504,6 +573,9 @@ _M3_1_PROTECTED_TABLES: tuple[str, ...] = _M2_4_PROTECTED_TABLES + (
     "account_idempotency_records",
     "identity_transaction_context",
 )
+#: Milestone 3.2: the transaction-scoped expected-workspace relation, protected like the
+#: context relation it is keyed like -- no runtime role holds anything on it.
+_M3_2_PROTECTED_TABLES: tuple[str, ...] = _M3_1_PROTECTED_TABLES + ("identity_expected_workspace",)
 
 #: The columns of a framework table the application role may write, at ``0004`` and not
 #: before.
@@ -818,10 +890,11 @@ _M2_4_PLAN = RevisionPlan(
 )
 
 #: Milestone 3.1. The Milestone 2.4 plan, plus the identity plane: nine protected
-#: relations the runtime holds nothing on, and fifty identity functions -- twenty-seven
-#: granted to the application role alone (:data:`IDENTITY_APPLICATION_FUNCTIONS`), five to
+#: relations the runtime holds nothing on, and fifty-one identity functions -- twenty-five
+#: granted to the application role alone (:data:`IDENTITY_APPLICATION_FUNCTIONS`), eight to
 #: the authenticator role alone (:data:`IDENTITY_AUTHENTICATOR_FUNCTIONS`, the
-#: trusted-issuer boundary), and eighteen executable by nobody
+#: trusted-issuer boundary: five before the M3.1 correction moved the three
+#: mailbox-verification functions there), and eighteen executable by nobody
 #: (:data:`IDENTITY_INTERNAL_FUNCTIONS`). The tuples are the authority for those counts;
 #: if they disagree, the tuples are right and this comment is stale. The lifecycle writer's
 #: ownership and grants are exactly Milestone 2.4's -- the identity functions are owned by
@@ -863,6 +936,70 @@ _M3_1_PLAN = RevisionPlan(
     lifecycle_writer_column_grants=_M2_4_LIFECYCLE_WRITER_COLUMN_GRANTS,
 )
 
+#: Milestone 3.2. The Milestone 3.1 plan, plus one policed relation, one protected relation
+#: and six functions.
+#:
+#: ``workspace_preferences`` is the first customer relation added since ``workspaces``
+#: itself, and it is **policed, not protected**: it carries ``tenant_id``, it is ``FORCE``
+#: row-secured, and the application role holds **``SELECT`` on it and nothing else**. Not
+#: ``INSERT`` or ``UPDATE``: after the independent Milestone 3.2 review every write goes
+#: through the two ``SECURITY DEFINER`` mutation functions in
+#: :data:`PORTAL_APPLICATION_FUNCTIONS`, which are the authorization and audit boundary for
+#: the relation -- the same arrangement ``audit_events`` has with ``append_audit_event`` --
+#: and a runtime role that could ``INSERT`` or ``UPDATE`` the table itself could write a
+#: preference with no audit event and a consent row with no revalidated membership behind
+#: it. Not ``DELETE`` either: preferences are amended, and they leave with the workspace
+#: through the composite foreign key's cascade. Migration ``0006`` gives the table no
+#: ``DELETE`` policy, which binds the owner too -- both halves, exactly as the append-only
+#: tables do it -- and keeps the ``INSERT`` and ``UPDATE`` policies, which now bind only the
+#: owner running those two functions.
+#:
+#: ``identity_expected_workspace`` is the second relation, and it is **protected, not
+#: policed**, like the transaction-context relation whose key it shares: no runtime role
+#: holds anything on it, and its only writer and reader are the ``SECURITY DEFINER``
+#: functions ``identity_expect_workspace`` and ``workspace_membership_authority``.
+#:
+#: The authenticator gains the two password-change functions and nothing else. The
+#: application role gains the two mutation functions and the expected-workspace writer; the
+#: trigger function needs no grant to fire and receives none.
+_M3_2_PLAN = RevisionPlan(
+    revision=M3_2_REVISION,
+    tables=(
+        "tenants",
+        "workspaces",
+        "workspace_preferences",
+        "idempotency_records",
+        "outbox_events",
+        "audit_events",
+        "lifecycle_instances",
+        "lifecycle_transitions",
+        *_M3_2_PROTECTED_TABLES,
+    ),
+    common_functions=RUNTIME_AUTH_FUNCTIONS,
+    provisioning_functions=PROVISIONING_AUTH_FUNCTIONS,
+    application_functions=(
+        APPLICATION_LIFECYCLE_FUNCTIONS + IDENTITY_APPLICATION_FUNCTIONS + PORTAL_APPLICATION_FUNCTIONS
+    ),
+    authenticator_functions=IDENTITY_AUTHENTICATOR_FUNCTIONS + IDENTITY_PASSWORD_CHANGE_FUNCTIONS,
+    authenticator_common_functions=AUTHENTICATOR_READ_FUNCTIONS,
+    internal_functions=(
+        INTERNAL_AUTH_FUNCTIONS
+        + INTERNAL_LIFECYCLE_FUNCTIONS
+        + INTERNAL_MAINTENANCE_FUNCTIONS
+        + IDENTITY_INTERNAL_FUNCTIONS
+        + PORTAL_INTERNAL_FUNCTIONS
+    ),
+    application_grants=_M2_4_PLAN.application_grants + (
+        ("workspace_preferences", "SELECT"),
+    ),
+    application_column_grants=_M2_4_APPLICATION_COLUMN_GRANTS,
+    provisioning_grants=_M2_4_PLAN.provisioning_grants,
+    lifecycle_writer_functions=LIFECYCLE_WRITER_FUNCTIONS,
+    lifecycle_writer_helper_functions=LIFECYCLE_WRITER_HELPER_FUNCTIONS,
+    lifecycle_writer_grants=_M2_4_LIFECYCLE_WRITER_GRANTS,
+    lifecycle_writer_column_grants=_M2_4_LIFECYCLE_WRITER_COLUMN_GRANTS,
+)
+
 #: The revisions this module can wire. Anything else -- an older one, a newer one, a
 #: database with no version table, or a version table carrying more than one row -- is
 #: refused rather than guessed at.
@@ -871,6 +1008,7 @@ REVISION_PLANS: dict[str, RevisionPlan] = {
     _M2_3_PLAN.revision: _M2_3_PLAN,
     _M2_4_PLAN.revision: _M2_4_PLAN,
     _M3_1_PLAN.revision: _M3_1_PLAN,
+    _M3_2_PLAN.revision: _M3_2_PLAN,
 }
 
 SUPPORTED_REVISIONS: tuple[str, ...] = tuple(sorted(REVISION_PLANS))
@@ -1304,9 +1442,11 @@ def grant_authenticator_role(connection: Connection, role: str) -> None:
     :data:`AUTHENTICATOR_READ_FUNCTIONS` (``auth_tenant_id``, which
     ``db/engine.transaction()`` calls to assert a transaction inherited no context, and
     ``auth_context``, which that invoker-rights accessor calls as the caller), and
-    ``EXECUTE`` on :data:`IDENTITY_AUTHENTICATOR_FUNCTIONS`, the eight pre-authentication
-    identity entry points -- signup and the two mailbox-proof paths (email verification and
-    account recovery), plus login and session opening. Ten functions. **No table privilege
+    ``EXECUTE`` on the revision's authenticator tuple: :data:`IDENTITY_AUTHENTICATOR_FUNCTIONS`,
+    the eight pre-authentication identity entry points -- signup and the two mailbox-proof
+    paths (email verification and account recovery), plus login and session opening -- and,
+    from ``0006``, :data:`IDENTITY_PASSWORD_CHANGE_FUNCTIONS`, the two signed-in
+    password-change functions. Ten functions at ``0005``, twelve at ``0006``. **No table privilege
     of any kind**, and no column privilege: every relation behind those functions is
     protected, and the entry points are hardened ``SECURITY DEFINER`` functions owned by the
     schema owner, so the helpers they call internally execute as the owner and need no grant

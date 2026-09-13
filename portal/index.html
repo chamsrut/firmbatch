@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      No indexing: this is an authenticated application, and its URLs are not public
+      documentation. The marketing site is a separate property.
+    -->
+    <meta name="robots" content="noindex, nofollow" />
+    <!--
+      Never send this application's URLs to another origin. Verification and recovery links
+      carry a one-time token in the query string; the pages that read one replace the history
+      entry immediately, and this is the second guard against it leaving in a Referer.
+    -->
+    <meta name="referrer" content="same-origin" />
+    <title>Firmbatch</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>
+      <p>
+        The Firmbatch portal needs JavaScript. If you cannot enable it, the same operations
+        are available through the API.
+      </p>
+    </noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

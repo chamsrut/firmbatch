@@ -456,15 +456,18 @@ def _authenticator_executable(owner_engine, role: str) -> "dict[str, bool]":
 def test_the_authenticator_may_execute_exactly_its_own_functions_and_nothing_else(
     owner_engine, disposable_database
 ):
-    """The whole grant, from the catalogue: eight pre-authentication entry points plus the
+    """The whole grant, from the catalogue: ten password-and-mailbox entry points plus the
     two read-side accessors the transaction preamble needs, and not one function more.
 
-    The eight are named here rather than only counted, so that moving a function into or
-    out of the trusted-issuer boundary is a deliberate edit to this list.
+    The ten are named here rather than only counted, so that moving a function into or
+    out of the trusted-issuer boundary is a deliberate edit to this list. Milestone 3.2 made
+    exactly that edit, adding the two signed-in password-change functions and nothing else.
     """
-    expected = {name for name, _s in roles.IDENTITY_AUTHENTICATOR_FUNCTIONS} | {
-        name for name, _s in roles.AUTHENTICATOR_READ_FUNCTIONS
-    }
+    expected = (
+        {name for name, _s in roles.IDENTITY_AUTHENTICATOR_FUNCTIONS}
+        | {name for name, _s in roles.IDENTITY_PASSWORD_CHANGE_FUNCTIONS}
+        | {name for name, _s in roles.AUTHENTICATOR_READ_FUNCTIONS}
+    )
     assert expected == {
         # Signup and the two mailbox-proof paths: minting a verification or recovery secret
         # and consuming one is the mailbox-control proof itself.
@@ -477,11 +480,19 @@ def test_the_authenticator_may_execute_exactly_its_own_functions_and_nothing_els
         # The password challenge and the session it opens.
         "login_lookup",
         "open_browser_session",
+        # Milestone 3.2: the signed-in password change. It reads a stored Argon2id hash and
+        # replaces it, which is the authority the M3.1 correction moved off the application
+        # role, so it belongs on this side of the boundary and on no other. It confers
+        # nothing new on the authenticator -- the recovery pair beside it could already
+        # replace any account's password -- and it is strictly narrower, because it
+        # additionally requires proof of the current password and a live session.
+        "password_change_lookup",
+        "change_account_password",
         # The two read-side accessors db/engine.transaction()'s preamble needs.
         "auth_context",
         "auth_tenant_id",
     }
-    assert len(expected) == 10, "the authenticator's inventory changed; update this assertion deliberately"
+    assert len(expected) == 12, "the authenticator's inventory changed; update this assertion deliberately"
 
     reachable = _authenticator_executable(owner_engine, disposable_database.authenticator_role)
     executable = {name for name, allowed in reachable.items() if allowed}

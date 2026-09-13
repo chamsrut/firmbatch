@@ -87,13 +87,30 @@ class Browser:
     states exactly which credentials a request carries.
     """
 
-    def __init__(self, api: Api, cookie: str | None = None, csrf: str | None = None, email: str | None = None):
+    def __init__(
+        self,
+        api: Api,
+        cookie: str | None = None,
+        csrf: str | None = None,
+        email: str | None = None,
+        workspace: str | None = None,
+    ):
         self.api = api
         self.cookie = cookie
         self.csrf = csrf
         self.email = email
+        # The workspace the browser's page is showing. Milestone 3.2's expected-workspace
+        # contract: every workspace mutation carries it as ``X-Workspace-Id``.
+        self.workspace = workspace
 
-    def headers(self, *, mutation: bool, origin: str | None = ORIGIN, csrf: str | None | bool = True) -> dict:
+    def headers(
+        self,
+        *,
+        mutation: bool,
+        origin: str | None = ORIGIN,
+        csrf: str | None | bool = True,
+        workspace: str | None | bool = True,
+    ) -> dict:
         headers = {}
         if self.cookie:
             headers["cookie"] = f"{SESSION_COOKIE_NAME}={self.cookie}"
@@ -103,6 +120,9 @@ class Browser:
             token = self.csrf if csrf is True else csrf
             if token:
                 headers[CSRF_HEADER] = token
+            expected = self.workspace if workspace is True else workspace
+            if expected:
+                headers["x-workspace-id"] = expected
         return headers
 
     def get(self, path: str, **kw):
@@ -147,6 +167,7 @@ def owner_with_workspace(api: Api, slug: str = "http") -> tuple[Browser, str]:
     workspace_id = created.json()["workspace_id"]
     bound = browser.send("PUT", "/v1/account/workspace", {"workspace_id": workspace_id})
     assert bound.status_code == 200, bound.text
+    browser.workspace = workspace_id
     return browser, workspace_id
 
 
@@ -489,6 +510,7 @@ def test_a_wrong_csrf_token_is_never_reclassified_as_workspace_required(api: Api
     # 3. Now select the workspace. A wrong CSRF on a workspace-mode mutation is still 401.
     bound = browser.send("PUT", "/v1/account/workspace", {"workspace_id": created.json()["workspace_id"]})
     assert bound.status_code == 200
+    browser.workspace = created.json()["workspace_id"]
     forged_bound = browser.send(
         "PATCH", "/v1/workspace", {"name": "New"}, idempotency_key=key("r"), csrf=other.csrf
     )
@@ -587,6 +609,7 @@ def test_workspace_creation_is_keyed_replayed_and_bound(api: Api):
     assert browser.send("PUT", "/v1/account/workspace", {"workspace_id": str(uuid.uuid4())}).status_code == 404
     bound = browser.send("PUT", "/v1/account/workspace", {"workspace_id": workspace_id})
     assert bound.status_code == 200 and bound.json()["role"] == "owner"
+    browser.workspace = workspace_id
     workspace = browser.get("/v1/workspace")
     assert workspace.status_code == 200 and workspace.json()["slug"] == "acme" and workspace.json()["role"] == "owner"
     members = browser.get("/v1/workspace/members").json()["members"]
@@ -627,6 +650,7 @@ def test_invitations_travel_through_the_adapter_and_membership_follows(api: Api,
     # A bearer-shaped value is not an invitation token: the same neutral answer as an unknown one.
     assert invitee.post("/v1/account/invitations/accept", {"token": "fbk_" + "b" * 43}).status_code == 404
     assert invitee.send("PUT", "/v1/account/workspace", {"workspace_id": workspace_id}).status_code == 200
+    invitee.workspace = workspace_id
     assert invitee.get("/v1/workspace").json()["role"] == "member"
     members = owner.get("/v1/workspace/members").json()["members"]
     assert {row["role"] for row in members} == {"owner", "member"}
@@ -722,6 +746,7 @@ def test_a_member_issues_within_its_role_and_a_viewer_issues_nothing(api: Api):
         token = api.email.last("workspace_invitation", email).secret.reveal()
         assert person.post("/v1/account/invitations/accept", {"token": token}).status_code == 200
         assert person.send("PUT", "/v1/account/workspace", {"workspace_id": workspace_id}).status_code == 200
+        person.workspace = workspace_id
         beyond = person.post("/v1/workspace/credentials", {"scopes": ["audit:read"]}, idempotency_key=key("c"))
         within = person.post("/v1/workspace/credentials", {"scopes": ["workspace:read"]}, idempotency_key=key("c"))
         if role == "member":
@@ -729,7 +754,8 @@ def test_a_member_issues_within_its_role_and_a_viewer_issues_nothing(api: Api):
             assert person.get(f"/v1/workspace/credentials/{within.json()['credential_id']}/history").status_code == 403
         else:
             assert beyond.status_code in (403, 422) and within.status_code in (403, 422)
-            assert person.get("/v1/workspace/credentials").json() == {"credentials": []}
+            listed = person.get("/v1/workspace/credentials").json()
+            assert listed == {"workspace_id": workspace_id, "credentials": []}
 
 
 # --------------------------------------------------------------------------- CORS, inputs, errors

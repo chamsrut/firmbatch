@@ -270,7 +270,13 @@ def test_a_replacement_database_owned_by_another_identity_is_not_dropped(environ
             connection.execute(text(f'CREATE ROLE "{other_owner}" NOLOGIN'))
             connection.execute(text(f'GRANT "{other_owner}" TO CURRENT_USER WITH SET TRUE'))
             connection.execute(
-                text("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = :d"),
+                # Client backends only: an autovacuum worker on a freshly exercised database
+                # belongs to the cluster superuser, and terminating it is refused to anybody
+                # else -- which is not what this test is about.
+                text(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE datname = :d AND backend_type = 'client backend'"
+                ),
                 {"d": handle.database},
             )
         # Only the per-run owner can remove the original; the admin cannot.
@@ -337,7 +343,13 @@ def test_a_role_replaced_under_the_same_name_is_not_dropped(environment, admin_e
     try:
         with admin_engine.connect() as connection:
             connection.execute(
-                text("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = :d"),
+                # Client backends only: an autovacuum worker on a freshly exercised database
+                # belongs to the cluster superuser, and terminating it is refused to anybody
+                # else -- which is not what this test is about.
+                text(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE datname = :d AND backend_type = 'client backend'"
+                ),
                 {"d": handle.database},
             )
         drop_disposable_objects(

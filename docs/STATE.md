@@ -14,13 +14,16 @@ Five labels, kept strictly apart:
 - **NOT VERIFIED** — asserted, expected, or reasoned about, with no captured run behind it.
   Documentation, comments, and passing-in-the-moment are not evidence.
 
-Last updated: 2026-09-09, on `feat/milestone-3-1-identity-membership` from `main` at
-`116b5ee` (Milestone 3.0, PR #8), with **Milestone 3.1 implemented, tested and committed at
-`f92ecb9`**, after two independent review correction passes whose ten findings and two gaps
-(Codex) and six findings (GPT-5.6 Sol) are all corrected, and a third, clean independent
-review (GPT-5.6 Sol at xhigh effort) that verified all six of those findings as fixed and
-raised no actionable regression — see the three M3.1 review sections below. The branch is
-**ready for pull request and merge**; it is not merged, not deployed and not VERIFIED LIVE.
+Last updated: 2026-09-11, on `feat/milestone-3-2-customer-portal` from `main` at
+`87159d5` (Milestone 3.1, PR #9), with **Milestone 3.2 — the customer-only product portal —
+implemented and tested in the working tree, corrected against an independent review's
+eleven findings, and not committed**. **Milestone 3.1 is merged**
+at `87159d5` (PR #9, implementation commit `f92ecb9`, status commit `c841f77`), after two
+independent review correction passes whose ten findings and two gaps (Codex) and six findings
+(GPT-5.6 Sol) are all corrected, and a third, clean independent review (GPT-5.6 Sol at xhigh
+effort) that verified all six of those findings as fixed and raised no actionable regression —
+see the three M3.1 review sections below. M3.2 is **not committed, not merged, not deployed
+and not VERIFIED LIVE**.
 Milestone 1 merged at
 `6b4f341`; M2.1 merged at `712b51a` (implementation commit `521870b`, with the bootstrap
 trust-boundary correction `78eae1d` — see the CI correction section below); M2.2 merged at
@@ -53,9 +56,10 @@ genuinely remaining choices in `docs/architecture/rev-d-decision-register.md`, a
 decision in ADR 0008. **Nothing rev D or D.1 adds is implemented.** The operator capacity
 agent remains separate operator-side software, now scheduled for Phase P (after a supplier
 signs) rather than Milestone 6. **Milestone 3.1 — membership-bound identity, sessions and
-credential issuance — is implemented, tested and independently reviewed at `f92ecb9`, ready
-for pull request and merge, and not merged, not deployed and not VERIFIED LIVE.** See the
-"CURRENT — Milestone 3.1" section and PLANNED below.
+credential issuance — is merged at `87159d5` (PR #9); it is not deployed and not VERIFIED
+LIVE.** **Milestone 3.2 — the customer-only product portal — is implemented and tested on
+`feat/milestone-3-2-customer-portal` and is not committed** (ADR 0010). See the two CURRENT
+sections and PLANNED below.
 
 ---
 
@@ -1211,7 +1215,7 @@ capture adapter and a production adapter that raises, and no HTML.
 
 | Path | What |
 | --- | --- |
-| `control_plane/db/migrations/versions/0005_identity_and_membership.py` | New forward migration after `0004`: the nine tables, two composite types, the widened actor constraints, six columns and two constraints on `auth_bindings`, the seven-shape `secret_shape`, fifty functions, four triggers, and the revised `bind_authenticated_context`; a downgrade that restores the `0004` catalogue exactly |
+| `control_plane/db/migrations/versions/0005_identity_and_membership.py` | New forward migration after `0004`: the nine tables, two composite types, the widened actor constraints, six columns and two constraints on `auth_bindings`, the seven-shape `secret_shape`, fifty-one functions (twenty-five for the application role, eight for the authenticator, eighteen internal), four triggers, and the revised `bind_authenticated_context`; a downgrade that restores the `0004` catalogue exactly |
 | `control_plane/db/models.py`, `security/authorization.py`, `db/roles.py` | Models and constants for the nine tables; nine protected resource rules; the `0005` revision plan (`M3_1_REVISION`) with the identity function inventories |
 | `control_plane/db/accounts.py`, `membership.py`, `credentials.py` | The Python wrappers: signup, verification, recovery, login, sessions; workspaces, binding, memberships, invitations; issuance, rotation, revocation, listing, last use |
 | `control_plane/security/passwords.py`, `permissions.py`, `secrets.py` | Argon2id policy; the closed role model and the issuable subset; the five identity secret prefixes and the appended shape |
@@ -1494,8 +1498,9 @@ evidence under this repository's standard.
 
 ### Not implemented in M3.1 — deliberately
 
-The customer application and any HTML (M3.2); password change while signed in (needs M3.2's
-re-authentication design); deployment, TLS, the separated issuer credential and real secrets
+The customer application and any HTML (M3.2 — **now built**, see the Milestone 3.2 section
+below); password change while signed in (needs M3.2's re-authentication design — **now
+built**, ADR 0010 decision 4); deployment, TLS, the separated issuer credential and real secrets
 delivery (M3.3); a real email provider, rate limiting, metrics (M8, a subset pulled forward
 by M3.3); account deletion and archival (no milestone has taken the retention decision);
 account-level events in a tenant audit trail (signup, verification, recovery and session
@@ -1511,6 +1516,443 @@ can read one Argon2id hash per address it names — a stated limitation, not a s
 confined to the narrow authenticator principal. Starlette 1.6 emits a deprecation warning
 preferring `httpx2` for its test client; the pinned `httpx` 0.28.1 works and the warning is
 informational.
+
+---
+
+## CURRENT — Milestone 3.2 the customer-only product portal — **implemented and tested on `feat/milestone-3-2-customer-portal`, not committed**
+
+Built on the branch from `main` at `87159d5` (Milestone 3.1, PR #9). **Not committed, not
+merged, not deployed, and not VERIFIED LIVE.** ADR 0010 records the design, and the
+independent review's eleven findings corrected on 2026-09-10 (see "Independent review
+corrections" below). Migrations `0001`–`0005` are unchanged history, byte for byte;
+`0006_preferences_and_password` is where the whole schema change lives. It replaces the
+bodies of three of the identity plane's fifty-one functions with `CREATE OR REPLACE` —
+`verify_account_email` and `complete_account_recovery`, brought under the account-plane lock
+order, and `workspace_membership_authority`, brought to compare the recorded expected
+workspace with the binding — restoring all three verbatim on downgrade;
+`bind_authenticated_context`, the other forty-seven and every M3.1 policy are untouched.
+
+**What it is.** The authenticated customer application, `portal/`: TypeScript, Vite and
+React, with **React and ReactDOM as its only runtime packages** and a development toolchain
+of Vite, TypeScript, Biome, Vitest with jsdom and Testing Library (`portal/package.json` is
+the authority for the exact list), served **same-origin with the API** behind a proxy.
+Nineteen registered routes across five journeys — signup and email confirmation, sign-in and
+recovery, the first workspace, the workspace itself (details, team, stated policy, API
+credentials) and the account (identity, password, sessions): six of them public, two for the
+first workspace, two account pages in the shell and nine inside a workspace, four of which
+(Evaluation, Jobs, Results and Billing) are honest, unfabricated placeholders — and a
+twentieth page, not found, as the fallback for every other path. Behind it, migration `0006`
+adds two relations (the tenant-plane `workspace_preferences` and the transaction-scoped
+`identity_expected_workspace`), one trigger and six functions, replaces the bodies of three
+`0005` functions, and the API gains five route registrations on four paths.
+
+| Path | What |
+| --- | --- |
+| `portal/src/api/client.ts` | The one place the portal talks to the API: `/v1` paths only (a protocol-relative or absolute URL is refused before `fetch`), CSRF on every cookie-authenticated mutation read fresh from the cookie, 16 KiB bodies bounded before they are sent, refusals mapped through a closed table so a server-supplied code is never rendered raw, a deadline helper that aborts a request through its own signal and its operation's and is released on settlement, and no logging anywhere |
+| `portal/src/lib/csrf.ts`, `lib/redirect.ts` | Reading the CSRF cookie (prefixed name preferred, so cookie tossing cannot displace it); and the whitelist of destination *shapes* a `next=` parameter may take — applied to the caller's string and again to the destination rebuilt from the parser's result, so a dot-segment climb such as `/..//evil.example`, which the parser normalises to the protocol-relative `//evil.example`, is refused rather than returned |
+| `portal/src/auth/session.tsx` | Who is signed in and what the **server** last said they may do. Nothing is persisted; the role is re-read from the bound workspace, not from the membership list. A replacement session is adopted synchronously from the response that opened it, before any read under it, and a refusal of the current session while a replacement is in flight is deferred to that request's outcome; account loads are sequenced and coherent (profile and workspace detail must agree, or the set is re-read once and dropped); a workspace selection publishes the binding the mutation returned at once and reads the rest separately. The one sign-out operation lives here: single-flight across every control, fenced to the session generation it began under, and it forgets the session only after a successful logout, or after one bounded account read following a failed logout confirms the session is gone. Every route's request carries a *lease* and a refusal reaches the session only through `reconcile`, which clears on a safe read's definitive `401`, checks a mutation's `401` with one bounded read, re-reads authority on `403`, and drops an obsolete answer; there is no unfenced `forget` |
+| `portal/src/lib/one-time-token.ts` | Verification, recovery and invitation tokens: captured once by the router before any page renders, scrubbed from the URL, held in memory only, submitted at most once at a time, released when used |
+| `portal/src/lib/requests.ts` | The page request lifecycle: a ticket per request carrying the load sequence, the session lease and the workspace the page began under, so only the newest load publishes and a completion after the page moved on is inert; and the keyed single flight every page read goes through, so a `StrictMode` replay issues each mount-time read once |
+| `portal/src/ui/`, `portal/src/routes/` | The shell, the shared components and the twenty pages, grouped by journey into seven route modules; `App.tsx` holds the route tables and also owns focus after navigation |
+| `control_plane/db/migrations/versions/0006_preferences_and_password.py` | `workspace_preferences` (composite FK, `FORCE` RLS, three policies, six check constraints, one trigger kept as defence in depth), the transaction-scoped `identity_expected_workspace` relation, and six functions: `state_workspace_preferences` and `acknowledge_workspace_consent` — the mutation boundary the application role holds — `identity_expect_workspace`, the writer of the expected workspace the boundary records once per workspace mutation, the consent trigger, and the two password-change entry points on the trusted-issuer boundary. It also states the account-plane lock order and replaces `verify_account_email` and `complete_account_recovery` under it, and replaces `workspace_membership_authority` to compare the recorded expectation with the binding under the workspace lock before any workspace mutation writes — restoring `0005`'s text for all three on downgrade |
+| `control_plane/db/preferences.py`, `control_plane/api/consent.py` | The Python side of the relation — reads under the `SELECT` policy, writes through the two functions, every write naming the workspace the page loaded for; the versioned consent and subprocessor statement, served by `GET /v1/consent` |
+| `control_plane/api/app.py`, `settings.py` | Five new routes; `workspace_id` required on both preference mutations, the `X-Workspace-Id` header required on every workspace mutation (recorded in the transaction once, after the bind and before the handler) and `409 workspace_mismatch` when either is not the bound workspace; `workspace_id` in the envelope of every workspace read; a login whose password moved mid-flight is `401 invalid_credentials`; the readable CSRF cookie set beside the session cookie and cleared with it |
+| `control_plane/db/accounts.py`, `roles.py`, `models.py`, `security/authorization.py` | `change_password`; `WorkspaceBindingMismatch` for SQLSTATE `FB014`; the `0006` revision plan — the application role holds `SELECT` alone on the relation, the two mutation functions and the expected-workspace writer, and nothing on `identity_expected_workspace` — with four new function inventories and the protected-table tuple; the relation's model and four closed vocabularies; its `ResourceRule`, and the protected one for `identity_expected_workspace` |
+| `scripts/verify-repository.sh`, `.github/workflows/ci.yml` | One new gate and its CI prerequisites — **both protected files, both changed with the human's explicit prior approval** |
+
+### What M3.2 proves
+
+Against PostgreSQL 16, and in the portal's own suite:
+
+**Isolation and authorization.** `workspace_preferences` is on the ordinary M2.3 model, not
+the protected plane: `FORCE` row-level security (which binds the schema owner too — an owner
+`INSERT` with no context is refused by the policy before a constraint is reached), a `SELECT`
+policy requiring `workspace:read`, `INSERT`/`UPDATE` policies requiring `workspace:write`,
+and **no `DELETE` policy and no `DELETE` grant**. **The application role holds `SELECT` on
+the relation and nothing else**: an `INSERT`, `UPDATE` or `DELETE` it writes itself is refused
+at permission-check time even from an owner's CSRF-verified workspace session, before any
+policy or trigger is reached. Two tenants cannot see or affect one another, and asking about
+the other's workspace by id returns the same shape as "stated nothing" rather than an
+existence oracle. A removed member reads nothing. The composite foreign key refuses a row
+naming one tenant's workspace while carrying another's tenant id — tested as the owner with
+`FORCE` briefly lifted, because a referential check bypasses row security and that is
+precisely why the *pair* is referenced.
+
+**The mutation boundary.** Every write goes through `state_workspace_preferences` or
+`acknowledge_workspace_consent`, two `SECURITY DEFINER` functions granted to the application
+role alone, and a static scan of every function body in the schema proves they are the only
+two that write the relation. Each requires a workspace-bound session **with its CSRF secret
+verified** (a read-bound, `csrf=False` transaction is refused, in Python and in raw SQL alike),
+re-derives the caller's membership and role under the workspace lock (a member demoted after
+its session bound is refused; a removal that overlaps a bound session is proven to wait for
+it), compares the workspace the page loaded for with the bound one, decides no-op or
+transition under the lock, and appends the audit event and writes the row in one call —
+proven both ways with an injected failure: a row that cannot be written takes its event down
+with it, and an event that cannot be appended leaves the row untouched. One successful
+mutation produces exactly one audit event with the session actor, and a repeat produces none.
+
+**The expected workspace.** Both mutations name the workspace the page loaded its form for.
+A forged identifier, another workspace of the same account and another tenant's workspace are
+one refusal with one message; a form loaded for workspace A whose shared session another tab
+re-bound to B is refused, and neither A nor B changes; a save that names the bound workspace
+succeeds. A switch that overlaps an in-flight save is proven through `pg_locks` to wait for
+it, the save lands on the workspace it named, and the next save from the stale page is
+refused. At the HTTP boundary an absent or malformed `workspace_id` is `422`, a mismatch is
+`409 workspace_mismatch`, and the two-tab scenario is driven end to end.
+
+**Derived consent.** `acknowledge_workspace_consent` records the server's current version,
+the bound account and `clock_timestamp()` — proven with the trigger disabled, so the
+derivation does not depend on it; the trigger re-derives the same values behind the function
+as defence in depth. Re-acknowledging the version in force is a no-op that appends no audit
+row; two simultaneous acknowledgements serialise on the workspace lock and leave one row, one
+timestamp and one event; an unpublished version is refused in Python, in the function and by
+the check constraint; and an ordinary preference edit never re-dates an acknowledgement. The
+history is `audit_events`, which is append-only.
+
+**The password change and the account-plane lock order.** One transaction verifies, replaces
+by compare-and-swap against the hash it verified, supersedes every outstanding token, advances
+the security epoch, revokes every membership-bound credential and **every** browser session,
+and mints the replacement afterwards. A wrong current password changes nothing and leaves the
+asking session intact. A foreign, revoked or unknown session is one neutral refusal. Every
+account-plane writer now takes the account row `FOR UPDATE` first (then tokens, passwords,
+bindings, sessions), which `0006` states once and applies to the change and to the two
+replaced `0005` bodies. Under real overlap — one transaction holding the account row, the
+others proven through `pg_locks` to be waiting on it with their token rows still unlocked —
+two changes leave one winner; a recovery waits and returns `False` with its token superseded
+rather than consumed; a login that verified the old password is refused when the epoch moved
+under the lock; and a login, a recovery and a second change all waiting at once each lose
+cleanly. No `40P01` in any outcome, one epoch increment, one live session, and no transaction
+or pooled connection left open. The application role can call neither password function.
+
+**The CSRF cookie.** Set at login and at password change with the session's own lifetime,
+`SameSite=Strict`, `Path=/`, no `Domain`, **not** `HttpOnly`, `__Host-` prefixed exactly when
+it is `Secure`; cleared with the session cookie at logout. It survives a reload and is shared
+by a second tab **without rotating**, which is the gap M3.1 left. The boundary never compares
+it with the header: setting cookie and header to the same forged value is still refused,
+because the header is verified inside PostgreSQL against the session's stored fingerprint.
+
+**The customer boundary.** The complete route inventory contains no path naming a supplier,
+operator, agent, capacity, pool, bridge, budget, settlement, window, offer, certification,
+qualification, reconciliation, provider, spend, internal or admin surface, and every path is
+under `/v1/account`, `/v1/workspace`, `/v1/api`, `/v1/health` or `/v1/consent`. No issuable
+scope reaches a reserved non-customer domain. The portal's own source is scanned for the same
+terms. **The operator capacity agent appears nowhere**: not in the navigation, the API
+surface, the settings, the user model or the source.
+
+**Secrets.** The portal touches `localStorage`, `sessionStorage` and `indexedDB` **not at
+all** — the test setup makes any access throw, and the source is scanned as well. There is no
+`console` call, no `innerHTML`, no `dangerouslySetInnerHTML`, no `eval`. A newly issued
+credential is shown once, is gone from the DOM when dismissed, and reaches no URL, cookie,
+storage or later request; a replay renders "already issued" rather than an empty box. No
+Milestone 3.2 response carries anything shaped like a secret.
+
+**Journeys and states.** Signup, verification-resend and recovery-request show the *same*
+confirmation for a known and an unknown address, so the portal does not hand back the oracle
+the API's neutral `202` withholds. A one-time token is moved out of the URL by the router
+before any page renders — captured once, scrubbed with `replaceState`, held in memory only —
+and under `StrictMode`, with effects replayed, a verification is submitted exactly once, a
+transport failure keeps the token for an explicit retry, a `400` is a spent link, a reload
+loses the token and the page says to open the link again, and the token appears in exactly
+one request and in no cookie, storage or URL. The invitation page is public: signed out, it
+keeps the token and sends the visitor to sign in or sign up with `/accept-invitation` as the
+checked continuation, then accepts in the same mounted application; signed in, it accepts
+directly; a spent or mis-addressed token is one neutral sentence. An off-site `next=` is not
+followed — nor one that is a path by every syntactic rule and protocol-relative once the
+parser has normalised its dot segments — and a safe one is. A verified account with no membership keeps its session and is
+offered the first-workspace page. A membership revoked underneath an open page leads to the
+picker, not to an error. A `403` during an action is believed: the page re-reads its
+authority and re-renders as the new role. **A sign-out is a server outcome**: the session is
+forgotten locally only after a successful logout, or when one safe account read made after a
+failed logout answers `401`. A `401` from the logout itself proves nothing — a wrong CSRF
+secret on a live session gets the same neutral one, with no cookie deleted — so after any
+failed, timed-out or lost logout the portal reads the account exactly once, never retries the
+logout on its own, and keeps the customer signed in, on the same page, told so next to a
+button that retries, whenever that read finds the session live or cannot settle it. **And it
+is one operation**, owned by the session provider rather than by a button: registered
+synchronously by the first call so that the masthead and the security page clicked together
+send one logout and show one pending state; fenced to the session generation it began under,
+so that a logout or read still pending when a password change adopts a replacement session
+is aborted and applies nothing to the new session — no clearing, no navigation, no error;
+and bounded, the logout at 15 s and the validity read at 10 s, a read past its deadline
+being `unknown` with authentication retained and every control restored. **The same fence
+covers every page.** Each request captures a lease when it starts, and its answer counts only
+while that lease is current: a safe read's definitive `401` under the current session clears
+it and the page is remembered; a mutation's `401` is ambiguous and is checked with one
+bounded read before anything is cleared; a `401` that is a verdict on a password touches
+nothing; a `403` re-reads authority; and an answer to a request begun under a session that a
+login or a password change has since replaced — a late `401`, a late `500`, a late success —
+is dropped without a message, a navigation or a clearing.
+
+**Accessibility.** One `main` landmark and a skip link that is the first focusable thing; a
+named navigation landmark; every input labelled by a real `<label for>`; an invalid field
+carrying `aria-invalid` with its message tied by `aria-describedby`; every disabled
+permission control carrying its *reason*, associated with the control; failures announced in
+an `alert` region and confirmations in a `status` one; a dialog that is modal, labelled,
+takes focus, keeps `Tab` inside itself, closes on `Escape` and returns focus to its opener;
+captioned tables with `scope="col"`; forms submittable from the keyboard alone; and **focus
+that follows the route**: after every actual route change made from the keyboard, focus
+lands on the new page's `h1` — including a page whose heading appears only after its data
+loads — and it is left alone on the first render and on a re-render that did not change the
+route. Every public page's title is its `h1`; the wordmark is not a heading.
+
+**Verification on the branch, 2026-09-12, after the review corrections, the centralised
+sign-out operation, the session lease on every route, the clean-context corrections and the
+final review's two P3 corrections, against the attested local PostgreSQL 16.15 cluster:**
+`./scripts/verify-repository.sh` reports **15
+gates passed, 0 failed** with **167** required files in the layout gate — fourteen gates and
+119 files before this slice; the corrections changed the script in one approved way, a
+required-file entry for `portal/src/lib/one-time-token.ts`, and touched no gate. The
+PostgreSQL foundation suite is **2,188 passed, 1 skipped** of 2,189 collected (the one skip
+is the pre-existing, environment-dependent REPLICATION skip): a net increase of **55** over
+the 2,133 reported before the review, all in the four M3.2 modules (the mutation boundary,
+the expected workspace on every workspace route, the lock-order overlap tests and the
+restore contract), and of **151** over M3.1's 2,037. The portal suite is **392 tests across
+10 files** (65 added on 2026-09-12 for the final review's redirect correction — the
+dot-segment corpus through every redirect helper, the rebuilt-destination check, the
+router's `navigate`, a rendered `Link` and the sign-in journey — after 88 added for
+the sign-out operation — its outcomes, single flight, the generation fence, deadlines and
+cleanup — the session lease on every route, the replacement barrier, the ordered and coherent
+refresh, the binding-first workspace switch, the expected workspace on every page, the page
+request lifecycle, mount-time reads under `StrictMode`, one-time tokens under `StrictMode`,
+the invitation flow and focus after navigation), run by the new gate together with `biome ci`,
+`tsc --noEmit` and a production `vite build`, on Node 24.21.0 LTS. `git diff --check` is
+clean; the cluster carries no `firmbatch_test_*` database, role or session afterwards. **No
+evidence artifact was captured**; these are reported results at this working-tree state, not
+VERIFIED LIVE. The figures reported on 2026-09-09 (2,133 passed; 239 portal tests) are
+HISTORICAL to the pre-review tree, and the 327 portal tests reported on 2026-09-11 are
+HISTORICAL to the tree before the final review's corrections.
+
+**The new gate is fail-closed, and that was checked rather than assumed.** With
+`portal/node_modules` moved aside, the portal gate fails, naming `cd portal && npm ci` as the
+fix, and the script exits non-zero. The figure first recorded here, "13 gates passed, 2
+FAILED", came from a run in which `FIRMBATCH_TEST_DATABASE_URL` had also been emptied to
+shorten the experiment, so its second failure was the foundation-suite gate refusing to skip,
+not a second effect of the missing dependencies; the portal gate is the only gate that
+consults `portal/node_modules`, so that experiment on its own is one failure of fifteen. An
+unrun test suite reports the same green as a passing one, which is why the gate does not
+skip.
+
+**Six existing test modules changed, each because a head, an inventory or a contract
+moved**, and no assertion was weakened: `test_migrations.py` and `test_identity_migration.py`
+(the head is `0006`, and both ladder round-trips gain `0006` as a rung, so they now cover one
+more revision in both directions; `test_migrations.py` also asserts that the head plan names
+the protected `identity_expected_workspace`); `test_identity_protection.py` (the
+authenticator's named inventory grows from ten functions to twelve — the deliberate-edit gate
+M3.1 built for exactly this, with the two additions named and justified in place);
+`test_protected_auth_state.py` (`identity_expected_workspace` joins the parametrised
+protected-write refusals); `test_api_http.py` (its browser carries the `X-Workspace-Id`
+header every workspace mutation now requires); and `test_destructive_safety.py` (its two
+terminate steps target client backends only — the autovacuum flake noted below).
+
+### The two defects this milestone's own tests found
+
+1. **The client demanded a CSRF token on the pre-authentication routes.** Signup, verification,
+   recovery and login are not cookie-authenticated and carry no CSRF secret — there is no
+   ambient authority for one to defend and no session secret in existence yet. The first
+   signup test failed with "your session has ended", which is exactly what it should have
+   said. Corrected with a **closed, auditable list** of the six exempt paths checked in the
+   client rather than a flag each call site passes, because a flag can be forgotten at a new
+   call site and the failure mode of forgetting it is a cookie-authenticated mutation that
+   silently stops proving where it came from.
+2. **A failed team action had its explanation erased by the reload that followed it.** The
+   page reloads its lists after a failure so the customer sees where things stand, and the
+   reload cleared the same error state. Corrected by separating "the thing you asked for did
+   not happen" from "these lists could not be fetched", which have different lifetimes.
+
+A third correction was made without a test failing: a consent-service outage used to reject
+the whole preferences load, leaving the form rendered with **empty values that were not the
+customer's** — the state in which somebody presses Save and overwrites their own settings with
+blanks. The two halves now settle independently, and Save is refused outright until the
+current settings have actually been read.
+
+### Independent review corrections (2026-09-10)
+
+An independent review of the branch raised eleven findings, all accepted as actionable and
+reproduced. Every one is corrected at its root, with a test that fails without the
+correction, and migrations `0001`–`0005` are byte-identical to `main` before and after:
+
+1. **Stale workspace form.** Both preference mutations carry the workspace the page loaded
+   for; the database compares it with the bound workspace under the workspace lock and
+   refuses a mismatch with one neutral code (`FB014` → `409 workspace_mismatch`); the portal
+   says nothing was saved and reloads for the current workspace. ADR 0010 decision 7.
+2. **Application-role DML.** The application role's `INSERT, UPDATE` on
+   `workspace_preferences` are gone; it holds `SELECT`. Direct DML is refused even from an
+   owner's CSRF-verified session.
+3. **Read-bound contexts.** Both mutation functions require the CSRF-verified workspace
+   session first; a `csrf=False` transaction is refused in Python and in raw SQL.
+4. **The trigger as boundary.** The two `SECURITY DEFINER` functions are the authorization
+   and audit boundary; the trigger is defence in depth, and the functions are proven to
+   derive the consent actor and time with it disabled. No unrelated function writes the
+   relation.
+5. **Password-change/recovery deadlock.** One documented account-plane lock order in
+   `0006`; `complete_account_recovery` and `verify_account_email` replaced under it (restored
+   verbatim on downgrade); `change_account_password` reordered; real two-connection and
+   four-connection overlap tests with `pg_locks` evidence, no `40P01`, neutral mapping, no
+   partial state, no leaked transaction or connection. ADR 0010 decision 4.
+6. **Logout correctness.** Local state is cleared only after a successful logout, or when
+   one safe account read made after a failed logout confirms the session is gone. A logout
+   `401`, `5xx`, network failure, timeout or lost response leads to that single read; a live
+   or uncheckable session keeps the customer signed in with an actionable message and a
+   retry, and nothing retries the logout on its own. Corrected three times: the first
+   correction still trusted a logout `401`, and the review's P2 follow-up reproduced a wrong
+   CSRF secret on a live session receiving that same `401` with no cookie deleted and the
+   account read still succeeding; the third (2026-09-11, the three remaining logout
+   findings) moved the sign-out into the session provider as one generation-fenced,
+   single-flight operation — an answer pending when a replacement session is adopted is
+   aborted and applies nothing, two controls clicked together send one logout, and the
+   validity read runs under a real deadline that yields `unknown` with authentication
+   retained; and the fourth (2026-09-11, the session-generation race) extended the fence to
+   every route — a lease on every request, no unfenced `forget`, a mutation `401` never
+   clearing on its own, a safe read's `401` clearing only the matching current session, and
+   an answer to a replaced session dropped whatever it says. ADR 0010 decision 9.
+7. **StrictMode one-time tokens.** Tokens are captured once by the router, scrubbed, held in
+   memory, submitted at most once at a time, retried explicitly, released when used. ADR
+   0010 decision 8.
+8. **Signed-out invitation flow.** `/accept-invitation` is public, keeps the token, continues
+   through sign-in or sign-up with a checked route, and accepts in the same mounted
+   application. ADR 0010 decision 8.
+9. **Audit atomicity.** Each mutation appends its event and writes its row inside one
+   function call; injected failures on either side roll back the other; a repeat appends
+   nothing; simultaneous same-version acknowledgements leave one event.
+10. **Navigation focus.** Focus moves to the new page heading after every actual route
+    transition and never otherwise. ADR 0010 decision 10.
+11. **Documentation counts.** ADR 0010, this file, `docs/tasks/current.md` and
+    `portal/README.md` name the runtime packages and tool categories rather than counting
+    them; `portal/package.json` is the authority.
+
+One further mapping was corrected on the way: a login whose password verified against a hash
+a change or recovery replaced while Argon2 ran is `401 invalid_credentials`, not the
+boundary's generic `404`.
+
+### Clean-context review corrections (2026-09-11)
+
+A second, clean-context review of the branch raised eight findings, accepted as actionable
+and corrected as one design — every answer fenced to what asked for it (ADR 0010 decision
+11). Each has a regression test that fails without the correction; migrations `0001`–`0005`
+stay byte-identical to `main`.
+
+1. **Session replacement barrier (F1).** The provider adopts a replacement session
+   synchronously from the response that opened it (`adoptFrom`, used by sign-in and the
+   password change), before any read under it: the generation moves, pending work of the
+   former session is disowned and aborted, and a refusal of the current session that arrives
+   while the replacing request is in flight is deferred and settled by that request's outcome.
+   Both reproduced schedules — the old Security-page `401` after the replacement response and
+   before it — end with the replacement held, no detour through sign-in and the page's
+   success kept. A replacement whose read fails is a live session with a retry.
+2. **Atomic refresh and workspace switching (F2, F3).** Account loads are sequenced and only
+   the latest publishes; a load reads again, once, when its profile and its workspace detail
+   name different workspaces, and drops the set otherwise, so A's binding with B's role is
+   unpublishable. A selection publishes the binding the mutation returned at once and
+   navigates; its supplementary read is separate, and its failure is a retryable load problem,
+   never "workspace unavailable".
+3. **Expected workspace everywhere (F4).** Every workspace mutation carries `X-Workspace-Id`;
+   the boundary records it once per transaction through the new `identity_expect_workspace`
+   function into the new transaction-scoped `identity_expected_workspace` relation, and
+   migration `0006` replaces `workspace_membership_authority`'s body to compare it with the
+   binding under the workspace lock before any of the ten workspace mutations writes. A stale
+   page, a forged identifier and another tenant's identifier are one neutral `409`, with no
+   write and no audit event; a missing header is `422`. Every workspace read names the
+   workspace it describes, and a page never renders an answer for another workspace.
+4. **Page request lifecycle (F5, F6).** Every page request takes a ticket; only the newest
+   load publishes, ends the loading state or reports; an action publishes only while the page,
+   session and workspace it began under are current; completions after leaving a page are
+   inert, including navigation.
+5. **StrictMode and hygiene (F7, F8).** Page reads and the provider's own reads are keyed
+   single-flight, so a mount effect replayed under `StrictMode` issues each read once while a
+   reload after an action and a return to a route read afresh; the invitation page takes its
+   ticket before its request; the account page says a confirmation link is on its way only
+   after the server accepted the request; the ineffective dynamic import is gone and the
+   production build is warning-free; concurrent validity reads coalesce; `clearWorkspace`,
+   which had no production caller, is removed; the source scan is supporting evidence only.
+
+One flake was found on the way and closed: two `tests/test_destructive_safety.py` steps
+terminated every backend on the disposable database, and an autovacuum worker there belongs
+to the cluster superuser, whose processes a non-superuser may not terminate. Both now
+terminate client backends only.
+
+### Final review corrections (2026-09-12)
+
+The final independent review of the corrected tree left two P3 findings, both accepted.
+
+1. **A `next=` destination could normalise to a protocol-relative URL.** `safeDestination`
+   checked the caller's string syntactically (one leading `/`, no `\`, no control
+   character), resolved it against a throwaway origin, confirmed the origin, and returned the
+   destination rebuilt from the parser's parts. The WHATWG parser normalises dot segments,
+   so `/..//evil.example`, `/.//evil.example` and `/a/..//evil.example` — paths by every
+   syntactic rule, and local by the parser's own account — came back as `//evil.example`,
+   which is protocol-relative and which a browser sends off-site. The router's `navigate`
+   happened to re-check the string it was handed, so a sign-in redirect through
+   `destinationFromSearch` was refused on that second pass (and a direct `navigate` of such a
+   value threw a `SecurityError` at `pushState`); a `Link` rendered the value as its `href`,
+   and `destinationQuery` encoded it. The rebuilt destination is now checked again, with
+   the same syntactic rule and a second parse that must land on the same origin, path, query
+   and fragment, and it is returned only if that form passes as well. The three cases, their
+   percent-encoded and query-carrying variants, are in the hostile corpus, asserted through
+   `safeDestination`, `destinationFromSearch`, `destinationQuery`, the router's `navigate`,
+   a rendered `Link` and the sign-in journey; against the previous module, fourteen of the
+   fifteen new tests fail (the journey passes either way, for the reason above). The
+   consumers' own checks are unchanged.
+2. **Factual descriptions reconciled with the implementation.** Every count below was
+   re-derived from migration `0006`, the route tables, the staged diff and the verification
+   script rather than copied: `0006` adds **two** relations (`workspace_preferences` and
+   `identity_expected_workspace`), **one** trigger and **six** functions, replaces **three**
+   `0005` bodies, grants **three** functions to the application role, and puts **six** check
+   constraints on `workspace_preferences`; the portal registers **nineteen** routes and
+   renders **twenty** pages (the not-found fallback is the twentieth) from **seven** route
+   modules; the API gains **five** route registrations on four paths; **six** existing
+   foundation-suite modules changed, named above; the identity plane `0005` defined has
+   **fifty-one** functions (the M3.1 comment in `db/roles.py` said fifty, split
+   twenty-seven, five and eighteen; the tuples say twenty-five, eight and eighteen). Corrected
+   in `db/roles.py` (the five-function, two-replacement, ten-function and fifty-function
+   wording), migration `0006` (comment only: the audience inventory and the sanitiser
+   comment), `db/accounts.py` (`FB014` is raised by the two preference mutations *and* by
+   the replaced `workspace_membership_authority` on every workspace mutation),
+   `api/consent.py` and `portal/tests/storage.test.ts` (each cited a test module that does
+   not exist; the assertions live in `test_portal_migration.py` and `test_portal_http.py`),
+   `portal/src/lib/requests.ts` (the provider's account loads do not use `SingleFlight`; the
+   page reads and the validity read do), `portal/src/api/client.ts` (no `Accept` header is
+   sent, and the comment said one was), ADR 0010's consequences, `docs/tasks/current.md`,
+   `portal/README.md` and this document. The "13 gates passed, 2 FAILED" fail-closed figure
+   is restated above as what it was: one failure from the missing `node_modules`, and one from
+   a foundation-suite gate deliberately starved of its database URL in the same experiment.
+
+### Not implemented in M3.2 — deliberately
+
+Jobs, quotes, invoices, evaluation runs, results and billing (M4–M6; the four sections are
+navigation and honest unavailability, with no fabricated record of any kind); deployment,
+TLS and real secrets delivery (M3.3); a real email provider, rate limiting and metrics (M8,
+a subset pulled forward by M3.3); changing an account's email address (no milestone has taken
+the identity-change decision); account deletion (no milestone has taken the retention
+decision); more than one workspace per tenant; and a **real-browser end-to-end suite** — see
+below.
+
+### What M3.2 does not claim
+
+It is **not committed, not merged, not deployed and not VERIFIED LIVE**: no deployment
+exists and no evidence artifact has been captured, and neither a passing suite nor a clean
+build is evidence under this repository's standard.
+
+**No real browser has run this portal.** The cookie contract is asserted at the header level
+against real PostgreSQL, and the client behaviour is asserted in jsdom with a real cookie
+jar. What neither covers is the *browser's own* enforcement of the `__Host-` prefix and
+`SameSite=Strict` — vendor behaviour rather than this repository's code — nor the visual
+result of the stylesheet. A Playwright suite against a deployed environment is the natural
+home for both and belongs to M3.3, whose gate is already "the real customer portal can be
+opened and reviewed on AWS with verified test identities". Recorded as an open item in
+`docs/tasks/current.md`.
+
+**No email is delivered**, so the signup, verification, recovery and invitation journeys
+cannot be completed end to end by a human locally without reading the token out of the API
+process. The capture adapter is still the only one that exists.
+
+**Nothing here is a quote, an execution or a commercial commitment.** A `workspace_preferences`
+row is recorded intent; no admission, routing or pricing path reads it, and M5 owns the
+contract fields that make the same ideas binding.
+
+**The M3.1 limitation is unchanged**: password verification runs in the application process,
+so a compromised runtime can read one Argon2id hash per address it names. M3.2 adds a second
+path that reads one — the signed-in change — and puts it on the same narrow authenticator
+principal, which neither worsens nor solves the limitation ADR 0009 decision 6 states.
 
 ---
 
@@ -1587,7 +2029,7 @@ Established by the repository-initialization pass and its R0 remediation (see
 | Item | State |
 | --- | --- |
 | `AGENTS.md` | Canonical instructions. `CLAUDE.md` imports it and adds Claude-only surfaces. Carries the guardrail's scope limits and the approval-required file list. |
-| `scripts/verify-repository.sh` | The one verification entry point. **Fourteen** gates since M2.1, unchanged by M2.2, M2.3, M2.4 and M3.1 — the thirteenth checks that production code imports nothing outside the runtime lock, and the fourteenth runs the PostgreSQL foundation suite. Invoked identically by the human, the `verify` skill, and CI. No longer side-effect free: the last gate creates and drops one disposable database and, since M3.1, **five** per-run roles (owner, application, provisioning, authenticator, and the `NOLOGIN` lifecycle writer), and leaves the persistent `firmbatch_disposable_test_cluster` attestation marker in place. M2.4 changed it in two approved, narrow ways: **eleven more entries in `REQUIRED_FILES`** — nine with the milestone and two more with its third correction pass, taking the manifest to 97 files — and a header comment describing the then four-role test lifecycle. M3.1 changed it the same two ways, with the human's explicit approval: **twenty-two more `REQUIRED_FILES` entries**, taking the manifest to **119** files, so deleting any one of them fails the layout gate, and a header comment describing the five-role lifecycle. No gate has been added, removed, reordered or weakened. |
+| `scripts/verify-repository.sh` | The one verification entry point. **Fifteen** gates: fourteen since M2.1, unchanged by M2.2, M2.3, M2.4 and M3.1, and **one added by M3.2** — the customer-portal gate, which runs `npm run verify` in `portal/` (format, lint, types, tests, production build) and **fails rather than skips** when `npm` or `portal/node_modules` is absent, because an unrun test suite reports the same green as a passing one. Of the fourteen, the thirteenth checks that production code imports nothing outside the runtime lock, and the fourteenth runs the PostgreSQL foundation suite. Invoked identically by the human, the `verify` skill, and CI. No longer side-effect free: the last gate creates and drops one disposable database and, since M3.1, **five** per-run roles (owner, application, provisioning, authenticator, and the `NOLOGIN` lifecycle writer), and leaves the persistent `firmbatch_disposable_test_cluster` attestation marker in place. M2.4 changed it in two approved, narrow ways: **eleven more entries in `REQUIRED_FILES`** — nine with the milestone and two more with its third correction pass, taking the manifest to 97 files — and a header comment describing the then four-role test lifecycle. M3.1 changed it the same two ways, with the human's explicit approval: **twenty-two more `REQUIRED_FILES` entries**, taking the manifest to **119** files, so deleting any one of them fails the layout gate, and a header comment describing the five-role lifecycle. **M3.2 changed it in two approved, narrow ways**: **forty-eight more `REQUIRED_FILES` entries** — forty-seven with the milestone and one more with the independent review's corrections (`portal/src/lib/one-time-token.ts`), under the same approval — taking the manifest to **167** files, and the one new gate above. Through M3.1 no gate had been added; M3.2 adds one and removes, reorders and weakens none. |
 | `.agents/skills/` | `verify`, `record-evidence`, `milestone`. Symlinked into `.claude/skills/`; single body each. |
 | `.agents/policy/guard.py` | Shared deterministic policy engine, `--adapter claude` and `--adapter codex`. An accident-prevention guardrail, **not** a sandbox or security boundary. |
 | `.agents/policy/test_guard.py` | 247 synthetic checks. |
@@ -1596,7 +2038,7 @@ Established by the repository-initialization pass and its R0 remediation (see
 | Reviewers | `distributed-systems-reviewer`, `test-evidence-reviewer`, `security-operations-reviewer`, defined for both agents. **Declared** read-only: `tools: Read, Grep, Glob` on Claude (Bash removed), `read_only = true` on Codex — though Codex is also granted `shell` and must honour the flag itself. Whether either harness enforces the declaration is NOT VERIFIED; see below. |
 | `pyproject.toml` | Ruff config only — no packaging table, deliberately. Frozen per-file ignores for the three v0 files. Unchanged by M2.1: the parent-directory import contract is preserved and `control_plane/` passes the full rule set. |
 | `requirements-v1.txt`, `requirements-v1-dev.txt` | Pinned v1 direct dependencies: SQLAlchemy 2.0.44, alembic 1.16.5, psycopg[binary] 3.2.10, pytest 8.4.2, ruff 0.16.5. Separate from the v0 `requirements.txt`; the two are never installed together by any gate. |
-| `.github/workflows/ci.yml` | Calls `scripts/verify-repository.sh` exactly once. Checks out into `firmbatch/`; `permissions: contents: read`; runs a `postgres:16` service container; marks that container as a disposable test cluster in an explicit step; and installs **`requirements-v1-dev-lock.txt` with `--require-hashes`** — the fully resolved graph, never the unlocked input file. Its only credentials are the ephemeral container's test-only `postgres:postgres`. |
+| `.github/workflows/ci.yml` | Calls `scripts/verify-repository.sh` exactly once. Checks out into `firmbatch/`; `permissions: contents: read`; runs a `postgres:16` service container; marks that container as a disposable test cluster in an explicit step; and installs **`requirements-v1-dev-lock.txt` with `--require-hashes`** — the fully resolved graph, never the unlocked input file. Its only credentials are the ephemeral container's test-only `postgres:postgres`. **M3.2 added two steps, with the human's explicit approval**: `actions/setup-node@v4` pinned to Node 24 LTS, and `npm ci` in `portal/`, which installs exactly the tracked `package-lock.json` and fails if the lock and the manifest disagree — the same property `--require-hashes` gives the Python locks. It still calls the verify script exactly once and re-spells no gate. |
 
 ---
 
@@ -1642,12 +2084,13 @@ capture new artifacts with provenance matching the committed tree.
 
 | Claim | How to settle it |
 | --- | --- |
-| All **fourteen** gates in `scripts/verify-repository.sh` pass — **14 passed, 0 failed**: layout (**119** required files since Milestone 3.1 registered its production and test modules; 97 at Milestone 2.4), agent configuration, hygiene, v0 property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 247/247, the runtime import closure check, and the PostgreSQL foundation suite **1,746 collected — 1,745 passed, 1 skipped** locally — the one skip is the pre-existing REPLICATION skip (granting REPLICATION needs a superuser admin, which CI has and the developer cluster does not. On CI that test runs and two others skip instead -- the owner-only-refusal assertions, which have no meaning for a superuser bootstrap administrator). Observed locally on 2026-09-06, after all three correction passes, against PostgreSQL 16.15 on the developer's WSL machine, at Milestone 2.4 implementation commit `d91e4f2` — that suite count is HISTORICAL to that commit. **Re-run for Milestone 3.0** on 2026-09-06 at `main` `4511f7d`, twice — once with the rev D documentation changes uncommitted in the working tree, and again after the correction to rev D.1 with the documentation changes staged — against the same attested PostgreSQL 16.15 cluster: **14 gates passed, 0 failed** both times, 97 required files; the script's passing output does not print the foundation suite's collected/passed/skipped counts, so no new count is claimed here. Still no artifact. **Re-run for Milestone 3.1** on 2026-09-09 at implementation commit `f92ecb9`, against the same attested PostgreSQL 16.15 cluster: **14 gates passed, 0 failed**, with **119** required files in the layout gate, and no disposable database, role or session left behind. The foundation-suite figure current at that commit is the **2,038 collected — 2,037 passed, 1 environment-dependent REPLICATION skip** recorded in the Milestone 3.1 row below; the 1,746 above stays HISTORICAL to `d91e4f2`. **No milestone since M2.1 has added a gate**; the foundation-suite gate already runs the whole `control_plane/tests` directory, so each milestone's new modules run inside it. | `/record-evidence` → `docs/evidence/r0/gates.txt` (and a Milestone 2 artifact for the foundation suite). Not yet captured. |
+| All **fourteen** gates in `scripts/verify-repository.sh` pass — **14 passed, 0 failed**: layout (**119** required files since Milestone 3.1 registered its production and test modules; 97 at Milestone 2.4), agent configuration, hygiene, v0 property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 247/247, the runtime import closure check, and the PostgreSQL foundation suite **1,746 collected — 1,745 passed, 1 skipped** locally — the one skip is the pre-existing REPLICATION skip (granting REPLICATION needs a superuser admin, which CI has and the developer cluster does not. On CI that test runs and two others skip instead -- the owner-only-refusal assertions, which have no meaning for a superuser bootstrap administrator). Observed locally on 2026-09-06, after all three correction passes, against PostgreSQL 16.15 on the developer's WSL machine, at Milestone 2.4 implementation commit `d91e4f2` — that suite count is HISTORICAL to that commit. **Re-run for Milestone 3.0** on 2026-09-06 at `main` `4511f7d`, twice — once with the rev D documentation changes uncommitted in the working tree, and again after the correction to rev D.1 with the documentation changes staged — against the same attested PostgreSQL 16.15 cluster: **14 gates passed, 0 failed** both times, 97 required files; the script's passing output does not print the foundation suite's collected/passed/skipped counts, so no new count is claimed here. Still no artifact. **Re-run for Milestone 3.1** on 2026-09-09 at implementation commit `f92ecb9`, against the same attested PostgreSQL 16.15 cluster: **14 gates passed, 0 failed**, with **119** required files in the layout gate, and no disposable database, role or session left behind. The foundation-suite figure current at that commit is the **2,038 collected — 2,037 passed, 1 environment-dependent REPLICATION skip** recorded in the Milestone 3.1 row below; the 1,746 above stays HISTORICAL to `d91e4f2`. **No milestone from M2.2 to M3.1 added a gate**; the foundation-suite gate already runs the whole `control_plane/tests` directory, so each of those milestones' new modules runs inside it. **Milestone 3.2 is the first since M2.1 to add one** — the customer portal is TypeScript and the foundation-suite gate cannot reach it — taking the count to **fifteen**; see the Milestone 3.2 row below. | `/record-evidence` → `docs/evidence/r0/gates.txt` (and a Milestone 2 artifact for the foundation suite). Not yet captured. |
 | The M2.1 tenant-isolation properties hold in PostgreSQL: absent context reads nothing and writes nothing; tenant A cannot read, insert, update or delete tenant B's rows; a fabricated cross-tenant or dangling foreign key is rejected; tenant context is not inherited from a session value, a pooled connection, or a URL option; a reused ORM `Session` cannot serve a previous tenant's object; a temporary relation cannot shadow a Firmbatch table; the application role is non-owner, `NOSUPERUSER`, `NOBYPASSRLS`, is refused at connect time if it were any of those, cannot disable a policy, cannot create tables or temporary tables, cannot read the schema history, and cannot create a tenant even with matching context; workspace uniqueness is tenant-local. | `/record-evidence` → `docs/evidence/m2/tenant-isolation-suite.txt`, after the Milestone 2.1 commit. Until then this is a re-runnable claim with no captured artifact. |
 | The M2.2 idempotency and outbox properties hold in PostgreSQL: an identical retry returns the stored result and invokes the mutation once; four identical calls leave one workspace, one claim and one linked event; a conflicting reuse is rejected; two callers observed contending on a real lock commit one effect and one event, and the loser replays; a failure before commit leaves nothing and does not block the retry; a mutation callback cannot commit or roll back the primitive's transaction and an escape by any other route is detected; unflushed ORM state at entry is rejected; malformed operations and keys are refused before the mutation runs; the same key is independent between tenants; cross-tenant reads and writes on both new tables fail closed; missing context fails closed; a committed event is immutable to the application role and matches zero rows even for the owner; an internal state change appends an event with no idempotency record and a rollback removes both; and no value of the request identity reaches a row. **At M2.2 this was 511 passing checks with 1 skipped, of which 130 were new; the same properties are asserted at M2.3 inside a suite of 806.** | `/record-evidence` → `docs/evidence/m2/idempotency-outbox-suite.txt`, at or after Milestone 2.2 implementation commit `d362717`. Until then this is a re-runnable claim with no captured artifact, and M2.2 is **not** VERIFIED LIVE. |
 | The M2.3 authenticated-context, authorization, audit and secrets properties hold in PostgreSQL: a forged `app.tenant_id` or any fabricated setting grants nothing; a fabricated tenant, binding id, fingerprint, actor or scope grants nothing; the function that writes a context is executable by nobody; a relation forged where the context lives is ignored because it is not owned by the schema owner; unknown, malformed, revoked and expired credentials fail closed with one indistinguishable message; binding twice or switching identity is refused; context survives no commit, rollback, failed statement, pool reuse or `Session` reuse, and a Connection-bound `Session` is refused; a valid credential reaches its own tenant and no other; the credential is never stored; authorization is deny-by-default with read/write scope distinctions, minimal framework capabilities and no non-customer scope; every `SECURITY DEFINER` function is owned, path-pinned, `PUBLIC`-revoked, minimally granted and free of dynamic SQL; the registry has no grants and no policy; audit events derive tenant and actor, refuse a supplied alternative, cannot be backdated, are immutable, roll back with their action and reject secret-shaped metadata; secrets never render themselves and production fails closed; and the migration reverses to the M2.2 shape and back. **1,314 pytest checks pass, 1 skipped**, a net increase of 803 collected checks over M2.2's 512 -- five new modules, plus every existing module moved onto the authenticated mechanism, plus a handful of M2.1 tests replaced by the stronger property that superseded them. | `/record-evidence` → `docs/evidence/m2/authenticated-context-suite.txt`, at or after Milestone 2.3 implementation commit `89fbdd9`. No evidence artifact has been captured, so this remains a re-runnable claim and M2.3 is **implemented and tested**, **not** VERIFIED LIVE. |
 | The M2.4 lifecycle properties hold in PostgreSQL: a malformed definition is refused in Python and again by the schema; a registered version is immutable for the owner too; migration `0004` seeds no machine; an instance starts at revision zero in its machine's initial state and cannot be created elsewhere; its tenant, machine and version are immutable and its revision advances by exactly one; cross-tenant reads, writes and moves fail closed and produce the same refusal an invented id does; the required capability is read from the protected definition and a caller cannot name, lower or manufacture one; every declared edge can be taken and an undeclared one, a terminal source, a stale state and a stale revision each change nothing; one transition writes exactly one revision, history row, audit event and outbox intent, and a rollback removes all four; two callers racing from one revision with different idempotency keys produce one move, with the contention observed on `pg_stat_activity`; an identical retry replays and moves nothing; no runtime role may write either lifecycle table directly, register a machine, add an edge or call an internal reader; a grant or column grant on a definition table refuses the connection at connect time; and `0004` upgrades, downgrades and re-upgrades with exact role wiring at each revision. And, after the six-finding correction pass: a definition is invisible and unusable until it is published, cannot be published unless every one of its rows was written by the publishing transaction, and cannot be revised, unpublished or extended afterwards; a raw-SQL caller cannot commit a lifecycle move without its history row, audit event and outbox intent, and neither can a caller that catches the database's refusal; `mutation:execute` alone reads no lifecycle claim or event; two identical concurrent requests produce one move and two replays while a stale, cross-tenant or wrong-identity conflict still conflicts; a stale revision gets the common conflict rather than a graph diagnosis; and no unit-of-work method can be redirected to another `Session` operation. And, after the five-finding second pass: a replay is refused unless the protected provenance linking the claim, the transition, the instance, the revisions and the event checks out, so a fabricated generic claim carrying a plausible lifecycle result replays nothing; the operation name and the request fingerprint are derived inside PostgreSQL, so raw SQL cannot bind a claim to a request it did not make; `audit:read` alone reads no lifecycle audit row, its resource identifiers or its details; a hand-written `UPDATE` publishing a machine runs exactly the validation the supported function runs, a pre-published `INSERT` is refused, and publication and every child mutation serialise on one machine-row lock with the contention observed on `pg_stat_activity` and no deadlock; and a chosen primary key and a reserved-namespace claim are both refused before any index could answer whether a hidden row exists. And, after the two-finding third pass: a generic outbox link naming a hidden lifecycle claim and one naming an absent identifier are refused identically, before the foreign key, the one-event-per-claim index and the `ON CONFLICT` arbiter, in the plain and the `ON CONFLICT` forms; and every lifecycle-derived write — the three machine tags, the provenance row and the lifecycle outbox link — is refused to every identity but the dedicated `NOLOGIN` lifecycle writer, the schema owner's own DML and its own definer functions included, while migration `0003` stays untouched history and a database taken from head down to `0003` is catalogue-for-catalogue identical to one migrated freshly to it. **1,746 pytest checks are collected — 1,745 pass and 1 is skipped**, a net increase of 431 collected checks over M2.3's 1,315 — eight new modules plus new migration, rollback, catalogue, append-only, column-privilege, ownership, role-count and unit-of-work assertions in the existing ones. | `/record-evidence` → `docs/evidence/m2/lifecycle-state-machine-suite.txt`, **at or after Milestone 2.4 implementation commit `d91e4f2`**. No evidence artifact has been captured, so this remains a re-runnable claim and M2.4 is **implemented and tested**, **not** VERIFIED LIVE. |
 | The M3.1 identity properties hold in PostgreSQL — the four `AUTH-MEMBERSHIP-BOUND-IDENTITY` cases and everything listed under "What M3.1 proves": **2,038 pytest checks collected, 2,037 pass, 1 environment-dependent REPLICATION skip** at implementation commit `f92ecb9` on 2026-09-09 — a net increase over M2.4's 1,746 that is the new modules, the extended migration, shape and protected-state assertions, and the correction passes' regression and concurrency coverage. The final independent review's focused verification of the same state passed **202 tests with no failures**, and the canonical verification passed all 14 gates over 119 required files. | `/record-evidence` → `docs/evidence/m3/identity-membership-suite.txt`, **at or after Milestone 3.1 implementation commit `f92ecb9`**. No evidence artifact has been captured and nothing is deployed, so this remains a re-runnable claim and M3.1 is **implemented, tested and independently reviewed**, **not** VERIFIED LIVE. |
+| The M3.2 portal properties hold — everything listed under "What M3.2 proves": `./scripts/verify-repository.sh` reports **15 gates passed, 0 failed** with **167** required files; the PostgreSQL foundation suite is **2,188 passed, 1 environment-dependent REPLICATION skip** of 2,189 collected, a net increase of **151** over M3.1's 2,037 (four new modules — preferences and the mutation boundary, the password change and the account-plane lock order, the HTTP surface including the expected-workspace contract on every workspace route, and the migration's drift, hardening and restore checks); and the portal's own suite is **392 tests across 10 files**, run by the new gate together with `biome ci`, `tsc --noEmit` and a production `vite build`. Observed on 2026-09-12, after the independent review's eleven corrections, the centralised sign-out operation, the session lease on every route, the clean-context review's eight corrections and the final review's two P3 corrections, against the attested local PostgreSQL 16.15 cluster, with the work in the working tree and **not committed**; the 2026-09-09 figures (2,133 passed, 239 portal tests) and the 327 portal tests of 2026-09-11 are HISTORICAL to the earlier trees. The gate's fail-closed behaviour was checked rather than assumed: with `portal/node_modules` moved aside the portal gate fails and the script exits non-zero (the "13 passed, 2 FAILED" once recorded here included a foundation-suite failure from a `FIRMBATCH_TEST_DATABASE_URL` emptied in the same experiment; see the Milestone 3.2 section). | `/record-evidence` → `docs/evidence/m3/portal-suite.txt`, **at or after the Milestone 3.2 implementation commit**. No evidence artifact has been captured, nothing is committed and nothing is deployed, so this remains a re-runnable claim and M3.2 is **implemented and tested**, **not** VERIFIED LIVE. |
 | The destructive-safety properties hold: a forged, altered, cross-server, or foreign-cluster teardown handle is refused and the database survives; an unattested server refuses both creation and teardown; a failure after creation removes the database and both roles; a generated password never reaches exception text, stdout, or stderr. Covered by `control_plane/tests/test_bootstrap_safety.py`. | Same artifact as the row above. |
 | The shared policy engine denies the R0 accident classes across both adapter protocols — multi-line blocks classified line by line, `git -C`/`git -c`, `gh` and `aws` global options, `env`/`timeout` prefixes, `cd`/`cd -`/`pushd`/`popd`/`||` sequences, subshell grouping, argparse-abbreviated provider selection, evidence-tree ancestors including glob and `mv` forms, source and destination operands, in-place archivers, `git restore`/`checkout` over a path, credential reads on every surface including the `.env.*` family, wrapper- and prefix-depth exhaustion, unparseable input, unknown tool names carrying a payload, and engine exceptions. 247 synthetic checks pass. | `/record-evidence` → `docs/evidence/r0/policy-tests.txt`, after the R0 commit. |
 
@@ -1785,17 +2228,19 @@ lifecycle state machines — is what M2.4 built. Milestone 2 is complete when it
 when the gate sentence is quotable.
 
 **Milestone 3 is active.** M3.0, the revision D.1 documentation adoption, merged at
-`116b5ee` (PR #8). **M3.1 — membership-bound identity, sessions and credential issuance —
-is implemented, tested and independently reviewed at `f92ecb9`**, ready for pull request
-and merge and not yet merged: signup, verification, recovery, browser sessions, workspace
+`116b5ee` (PR #8). **M3.1 — membership-bound identity, sessions and credential issuance — is
+merged at `87159d5` (PR #9)**: signup, verification, recovery, browser sessions, workspace
 membership and roles, and the trusted issuance path from a verified identity and an active
 membership to
 the protected M2.3 database context, with browser sessions distinct from scoped API
 credentials (see "CURRENT — Milestone 3.1" and ADR 0009). The four completion cases pass as
-named tests at the database and HTTP boundaries; the gate's UI route is M3.2's, and
-customer-facing deployment stays blocked until M3.2 and an authorized M3.3. **Next is
-M3.2** — the customer-only portal UI, the authenticated customer application with honest
-empty states for later features. **M3.3 remains later**: a protected AWS staging preview
+named tests at the database and HTTP boundaries. **M3.2 — the customer-only portal — is
+implemented and tested and not committed** (see "CURRENT — Milestone 3.2" and ADR 0010): the
+authenticated customer application with honest empty states for later features, the four
+gate cases now also exercised through the interface's own journeys, one new tenant-plane
+relation for the customer's stated policy, and the signed-in password change M3.1 left to it.
+**Customer-facing deployment stays blocked until an authorized M3.3.** **M3.3 remains
+later**: a protected AWS staging preview
 pulled forward from Milestone 8, **planned, and not authorized** — a reviewed infrastructure
 plan, a cost estimate and an explicit go-ahead precede creating any resource, and no GPU
 driver is enabled by it.
