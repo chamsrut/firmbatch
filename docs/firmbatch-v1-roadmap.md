@@ -5,9 +5,9 @@
 **Marketing repository:** `chamsrut/firmbatch-site`
 **Target architecture:** `docs/architecture/v1-target-architecture.md` — **revision D.1**, 6 September 2026
 **Review register:** `docs/architecture/rev-d-decision-register.md` — the rev D review items with their D.1 resolutions, and the choices that genuinely remain
-**Adopting decision:** ADR 0008
-**Confirmed code baseline:** `main` at `4511f7d`, PR #7 merged; Milestone 2 complete
-**Last consolidated:** 6 September 2026 (Milestone 3.0); previously 2 September 2026 at revision C, recoverable from this file's git history
+**Adopting decision:** ADR 0008; the Milestone 3.3 staging, Cognito and Terraform architecture by ADR 0011
+**Confirmed code baseline:** `main` at `ae61747`, PR #10 merged; Milestones 2, 3.0, 3.1 and 3.2 complete and merged, none deployed
+**Last consolidated:** 13 September 2026 (Milestone 3.3a); previously 6 September 2026 (Milestone 3.0) and 2 September 2026 at revision C, both recoverable from this file's git history
 
 This roadmap sequences the work required to move the current Firmbatch v0 prototype toward the approved v1 target. It includes the customer account, portal, and billing work needed to make the target execution architecture usable as a product, and since revision D it sequences the **Phase 0 purchased-capacity launch** ahead of any signed-supplier, endpoint or frontier work. Revision D.1 resolved the contract and commercial rules the rev D adoption had carried open, so the slices below name the rule they implement and the authority it comes from.
 
@@ -19,7 +19,7 @@ Authority is deliberately separated:
 - `docs/architecture/rev-d-decision-register.md` says which rules revision D.1 settled, from which authority, and which implementation choices are still open and who owns each.
 - `docs/architecture/v0-to-v1-migration-audit.md` is the code-cited retain/harden/replace/delete matrix (Milestone 1).
 
-There is no timeline encoded here. A milestone is complete only when its entire gate passes with repository evidence. Everything from Milestone 3.1 onward is **PLANNED**, including anything the target describes as "built but dark" — that phrase is a required future release state, not a claim about today's repository.
+There is no timeline encoded here. A milestone is complete only when its entire gate passes with repository evidence. Everything from Milestone 3.3b onward is **PLANNED** (M3.0–M3.2 are merged and M3.3a is documentation), including anything the target describes as "built but dark" — that phrase is a required future release state, not a claim about today's repository.
 
 Selecting this sequence or accepting a document authorizes nothing: cloud purchases, deployment, customer invitations, supplier contact and settlement payments remain human-owned actions under `AGENTS.md`. The business companions (settlement canon, plan v3.4, roadmap r2_4, the price register, the customer brief, the definitions register, the demand map, the operator's equation paper, the RFQs) inform this sequence; their figures are planning inputs at their capture dates, not configuration.
 
@@ -41,21 +41,21 @@ Selecting this sequence or accepting a document authorizes nothing: cloud purcha
 - Repository: `chamsrut/firmbatch-site`
 - Domain: `firmbatch.com`
 - Purpose: explanation, trust, documentation, and conversion.
-- Primary actions point to signup and login at `app.firmbatch.com`.
+- Primary actions point to signup and login in the customer application (proposed production hostname `app.firmbatch.com`, a Milestone 8 decision).
 - It contains no authenticated product or billing management.
 
 ### Customer product application
 
 - Product repository: `chamsrut/firmbatch`
 - Suggested location: `apps/customer-web`
-- Domain: `app.firmbatch.com`
+- Proposed production domain: `app.firmbatch.com` — a Milestone 8 decision. Milestone 3.3 establishes only the staging browser origin, `https://staging.app.firmbatch.com` (ADR 0011 decision 3).
 - Purpose: identity, workspaces, credentials, evaluation, jobs, quotes, monitoring, results, billing and invoices.
-- It calls the native Firmbatch API for authorization and metadata. The browser and SDK move payload bytes directly to and from the object store through **authorized presigned URLs**; the application holds no raw storage credential, no database access, and no direct provider or worker control. (This corrects the earlier "never accesses S3 directly" wording, which was overbroad: presigned object access is the design.)
+- It calls the native Firmbatch API for authorization and metadata — **same-origin**, under `/v1/*` on its own host, never through a second browser origin (ADR 0010 decision 1; ADR 0011 decision 3). The browser and SDK move payload bytes directly to and from the object store through **authorized presigned URLs**; the application holds no raw storage credential, no database access, and no direct provider or worker control. (This corrects the earlier "never accesses S3 directly" wording, which was overbroad: presigned object access is the design.)
 
 ### Product API
 
-- Domain: `api.firmbatch.com`
-- Used by the customer application, Python SDK, CLI, and customer automation.
+- Proposed production domain: `api.firmbatch.com` — a Milestone 8 decision, like every production public hostname.
+- Used by the Python SDK, CLI, and customer automation. If a separate production API hostname is introduced, it serves non-browser clients or reviewed edge routing; the customer portal always reaches the API same-origin, and no pair of browser and API hostnames is an accepted browser architecture (ADR 0011 amends ADR 0002 decision 5 on this point).
 - Customer payload bytes move directly between the customer and the object store through presigned URLs.
 
 ### Internal and supplier surfaces
@@ -116,7 +116,7 @@ Milestone 2 is **not reopened** by revision D or D.1. Later domain work extends 
 
 ## Milestone 3 — accounts, membership-bound identity, customer portal, protected staging
 
-### M3.0 — revision D.1 documentation adoption and review register — **this change**
+### M3.0 — revision D.1 documentation adoption and review register — **complete, merged at `116b5ee` (PR #8)**
 
 A bounded documentation task following completed M2, not another foundation implementation:
 
@@ -129,7 +129,9 @@ A bounded documentation task following completed M2, not another foundation impl
 
 **Gate:** one active implementation sequence; correct M2 status; traceable revision D and D.1 changes; every review item resolved with its source or listed as a genuinely remaining choice with an owner; no code change and no historical migration edit; `./scripts/verify-repository.sh` passes.
 
-### M3.1 — identity, workspace membership and credential issuance — **next**
+### M3.1 — identity, workspace membership and credential issuance — **complete, merged at `87159d5` (PR #9)**
+
+Implemented at `f92ecb9` and merged at `87159d5` (PR #9); ADR 0009 records the design and `docs/STATE.md` what it proves. Not deployed and not VERIFIED LIVE. The slice as it was specified:
 
 Implement signup, login, email verification, credential recovery, browser sessions, logout and revocation. Add membership creation, invitation and removal, roles, workspace creation, rename, selection and lifecycle. Build the **trusted issuance path** from a verified identity and an active membership to the protected M2.3 database context, so that the credential-issuing authority is separate from the runtime and bound to membership. Browser sessions and scoped API credentials are **distinct credential types**: neither is accepted at the other's authentication boundary, and neither is converted or redeemed into the other. A verified browser session may explicitly authorize an audited API-credential create, rotate or revoke operation, only after active membership and the requested scopes are rechecked; that operation issues a new credential rather than exchanging a token. An account-level session exists before any workspace does, so a verified account can create its first workspace; the session binds to a workspace only through active membership. Creation, one-time display, rotation, revocation and last-use and audit records are customer-accessible.
 
@@ -154,27 +156,65 @@ Design the customer UI alongside this slice; it may be built in M3.2.
 
 Until every one of those passes, this task is open and customer-facing deployment is blocked.
 
-### M3.2 — customer application and evaluation-oriented onboarding
+### M3.2 — customer application and evaluation-oriented onboarding — **complete, merged through PR #10 at `ae61747`**
+
+Implemented at `ce097cb` and merged at `ae61747` (PR #10, status commit `59d82a7`); ADR 0010 records the design and `docs/STATE.md` what it proves. Implemented, tested and independently reviewed; not deployed and not VERIFIED LIVE. The slice as it was specified:
 
 Build the authenticated layout, account, workspace, team and permission settings, and credential management. Create clear navigation for Evaluation, Jobs, Results and Billing. Evaluation may be visibly unavailable until M5–M6; do not simulate a completed job or an invoice as a working backend feature. Capture the customer's desired policy, profile and preferences for later use without claiming a quote or an execution. Design the first journey around trying the 1,000-request evaluation and then converting to paid flex. Draft the consent and subprocessor text so that it states `provider_policy`'s v1 scope exactly — execution placement only; the payload plane is S3; a customer who excludes Amazon altogether cannot be served — as the target requires.
 
 **Gate:** the journeys through accounts and settings work, with honest empty states for later features. Supplier capacity, pool identities, bridge budgets and operator settlement have no customer administrative route.
 
-### M3.3 — protected AWS staging — explicitly pulled forward from Milestone 8
+### M3.3 — protected AWS staging — explicitly pulled forward from Milestone 8, in four bounded slices (ADR 0011)
 
-Deploy a minimal customer frontend, API and RDS PostgreSQL staging environment through repeatable infrastructure and delivery configuration. Proposed addresses: `staging.app.firmbatch.com` and `staging.api.firmbatch.com`, subject to DNS and certificate design. Use synthetic and test accounts initially.
+Deploy a minimal customer frontend, API and RDS PostgreSQL staging environment through repeatable infrastructure and delivery configuration, on **one customer origin**, `https://staging.app.firmbatch.com`. The earlier proposal of a second host, `staging.api.firmbatch.com`, is **superseded**: the M3.2 `__Host-` cookie contract cannot span two hosts, so the browser reaches the API same-origin under `/v1/*` and the identity broker under `/auth/*` (ADR 0010 decision 1; ADR 0011 decision 3). Use synthetic and test accounts only.
 
 Before exposing even this authenticated staging environment, implement its necessary subset of M8 controls: TLS, network isolation, real secrets delivery, separated runtime, migration and issuer credentials, safe metadata-only operational logging, migrations as an explicit step, backups and a restore procedure, session, cookie, CSRF and origin protections, and access restriction. These are pulled-forward staging requirements, not permission to treat M8's deferred controls as solved.
 
 Qualify M2.4's dedicated `NOLOGIN` lifecycle writer and the migration and role installation on managed RDS permissions. Prove that its ownership, membership and `FORCE` row-level-security guarantees survive deployment; local PostgreSQL success alone is insufficient. Preserve writable-primary routing for authenticated transactions; read replicas remain a later qualification (M8).
 
-**Deployment is planned, not authorized.** A reviewable infrastructure plan, a current cost estimate and explicit deployment authorization precede creating any resource. No GPU driver is enabled by this preview.
+**Cognito authenticates; Firmbatch authorizes.** One Cognito User Pool per environment behind a Firmbatch identity broker: a confidential app client, authorization-code grant with PKCE, invite-only users with password plus required TOTP, tokens exchanged and validated server-side, every callback ending in a clean `303` redirect, an `(issuer, subject)` identity mapping bound explicitly by a manually invoked `identity-binding` one-off task and never by email, and the browser holding only the opaque Firmbatch session credential — renamed `__Host-fb_session` — and the CSRF secret, plus a short-lived `Lax` transaction handle during login that is not a session. No Identity Pools, no ALB `authenticate-cognito`, no Cognito groups for roles, no JWT at the core API. In AWS mode password authentication, recovery and verification email are Cognito's, and the portal signs out through `/auth/logout`; the local M3.1 paths, `/v1/account/logout` included, remain for development and test. ADR 0011 decisions 4 and 5; the topology in `docs/architecture/m3-3-aws-staging-topology.md`.
 
-**Gate:** the real customer portal can be opened and reviewed on AWS with verified test identities, exercising isolation, without exposing secrets or internal operations.
+**Deployment is planned, not authorized.** A reviewable infrastructure plan, a current cost estimate and explicit deployment authorization precede creating any resource. No GPU driver is enabled by this preview. The slices:
+
+#### M3.3a — AWS, Cognito and Terraform architecture adoption — **this change**
+
+Documentation only, on `docs/milestone-3-3-aws-terraform-architecture` from `main` at `ae61747`: ADR 0011, the topology document, target §14.1, the register's AWS row, and the status reconciliation recording M3.2's merge. No AWS resource, no Terraform, no application code, no migration, no CI change, no evidence.
+
+**Gate:** the decisions above are recorded with their deferrals and deployment parameters; no active recommendation names a second browser API origin; source snapshots and migrations `0001`–`0006` unchanged; `./scripts/verify-repository.sh` passes.
+
+#### M3.3b — Terraform foundation, task scaffolding, container-build foundation and delivery structure
+
+**Scaffolding only.** `infra/terraform/` with the bootstrap root, the eight modules and the staging root (separate roots and state keys, no workspaces; a KMS-encrypted, versioned state bucket with the native S3 lockfile; a separate KMS-encrypted plan bucket with versioning, Object Lock governance retention, content-addressed plan keys, and lifecycle expiry of current and noncurrent plan versions and of delete markers, none of which ever applies to state; pinned versions and a committed `.terraform.lock.hcl`; provider aliases for `eu-central-1` and `us-east-1`; account-ID enforcement; Git excludes for state, plans, valued `tfvars`, crash logs and override files). ECS task-definition and service scaffolding for the two services and the three one-off tasks (`migrate`, `bootstrap`, `identity-binding`), parameterized by image digest, command and secret reference, with the operator's run permission limited to the `identity-binding` task definition and its own roles. The container-build foundation. ECR and the delivery structure: the pull-request static checks — `fmt -check`, `init -backend=false`, `validate`, lint and policy, `terraform test` with mocks; the manually dispatched plan and apply workflows; the `main`-only `staging-plan` and `staging-apply` environments; distinct plan and apply IAM roles whose OIDC trust names the exact repository and environment, the apply role under a permissions boundary. The reviewer CIDR allow-list validation, as Terraform variable validation plus a separately tested policy check. Workflow files, `CODEOWNERS` and a verification gate are protected-file changes needing explicit approval.
+
+**Gate:** static and local validation passes; the container-build foundation builds from the pinned locks and passes every existing gate; and each of these **required acceptance tests** passes, and fails when its property is absent:
+
+- **Environments.** `staging-plan` and `staging-apply` each permit deployments from `main` only, require reviewers, prevent self-review where GitHub supports it, and hold no environment secret containing a permanent AWS credential.
+- **Workflows.** The plan and apply workflows are manually dispatched from the default branch. They refuse any `github.ref` other than `refs/heads/main`, verify that the selected source commit is reachable from and currently approved on protected `main`, are covered by `CODEOWNERS` and branch protection, and cannot run from a fork or a pull-request context.
+- **Roles.** Each OIDC trust policy names the exact repository and environment. The plan and apply roles are distinct, the apply role has a permissions boundary, and it cannot be assumed through `staging-plan`.
+- **Plan bucket.** The plan role can create new plan objects but cannot overwrite an approved object version, change or bypass retention, retrieve historical versions or apply infrastructure. Neither role can bypass retention or retrieve arbitrary historical versions. Lifecycle rules expire current and noncurrent plan versions and delete markers after the approved retention, and never touch state.
+- **Apply verification.** Given a plan object's key, version ID and expected SHA-256, the apply job fails closed on a checksum, source-commit, provider-lock-digest or Terraform-version mismatch, on a missing version, on a plan older than the allowed age, and on a source commit no longer reachable from or approved on `main`. It never generates a new plan.
+- **No exposure.** No binary plan or full plan rendering reaches a GitHub artifact or log.
+- **Allow-list.** The validation and the policy check each reject an empty list, a non-canonical or invalid CIDR, an IPv4 prefix shorter than `/24` or an IPv6 prefix shorter than `/64`, more than the maximum number of entries, an unspecified, multicast, loopback, link-local or otherwise non-routable range, a duplicate or overlapping entry, and a list exceeding the maximum address-space allowance.
+
+And **no cloud `plan`, no `apply`, no credential in the repository, no resource created, and no deployable identity-broker, database-bootstrap or identity-binding implementation**. **M3.3b cannot be applied, and its task definitions are not operational, until the M3.3c programs, dependencies and image have passed review.**
+
+#### M3.3c — the programs, dependencies and tests the scaffolding runs
+
+Everything executable: the production database bootstrap command; the identity-binding command and its dedicated database boundary — a login role with no table privilege and no role membership, holding `EXECUTE` on exactly one narrowly scoped `SECURITY DEFINER` binding function, with a separate `NOLOGIN` owner where review finds an owner boundary is needed; the Cognito identity-broker entry point; the Cognito authorization, callback, refresh, revocation and logout clients; JWT and JWKS verification; the KMS encryption and decryption integration; the staging environment configuration mode; the `__Host-fb_session` rename, with every affected test and setting; the AWS-mode route changes — `/v1/account/logout` and the local authentication routes disabled for the browser, `/auth/logout` in their place; every callback outcome ending in a `303` to a fixed clean URL with the handle cleared, `Cache-Control: no-store` and `Referrer-Policy: no-referrer`; metadata-safe access and unhandled-error logging; migration `0007` with the protected `auth_identity` relation, the authenticator-only entry points for federated session opening and logout, and the identity-binding function and role; the portal's `/auth/*` adaptation; the web/API entry point serving the compiled portal; the production runtime dependencies — **the HTTP client, the JOSE/JWT library and the AWS SDK, each selected, pinned and reviewed here** — with `requirements-v1.txt`, `requirements-v1-dev.txt` and both lock files; the runtime-import gate's module inventory; the container entry points and tests for every one-off and long-running command; the browser-evidence tooling M3.3d runs — the Playwright configuration with trace, video, screenshot and storage-state persistence disabled for authentication tests, the allow-listed summary collector, and the evidence scanner. Adversarial tests against real PostgreSQL 16 for every refusal ADR 0011 decisions 4 and 5 name. Extending `REQUIRED_FILES`, the runtime-import inventory, and the test bootstrap's role set as the verification script and skill describe it needs the human's explicit approval, as at M3.1 and M3.2.
+
+**Gate:** every M3.1 and M3.2 protection passes unchanged with a federated session; an unbound identity and an email match are refused; the identity-binding login role executes its one function and nothing else, and arbitrary SQL as that role can open no session, issue no credential, change no membership, assume no role and write no table; binding is idempotent for an identical request, refuses a conflicting one, and commits its success or refusal audit event atomically; the evidence scanner fails on a planted secret, cookie, bearer value, query-string URL or email address; no token, verifier or callback parameter reaches a response body, log or row; local authentication remains for development and test; **nothing deployed**.
+
+#### M3.3d — reviewed plan, cost estimate, explicit authorization, apply, migrations, identity binding, browser tests, restore drill, evidence
+
+The deployment parameters confirmed (account, region, domains, CIDRs including the reviewer allow-list and its address-space allowance, SES identity, alert recipient, budget threshold, RDS sizing and minor, the saved-plan lifetime and the two environments' reviewers, the staging identities to bind, the retention of AWS-managed identity logs); a trusted plan stored only as a content-addressed, Object-Locked object in the plan bucket and reviewed in a separately authenticated operator session, with GitHub showing only its sanitized summary; a current cost estimate; **the human's explicit deployment authorization, recorded before `apply`**; an apply the human starts with that object's key, version ID and expected SHA-256, which the apply job verifies independently; bootstrap, migrations; controlled synthetic staging identities bound through the `identity-binding` task using only the dedicated binding credential; the RDS qualification of migrations `0001`–`0006`, `FORCE` RLS, function ownership, the `NOLOGIN` writer, grants, downgrade and reconciliation and clean teardown; synthetic identity and tenant-isolation tests; a Playwright journey against the real URL whose retained output is only an allow-listed, secret-scanned summary and any separately approved screenshot of a clean route showing synthetic data; the backup restore drill; the resource and secret inventory; the inventory and review of AWS-managed records that can hold identity data (CloudTrail, Cognito logging and export, SES records, the Cognito WAF's logs and their destinations); post-deployment cost and alarm checks; evidence under `docs/evidence/m3/`, never including the binary plan, a full plan rendering or any raw browser artifact.
+
+**Gate:** the real customer portal can be opened and reviewed on AWS with verified test identities, exercising isolation, without exposing secrets or internal operations — with the evidence captured. **Only this slice may create a resource, and only after its authorization.**
+
+**M3.3a, M3.3b and M3.3c are not deployment authorization.** The customer can see the real hosted portal only after M3.3d.
 
 ### Milestone 3 completion gate
 
-A new customer can register, verify identity, create a workspace, invite a member, and create a scoped API credential without gaining access to supplier or internal operations; `AUTH-MEMBERSHIP-BOUND-IDENTITY` passes; and the protected staging preview exists under the controls above. Registering and authenticating a customer is not the same property as being unable to serve them somebody else's data, and this milestone is not complete until both hold.
+A new customer can register, verify identity, create a workspace, invite a member, and create a scoped API credential without gaining access to supplier or internal operations; `AUTH-MEMBERSHIP-BOUND-IDENTITY` passes; and the protected staging preview exists under the controls above — which is M3.3d's gate, so **Milestone 3 closes only after M3.3d**. Registering and authenticating a customer is not the same property as being unable to serve them somebody else's data, and this milestone is not complete until both hold.
 
 ## Supply-readiness preparation alongside M3–M5
 
@@ -292,7 +332,7 @@ Test zero accepted units, partial jobs, cancellation, expired quotes, duplicate 
 
 ## Milestone 8 — production release and Phase 0 qualification
 
-Promote the staged deployment pattern into an isolated production environment: customer frontend, `firmbatch.com`, `app.firmbatch.com` and `api.firmbatch.com`, ALB and TLS, three ECS service roles, RDS PostgreSQL, S3 and KMS, SQS and the transactional outbox, Secrets Manager, CloudWatch and OpenTelemetry, explicit migrations, restore and runbooks, metadata-only logging, and read-replica routing if qualified. Deploy only after cost, access and region decisions and operational approval. M3.3 staging is a subset of this deliverable; M8 is not the first time the portal becomes visible.
+Promote the staged deployment pattern into an isolated production environment: customer frontend, `firmbatch.com` and the production public hostnames, which are decided here (proposed `app.firmbatch.com` and `api.firmbatch.com`; whatever is chosen, the customer portal reaches the API same-origin, and any separate API hostname serves non-browser clients or reviewed edge routing), ALB and TLS, three ECS service roles, RDS PostgreSQL, S3 and KMS, SQS and the transactional outbox, Secrets Manager, CloudWatch and OpenTelemetry, explicit migrations, restore and runbooks, metadata-only logging, and read-replica routing if qualified. Deploy only after cost, access and region decisions and operational approval. M3.3 staging is a subset of this deliverable; M8 is not the first time the portal becomes visible.
 
 Prove: account and workspace isolation; production-specific identity, role and secret tests; payment-webhook idempotency and recovery; quote immutability; spend-envelope, reservation and purchase reconciliation; worker interruption and cross-provider recovery; canonical-result correctness; complete accepted-unit reconciliation; no payload or credential leakage; the observed customer journeys in production. Collect reproducible evidence under the repository's evidence rules and track VERIFIED LIVE at the capability, commit and environment level.
 
@@ -331,7 +371,7 @@ The rev D review items D1–D10 are resolved by revision D.1 against the settlem
 | Gate 1 threshold revisions | Owned by the business plan; a revision is a plan change | Plan |
 | Settlement grouping parameter and `f_c` per contract | Set when a supplier signs | Phase P |
 | Endpoint pricing unit per supplier | Quoted by the endpoint supplier | Endpoint extension |
-| AWS staging region, access, cost estimate and explicit deployment authorization | Human deployment decision | M3.3 |
+| AWS staging deployment parameters — the account ID; the region (recommended `eu-central-1`, unconfirmed); the domains (hosted zone, customer origin, Cognito custom domain with its callback and logout URLs); the CIDRs (VPC and subnets, and the reviewer allow-list for ports 443 and 80 with its maximum address-space allowance, reviewed explicitly and never committed); the SES identity; the alert recipient; the budget threshold; RDS sizing and the PostgreSQL 16 minor; the saved-plan lifetime (24 hours recommended) and the reviewers of `staging-plan` and `staging-apply`; the staging identities to bind; the retention of AWS-managed logs that can hold identity data — the current cost estimate and explicit deployment authorization. The architecture itself is decided (ADR 0011) | Human deployment decision | M3.3d, confirmed immediately before plan and apply |
 | Rust vs Go for the operator agent | Focused ADR | Phase P |
 
 ## Explicitly deferred
@@ -362,4 +402,4 @@ Create account
 
 These are the integration tests connecting identity, commercial terms, execution, accepted-unit accounting, and collection.
 
-**Immediate order:** this documentation adoption (M3.0) → M3.1 identity, membership and issuance → M3.2 customer application → M3.3 protected AWS preview, with supply preparation alongside. No remaining decision requires discarding completed Milestone 2 work or waiting to design and build the customer interface.
+**Immediate order:** M3.0 documentation adoption (merged) → M3.1 identity, membership and issuance (merged) → M3.2 customer application (merged) → **M3.3a architecture adoption (this change)** → M3.3b Terraform and task scaffolding → M3.3c the broker, bootstrap and binding programs, identity mapping and dependencies → M3.3d authorized deployment and evidence, with supply preparation alongside. No remaining decision requires discarding completed work, and no slice before M3.3d creates a resource.

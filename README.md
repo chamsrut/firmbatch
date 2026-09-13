@@ -1,11 +1,15 @@
 # firmbatch
 
 > [!IMPORTANT]
-> **Current code:** v0 prototype, plus the merged Milestone 2 v1 foundation and Milestone 3.1
-> identity, membership and credential issuance under `control_plane/` (not deployed), plus the
-> Milestone 3.2 customer portal under `portal/` on a branch (implemented, tested and
-> independently reviewed at commit `ce097cb`, awaiting PR and merge; not deployed and not
-> VERIFIED LIVE). To run the portal locally, see `portal/README.md`.
+> **Current code:** v0 prototype, plus the merged Milestone 2 v1 foundation, the Milestone 3.1
+> identity, membership and credential issuance under `control_plane/`, and the Milestone 3.2
+> customer portal under `portal/` — M3.2 merged through PR #10 at `ae61747`, implemented,
+> tested and independently reviewed; **none of it deployed, none VERIFIED LIVE**. To run the
+> portal locally, see `portal/README.md`.
+> **Current slice:** Milestone 3.3a — the AWS staging, Cognito and Terraform architecture
+> (ADR 0011; `docs/architecture/m3-3-aws-staging-topology.md`), documentation only. **No AWS
+> deployment and no deployment evidence exists**; the hosted portal becomes visible only after
+> M3.3d's authorized deployment.
 > **Target:** Firmbatch v1 revision D.1.
 >
 > The canonical target is `docs/architecture/v1-target-architecture.md`.

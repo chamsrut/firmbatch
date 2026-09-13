@@ -2,15 +2,17 @@
 
 Active work and open questions. Updated at the end of each task, alongside `docs/STATE.md`.
 
-Last updated: 2026-09-13, on `feat/milestone-3-2-customer-portal` from `main` at `87159d5`
-(Milestone 3.1, PR #9), with **Milestone 3.2 — the customer-only product portal — implemented,
-tested and independently reviewed at implementation commit `ce097cb`, every actionable
-finding closed, and awaiting pull request and merge**. **Milestone 3.1 is merged** at `87159d5`
-(PR #9, implementation commit `f92ecb9`, status commit `c841f77`) — after two review
-correction passes closing ten findings and two gaps (Codex) and six findings (GPT-5.6 Sol),
-and a third, clean independent review (GPT-5.6 Sol at xhigh effort) that verified all six of
-those findings as fixed and raised no actionable regression. M3.2 is not merged, not
-deployed and not VERIFIED LIVE, and no evidence artifact has been captured. Milestone 1 merged at
+Last updated: 2026-09-13, on `docs/milestone-3-3-aws-terraform-architecture` from `main` at
+`ae61747` (Milestone 3.2, PR #10), with **Milestone 3.3a — the AWS staging, Cognito and
+Terraform architecture adoption — as the current slice, documentation only** (ADR 0011).
+**Milestone 3.2 is merged** through PR #10 at `ae61747` (implementation commit `ce097cb`,
+status commit `59d82a7`), implemented, tested and independently reviewed with every
+actionable finding closed. **Milestone 3.1 is merged** at `87159d5` (PR #9, implementation
+commit `f92ecb9`, status commit `c841f77`) — after two review correction passes closing ten
+findings and two gaps (Codex) and six findings (GPT-5.6 Sol), and a third, clean independent
+review (GPT-5.6 Sol at xhigh effort) that verified all six of those findings as fixed and
+raised no actionable regression. M3.2 is not deployed and not VERIFIED LIVE, and no evidence
+artifact has been captured; **no AWS deployment or deployment evidence exists**. Milestone 1 merged at
 `6b4f341`; M2.1 merged at `712b51a` (implementation commit `521870b`, plus the bootstrap
 trust-boundary correction `78eae1d`); M2.2 merged at `b028f21` (implementation commit
 `d362717`); M2.3 merged at `dca2d49` (implementation commit `89fbdd9`), after a fourth
@@ -28,7 +30,7 @@ run at the current commit is recorded under "Active — Milestone 3" below. Migr
 remains unchanged, and the operator capacity agent remains separate operator-side software,
 now scheduled for Phase P.
 
-**Architecture revision D.1 is adopted (Milestone 3.0, this branch, documentation only).**
+**Architecture revision D.1 is adopted (Milestone 3.0, merged at `116b5ee`, PR #8, documentation only).**
 `docs/firmbatch-v1-roadmap.md` carries the revised M3–M8 sequence and the Phase 0 / P / B
 triggers; the target is at revision D.1 with verbatim source snapshots (D.1 current, D
 historical) and a review register that records each rev D review item's D.1 resolution;
@@ -44,9 +46,13 @@ not VERIFIED LIVE** (ADR 0009).
 Milestones 0, 1 and 2 are complete. Milestone 3 is the active milestone, under the
 revision D.1 roadmap. Its slices: **M3.0** documentation adoption (merged, PR #8), **M3.1**
 identity, membership and credential issuance (merged, PR #9), **M3.2** the customer
-application (**this branch**, implemented, tested and independently reviewed at `ce097cb`,
-awaiting pull request and merge), **M3.3** the protected AWS staging preview with the
-Cognito adoption decision (next, and not yet authorized).
+application (merged, PR #10 at `ae61747`), and **M3.3** the protected AWS staging preview in
+four slices under ADR 0011 — **M3.3a** the AWS, Cognito and Terraform architecture adoption
+(**this branch**, documentation only), **M3.3b** Terraform and task scaffolding with the
+delivery structure, **M3.3c** every program the scaffolding runs — database bootstrap,
+identity binding, the broker — with the identity mapping, dependencies and tests,
+**M3.3d** the authorized deployment with evidence. Nothing before M3.3d is deployment
+authorization, and the customer can see the real hosted portal only after M3.3d.
 
 ### M3.0 — revision D.1 documentation adoption — **merged at `116b5ee` (PR #8)**
 
@@ -208,8 +214,8 @@ tested end to end, and `scripts/check-runtime-imports.py` `RUNTIME_MODULES` now 
 new M3.1 production module.
 
 **Second review correction pass (GPT-5.6 Sol) — six findings, all closed.** All are
-corrected on the branch with regression tests, and `0005` — which is unmerged — was corrected
-in place; `0001`–`0004` are untouched. In one line each: the login challenge now carries the
+corrected on the branch with regression tests, and `0005` — then unmerged, merged since at
+`87159d5` — was corrected in place; `0001`–`0004` are untouched. In one line each: the login challenge now carries the
 account's password version (`security_epoch`) and `open_browser_session` compares it under a
 lock that conflicts with recovery, closing the recovery/login race in both transaction
 orderings; the three mailbox-verification functions moved onto the authenticator, because
@@ -265,22 +271,24 @@ The slice as it was proposed, for the record:
   real PostgreSQL 16, each failing closed — plus every existing M2 protection passing
   unchanged. Not blocked by any open register entry.
 
-M3.1 merged at `87159d5` (PR #9). **M3.2 is implemented, tested and independently reviewed
-at `ce097cb`, awaiting pull request and merge** — see the section below. **M3.3 is next**:
-its AWS staging needs a reviewed infrastructure and cost plan and explicit authorization
-before any resource is created, and it carries the **Cognito adoption decision** — Cognito
-to own customer authentication, Firmbatch retaining its server-side browser session, CSRF,
-workspace authorization, RLS, audit, consent and API credentials — to be recorded as an ADR
-before anything is built on it. The **operator capacity agent remains
+M3.1 merged at `87159d5` (PR #9). **M3.2 merged at `ae61747` (PR #10)** — see the section
+below. **M3.3 is in progress as four slices**: its AWS staging needs a reviewed
+infrastructure and cost plan and explicit authorization before any resource is created
+(M3.3d), and the **Cognito adoption decision** — Cognito to own customer authentication,
+Firmbatch retaining its server-side browser session, CSRF, workspace authorization, RLS,
+audit, consent and API credentials — is now recorded in ADR 0011 (M3.3a), before anything
+is built on it. The **operator capacity agent remains
 separate operator-side software** and is not part of the customer portal — it is Phase P
 work, after a supplier signs, and the M3.2 portal contains no route, navigation entry,
 setting or scope that would reach one.
 
-### M3.2 — the customer-only product portal — **implemented, tested and independently reviewed at `ce097cb`, awaiting pull request and merge**
+### M3.2 — the customer-only product portal — **implemented, tested and independently reviewed at `ce097cb`; merged at `ae61747` (PR #10)**
 
 The authenticated customer application, `portal/`: TypeScript, Vite and React, with React and
 ReactDOM as its only runtime packages (`portal/package.json` is the authority), served
-**same-origin with the API** behind a proxy. Committed as implementation commit `ce097cb`.
+**same-origin with the API** behind a proxy. Committed as implementation commit `ce097cb`
+and merged to `main` at `ae61747` (PR #10, status commit `59d82a7`); not deployed and not
+VERIFIED LIVE.
 ADR 0010 records the design and the corrections made after its four review passes
 (2026-09-10 to 2026-09-12), every actionable finding of which is closed; `docs/STATE.md`
 records what it proves and what it does not claim.
@@ -368,6 +376,285 @@ same decision, for `portal/src/lib/one-time-token.ts` with the review correction
 to Node 24 and an `npm ci` step. No gate was removed, reordered or weakened, and the new one
 fails rather than skips when its prerequisites are absent — checked, not assumed.
 
+### M3.3a — AWS staging, Cognito and Terraform architecture adoption — **this branch, documentation only**
+
+On `docs/milestone-3-3-aws-terraform-architecture` from `main` at `ae61747` (Milestone 3.2,
+PR #10). ADR 0011 records the decisions and
+`docs/architecture/m3-3-aws-staging-topology.md` draws them; `docs/STATE.md` "CURRENT —
+Milestone 3.3a" lists every document changed. No AWS resource, no Terraform, no application
+code, no migration, no CI or verification change, no commit, no push, no deployment and no
+evidence. No protected agent, policy, workflow or verification file was touched. The two
+architecture source snapshots are byte-identical to `main`.
+
+**Decisions recorded**, one line each (ADR 0011 has the detail):
+
+1. M3.3 is four slices — **a** architecture (this); **b** scaffolding only: Terraform modules
+   and roots, ECS task-definition and service scaffolding, the container-build foundation,
+   ECR and the delivery workflow structure, static Terraform verification, and no deployable
+   broker, bootstrap or binding implementation; **c** every program the scaffolding runs:
+   the database bootstrap command, the identity-binding command, the broker entry point, the
+   Cognito authorization, callback, refresh, revocation and logout clients, JWT and JWKS
+   verification, KMS integration, the staging configuration mode, the `__Host-fb_session`
+   change, metadata-safe unhandled-error logging, the runtime dependencies with both
+   requirement files and both lock files, the runtime-import inventory, and the entry points
+   and tests for every command; **d** reviewed plan, cost estimate, explicit authorization,
+   apply, migrations, identity binding, browser tests, restore drill and evidence. M3.3b
+   cannot be applied and its task definitions are not operational until M3.3c's programs,
+   dependencies and image pass review; M3.3c selects, pins and reviews the HTTP, JOSE/JWT and
+   AWS SDK dependencies. Milestone 3 closes only after M3.3d; a–c are not deployment
+   authorization.
+2. A dedicated staging AWS account, enforced by Terraform; `eu-central-1` recommended and
+   confirmed immediately before plan and deploy; synthetic accounts and data only; no
+   production data, supplier or operator-agent credential; Budgets alerts, not a cap.
+3. One customer origin, `https://staging.app.firmbatch.com`, `staging.api.` dropped; M3.3
+   establishes only that staging origin, and production public hostnames stay Milestone 8's,
+   with the portal always same-origin; ALB routes `/` and `/v1/*` to the web/API service and
+   `/auth/*` to the identity broker; port 80 on the same allow-list as 443, redirect only;
+   two ECS services and three one-off tasks (`migrate`, `bootstrap`, `identity-binding`) with
+   separate task roles and secrets from one image digest; the compiled portal served from
+   the web/API image; CloudFront and static S3 deferred; no long-running service holds a
+   schema-owner, migration or master credential.
+4. One Cognito User Pool per environment, Managed Login v2 at a custom domain (certificate
+   in `us-east-1`), a confidential client with the code grant and PKCE only, exact URLs,
+   `openid email`, invite-only, email usernames, verified email, password plus required
+   TOTP, `PreventUserExistenceErrors`, refresh rotation, five-minute tokens, an eight-hour
+   window; no Identity Pools, ALB `authenticate-cognito`, groups for roles, JWT at the core
+   API or social providers; no `aws.cognito.signin.user.admin`; the browser receives no
+   Cognito token; the broker's single-use state, server-side exchange, validation, JWKS and
+   no-logging obligations; the authentication host under the customer origin's registrable
+   domain; `__Host-fb_session` staying `Strict` and the opaque single-use `__Host-fb_oidc`
+   handle `Lax` deliberately and not a session; every callback a `303` to a fixed clean URL
+   after clearing the handle, with `no-store` and `no-referrer`; in AWS mode `/auth/logout`
+   replaces the browser's `/v1/account/logout`, revokes, clears Cognito's cookie and ends at a
+   fixed clean URL.
+5. `auth_identity(provider, issuer, subject, account_id, created_at, last_seen_at)
+   UNIQUE (issuer, subject)`; explicit binding only through the manually invoked
+   `identity-binding` one-off task, never by email. Its only database credential is a
+   dedicated identity-binding login role with no table privilege and no role membership,
+   holding `EXECUTE` on one `SECURITY DEFINER` binding function, with a separate `NOLOGIN`
+   owner where review needs one; the function is idempotent, refuses conflicting bindings and
+   commits its success or refusal audit event atomically. The task's command is assumed
+   overridable, so arbitrary code inside it still cannot issue a session or reach broader
+   authority; it holds the minimum Cognito read, takes only non-secret invocation identifiers
+   (an invitation's row ID, never its token; no email address), has no endpoint or service,
+   cannot start the broker, and is not the operator agent; no legacy-password
+   migration; local authentication for development, tests and a bounded rollback window;
+   refresh tokens KMS-encrypted with a bound context, in protected state, never in the
+   browser, logs or the core API.
+6. ALB 443 and 80 from the same human-reviewed, never-committed reviewer allow-list,
+   validated structurally and fail-closed by Terraform validation and an independently tested
+   policy check (canonical CIDRs, IPv4 `/24` or narrower, IPv6 `/64` or narrower, at most 16
+   entries proposed, no non-routable, duplicate or overlapping entries, a maximum
+   address-space allowance, never empty), no WAF added to the ALB; no public task IPs; RDS private and reachable only from the web/API,
+   broker, bootstrap, migration and identity-binding security groups;
+   Cognito behind a WAF IP allow-list of the reviewed CIDRs plus, added separately, the
+   broker's NAT EIP as a `/32`,
+   no CAPTCHA on TOTP enrollment; HTTP redirects to HTTPS; exact host and origin validation
+   in the application.
+7. RDS PostgreSQL 16 (exact minor checked before deployment), Single-AZ on subnets in two
+   AZs, encrypted, an explicit parameter group with `rds.force_ssl=1`, `verify-full`,
+   seven-day PITR, deletion protection, final snapshot, no replica; `rds_superuser` is not a
+   superuser and M3.3d qualifies migrations `0001`–`0006`, `FORCE` RLS, function ownership,
+   the `NOLOGIN` writer, grants, downgrade and reconciliation and teardown; the RDS-managed
+   master secret for the bootstrap task only; a one-off task writes runtime passwords into
+   pre-created Secrets Manager containers so they never enter Terraform state; no
+   PostgreSQL provider, `local-exec` or `remote-exec`; the Cognito client secret is the
+   acknowledged state exception, so remote state and saved plans are equally and highly
+   sensitive.
+8. `infra/terraform/` with `bootstrap/`, eight modules (`network`, `edge`, `compute`,
+   `database`, `identity`, `secrets`, `observability`, `delivery`) and
+   `environments/{staging, production/README.md}`; no workspaces; separate roots and state
+   keys; a KMS-encrypted, versioned state bucket with `use_lockfile = true` and no DynamoDB,
+   and a separate KMS-encrypted plan bucket with Object Lock governance retention whose
+   lifecycle never touches state; an allow-list policy check beside the modules;
+   the Cognito WAF in `identity` and none in `edge`; the five task definitions in `compute`; pinned versions and a committed `.terraform.lock.hcl`; provider aliases for
+   `eu-central-1` and `us-east-1`; state, plans, valued `tfvars`, crash logs and override
+   files excluded from Git; sensitive outputs with the state and plan caveat; no static AWS
+   keys.
+9. GitHub Actions through OIDC. Both `staging-plan` and `staging-apply` allow only `main`,
+   require reviewers, prevent self-review where supported and hold no permanent AWS
+   credential. The workflows are manually dispatched from the default branch, refuse any
+   `github.ref` but `refs/heads/main`, verify the source commit is reachable from and
+   approved on protected `main`, are protected by `CODEOWNERS` and branch protection, and
+   are disabled for forks and pull requests. Each OIDC trust names the exact repository and
+   environment; the plan and apply roles are distinct; the apply role has a permissions
+   boundary and cannot be assumed through `staging-plan`. Each of these is a required M3.3b
+   acceptance test. Approval of planning never authorizes an apply. Saved plans live in a
+   dedicated plan bucket, separate from state, with content-addressed keys, versioning and
+   Object Lock governance retention; the plan role creates objects but cannot overwrite an
+   approved version, remove retention or apply. The human starts apply with the reviewed
+   object's key, version ID and expected SHA-256, visible in the approval request; apply
+   downloads that version, recomputes the SHA-256, verifies the source commit, recomputes
+   the provider-lock digest, checks the Terraform version, relies on Terraform's saved-plan
+   state checks, and fails closed on any mismatch, missing version, expired plan or
+   unapproved commit, never re-planning; plan-produced metadata is no authority. Retention is
+   one day proposed, tied to the 24-hour recommended lifetime; lifecycle expires current and
+   noncurrent plan versions and delete markers; neither role bypasses retention or reads
+   arbitrary history; apply refuses a plan past the allowed age; state keeps its own
+   retention. No binary plan or full rendering in a GitHub artifact or public log; GitHub
+   shows only a sanitized summary; the full plan is reviewed in a separately authenticated
+   operator session; pull-request static checks, trusted plan,
+   approved apply and application deployment kept apart; no credential for an untrusted pull
+   request; one immutable image in ECR with immutable tags and scanning, deployed by digest;
+   the migration task before rollout, abort on failure; ECS circuit-breaker rollback; a
+   database downgrade never automatic.
+10. Explicit-retention application log groups with allow-listed metadata only (no bodies,
+    query strings, headers, cookies, codes, tokens, callback parameters, email addresses, SQL
+    values, object identifiers or payload); ALB access logs off; CloudTrail, Cognito logging
+    and export, SES records, the Cognito WAF's logs and their destinations recognised as
+    possible holders of identity data and inventoried, access-restricted, encrypted and
+    retention-limited at M3.3d, never copied into application logs; credential-safe browser
+    evidence — synthetic identities and content only, no raw traces, HAR files, videos,
+    storage state, console or network dumps or failure screenshots from authentication
+    journeys, Playwright persistence disabled, an allow-listed summary, fixed failure
+    classifications and opaque correlation IDs, sanitized callback and logout assertions,
+    separately approved screenshots of clean synthetic routes only, a blocking secret scan
+    before commit, raw artifacts never uploaded; every M3.3d evidence item, with the plan
+    recorded only as its sanitized summary and the browser journey only as its sanitized
+    summary and approved images.
+11. Deferred, not claimed: production deployment, CloudFront, static S3 hosting, Multi-AZ,
+    replicas or RDS Proxy, autoscaling, multiple NAT gateways, production identities or
+    data, real GPU execution, operator capacity agent deployment, payload presigning and
+    transfer, the SQS outbox dispatcher and workers, settlement, production disaster
+    recovery. The operator capacity agent remains separate operator-side software.
+12. Status: M3.2 merged through PR #10 at `ae61747`; implemented, tested and reviewed, not
+    deployed and not VERIFIED LIVE; Milestone 3 active; M3.3a current; the hosted portal
+    visible only after M3.3d; no AWS deployment or evidence yet.
+
+**Deployment parameters requiring human confirmation** (no value chosen): the staging
+account ID; the region (`eu-central-1` recommended); the domains — the Route 53 hosted zone,
+the customer origin and the Cognito custom domain (proposed `auth.staging.app.firmbatch.com`)
+with its callback and logout URLs; the CIDRs — VPC and subnet ranges, and the reviewer
+allow-list for ports 443 and 80 with its maximum address-space allowance, explicitly reviewed
+and never committed; the SES identity; the alert recipient; the budget threshold; RDS sizing
+and the exact PostgreSQL 16 minor; the saved-plan lifetime (24 hours recommended) and the
+required reviewers of `staging-plan` and `staging-apply`; the staging identities to bind; the
+retention of AWS-managed logs that can hold identity data; the current cost estimate,
+including the Cognito feature plan Managed Login requires; and the explicit deployment
+authorization, recorded before `apply`.
+
+**Findings from reading the code, for M3.3c** (nothing changed here, because no application
+code changes in this slice):
+
+- **The session cookie has no `__Host-` prefix.** `SESSION_COOKIE_NAME` in
+  `control_plane/api/settings.py` is `fb_session` in every environment. M3.3c renames it to
+  `__Host-fb_session` wherever cookies are `Secure`, keeping `fb_session` only as a
+  development name, and updates the configuration and every test that names it. No
+  deployed-cookie migration: nothing was deployed. The comment above the constant, which
+  still describes `app.` and `api.` as two hosts of one site, is corrected at the same time.
+- **Both API log lines record the raw request path.** The unhandled-error line logs
+  `request.url.path`. The access line is meant to log the route template, but it reads a
+  matched route from the request scope that the locked Starlette 1.6.0 does not record, and
+  falls back to the raw path — checked after the review corrections; today's path parameters
+  are identifiers, not secrets. M3.3c replaces both with route-template or
+  fixed-classification metadata, tests both, and never logs a query string or a callback
+  parameter.
+- **The portal signs out through `/v1/account/logout`.** In AWS mode that route is disabled
+  for the browser and the portal uses `/auth/logout`; M3.3c owns the route-mode change, the
+  portal adaptation and their tests.
+- **`Environment` has `test` and `production` only.** M3.3c defines the staging environment
+  configuration mode without weakening any production control.
+- **The ordinary transaction preamble calls two identity accessors.** `db/engine.py`
+  asserts through `firmbatch.auth_tenant_id()`, which reads `auth_context`, and the
+  authenticator's inventory in `db/roles.py` holds both for that reason. The dedicated
+  identity-binding login role holds `EXECUTE` on one function only, so the binding command's
+  database path must not rely on that preamble, and M3.3c's tests prove the role's whole grant
+  from the catalogue.
+- The URL parser already accepts `sslmode` and `sslrootcert`, so `verify-full` is
+  configuration once the RDS certificate bundle is in the image.
+  `FIRMBATCH_API_SESSION_TTL_SECONDS` already accepts the eight-hour value.
+
+**Gate for this slice:** the decisions above recorded with their deferrals and parameters;
+no active recommendation names a second browser API origin (`staging.api.firmbatch.com`
+survives only as superseded history in the roadmap's own M3.3 text and in ADR 0011's
+amendment note), and no production pair of browser and API hostnames is presented as an
+accepted browser architecture; source snapshots and migrations `0001`–`0006` byte-identical to `main`;
+`git diff --check` clean; `./scripts/verify-repository.sh` passing. **Result on
+2026-09-13**, at the working tree over `ae61747` with the documentation changes uncommitted,
+against the attested local PostgreSQL 16 cluster: `git diff --check` clean; both snapshot
+hashes equal to the manifest's, and `git diff main -- docs/architecture/sources/
+control_plane/db/migrations/` empty; §17 of the target byte-identical to `main`; **15 gates
+passed, 0 failed**, 167 required files; the passing output prints no suite counts, so the
+M3.2 figures are not restated as this run's; no disposable `firmbatch_test_*` database or
+role left behind. It is a run, not an evidence artifact, and is recorded in `docs/STATE.md`
+"Asserted — artifact pending". **Re-run after the review corrections**, the same day, at the
+corrected working tree before it was re-staged, against PostgreSQL 16.15 and Node 24.19.0:
+`git diff --check` and `git diff --cached --check` clean; only the eight documentation files
+differ from `ae61747` and nothing is untracked; both snapshots and migrations `0001`–`0006`
+unchanged; §17 byte-identical to `ae61747`, the target's only hunks at §14.1 and §18;
+**15 gates passed, 0 failed**, 167 required files. Wording fixes prompted by the
+post-correction reviews, all in these markdown files, came after that run.
+The final correction pass is verified by the same script at the finished, staged tree; its
+result is reported with that change rather than written here, so that the tree the script
+verified is the tree recorded.
+
+**Independent review corrections (2026-09-13) — four P2 and eleven P3 findings, all
+accepted and applied** in these eight documentation files only; no code, migration, lock
+file, CI, script, source snapshot or §17 text changed. `docs/STATE.md` "M3.3a review
+corrections" summarises them and ADR 0011 "Review corrections" maps each to its decision:
+
+- P2-1 — the saved plan is an encrypted, short-lived object under `plans/`, verified at
+  apply, never a GitHub artifact or public log; GitHub shows only a sanitized summary;
+  operator-session review; state and plans equally sensitive; the M3.3d evidence records
+  only the sanitized summary. Superseded in part by items 3 and 4 of the final correction
+  pass below: a separate Object-Locked plan bucket, independent verification at apply, and
+  lifecycle expiry instead of deletion.
+- P2-2 — `__Host-fb_session` for M3.3c; the host-only wording corrected; the `Lax`
+  `__Host-fb_oidc` handle specified.
+- P2-3 — the `identity-binding` one-off task, everywhere it belongs.
+- P2-4 — M3.3b scaffolding only; every program and dependency M3.3c's; no library chosen.
+- P3-1 to P3-11 — RDS ingress from five security groups; no WAF added to the ALB; hostname and cookie
+  semantics; AWS-mode logout; `staging-plan` and `staging-apply`; broker code in M3.3c;
+  AWS-managed identity records; port 80 on the same allow-list; clean callback redirects;
+  the unhandled-error logging finding; the stale M3.0 wording and the production-hostname
+  language.
+
+**Final correction pass (2026-09-13) — six architecture questions decided** in the same eight
+documentation files; no code, migration, dependency, Terraform, workflow, verification script,
+source snapshot or §17 text changed. `docs/STATE.md` "M3.3a final correction pass"
+summarises them, and ADR 0011 "Final correction pass" maps each to its decision:
+
+1. The identity-binding task receives a dedicated one-function binding credential, never the
+   authenticator's, and its command is assumed overridable.
+2. `staging-plan` and `staging-apply` are `main`-only, reviewed and protected, with manually
+   dispatched, `CODEOWNERS`-protected workflows, exact OIDC trust, distinct roles and a
+   permissions-bounded apply role, all as required M3.3b acceptance tests.
+3. Apply is started with a reviewed object's key, version ID and expected SHA-256 and verifies
+   everything itself; the plan bucket is separate from state, content-addressed and
+   Object-Locked.
+4. Plan retention is one day proposed, with lifecycle expiry of every plan version and delete
+   marker, an age check at apply, and state on its own retention policy.
+5. The reviewer allow-list is validated structurally, reviewed by a human and never committed.
+6. Browser evidence is credential-safe: sanitized summaries and approved images only.
+
+The six items were removed from the open questions below, and the deployment-parameter lists
+now hold only genuine human decisions.
+
+Order for the human, from here:
+
+1. Review ADR 0011 and the topology document — in particular the Cognito boundary and
+   cookies (decision 4), the identity mapping and the identity-binding boundary (decision 5),
+   the reviewer allow-list validation (decision 6), the Terraform state and plan sensitivity
+   (decision 7), the delivery model and its acceptance tests (decision 9), the
+   browser-evidence rules (decision 10), the review corrections table and the final
+   correction pass.
+2. Check the snapshot hashes: `sha256sum docs/architecture/sources/*.md` must match the
+   manifest (D.1 `44e29e07…853f3`, D `ea09cb2e…a2a2c`).
+3. Commit the reviewed branch, push, open the pull request, merge after checks pass. No
+   evidence artifact is claimed by this change.
+4. For M3.3b, expect a request for explicit approval of protected files — the
+   pull-request static-check workflow and the manually dispatched plan and apply workflows
+   under `.github/workflows/`, `CODEOWNERS`, and a Terraform static gate in
+   `scripts/verify-repository.sh` — before any is written, and expect to configure the
+   GitHub branch-protection and environment settings its acceptance tests check. For M3.3c,
+   expect the same approval request for the `REQUIRED_FILES` additions,
+   `scripts/check-runtime-imports.py`'s module inventory, the test bootstrap's role set as the
+   verification script and the `verify` skill describe it once the identity-binding role
+   joins, and the `record-evidence` skill if the evidence scan is placed there; and a
+   dependency review of the HTTP client, JOSE/JWT library and AWS SDK it selects.
+5. Before M3.3d: confirm every deployment parameter above, review the plan and the cost
+   estimate, and record the authorization. Nothing before that creates a resource.
+
 ### Open questions carried into Milestone 3
 
 - **Configuration the authorities leave to a human** (register §3): the configured bridge
@@ -376,12 +663,75 @@ fails rather than skips when its prerequisites are absent — checked, not assum
   per-evaluation token and spend caps and the quote validity duration (M4.1); the
   qualification tenant, profile allow-list and per-run authorisations (M6.1, M6.2). Not
   needed before M3.
-- **AWS staging authorization** (M3.3): region, access model, cost estimate, managed-RDS role
-  and migration feasibility, and the human's explicit go-ahead.
-- **The Cognito adoption decision** (M3.3): the ADR recording that Cognito owns customer
-  authentication while Firmbatch retains its server-side browser session, CSRF, workspace
-  authorization, RLS, audit, consent and API credentials — and what that means for the M3.1
-  authentication path and the M3.2 pages that drive it, decided there rather than here.
+- **AWS staging deployment parameters and authorization** (M3.3d): account ID; region
+  (recommended `eu-central-1`, unconfirmed); domains; CIDRs, including the reviewer allow-list
+  and its maximum address-space allowance; SES identity; alert recipient; budget threshold;
+  RDS sizing and PostgreSQL 16 minor; the saved-plan lifetime and the two GitHub
+  environments' reviewers; the staging identities to bind; the retention of AWS-managed
+  identity logs; the current cost estimate; the managed-RDS qualification;
+  and the human's explicit go-ahead, recorded before `apply`. The access model and the
+  architecture themselves are decided (ADR 0011).
+- **The Cognito adoption decision** — **recorded** in ADR 0011 (M3.3a): Cognito owns customer
+  authentication (password, required TOTP, recovery and verification email in AWS mode)
+  behind a Firmbatch identity broker; Firmbatch retains its server-side browser session,
+  CSRF, workspace authorization, RLS, audit, consent and API credentials; the browser
+  receives no Cognito token; identities bind by `(issuer, subject)` and never by email; the
+  local M3.1 path stays for development, tests and a bounded rollback window. What remains
+  is M3.3c's implementation of it and M3.3d's cutover acceptance.
+- **Raised after the M3.3a review corrections, and not decided here.** A security review and
+  an evidence audit of the corrected documents (2026-09-13) raised further questions. Six
+  were decided in the final correction pass: the identity-binding credential, the
+  constraints on `staging-plan` and `staging-apply`, plan approval independent of
+  plan-produced metadata, versioned plan retention, structural allow-list validation, and
+  credential-safe browser evidence (ADR 0011 "Final correction pass"). The questions below
+  remain; the owning slice is named. None blocks merging M3.3a, and each must be settled
+  before its slice's gate.
+  - **M3.3b — plans and delivery:**
+    - The OIDC trust policies' `aud` condition, and whether `sub` should name the repository
+      by its numeric ID rather than its name, are not yet stated.
+    - GitHub creates an environment unprotected when a workflow first names it, so the roles
+      must not exist before both environments are protected.
+    - The first apply of the staging root, which creates the OIDC provider and both roles,
+      cannot run through the pipeline, and its procedure is unrecorded.
+    - The plan file sits on the runner's disk before upload, and policy or cost tools
+      reading plan JSON handle the Cognito client secret and may echo values or send them
+      elsewhere. Each needs a stated control. Keeping the plan out of GitHub artifacts and
+      logs is already a required M3.3b acceptance test.
+    - The plan role's lockfile permission must name the exact lock object. Its "read-only
+      resource access" is unbounded. The application-deployment identity is still
+      unspecified, though it is as powerful as apply for the data plane. Where an operator
+      session's local copy of a plan goes is unrecorded.
+    - Every task's outbound HTTPS through the NAT is internet-routed and not narrowed by
+      security groups. ECS Exec is not ruled out for any service or task.
+  - **M3.3c — identity and broker:**
+    - Resolving a subject may need `ListUsers` with a filter IAM cannot scope, which would
+      read every user's email.
+    - Binding to an unused invitation must not reintroduce email matching.
+    - `/auth/logout` with an expired or replaced session, or a lost CSRF cookie, must still
+      clear Cognito's managed-login cookie or force re-authentication, or the next login
+      can succeed silently.
+    - A `Referrer-Policy: no-referrer` extended beyond callback responses would make browsers
+      send `Origin: null` on the logout form, which the `Origin` check would refuse.
+    - Cookie-name normalisation has bypassed the `__Host-` prefix in other stacks, so
+      Starlette's cookie parsing needs a test.
+    - ALB 5xx pages and middleware refusals before the handler would show a page at the
+      callback URL without `no-store` or `no-referrer`.
+    - Unauthenticated `GET /auth/login` writes transaction rows and needs a bound and a
+      cleanup.
+  - **M3.3d — evidence and identities:**
+    - Where the test identities' passwords and TOTP seeds are kept is unrecorded.
+    - Staging users should not be created by Terraform, whose state and plans would then hold
+      their emails and temporary passwords.
+    - The AWS-managed records inventory should record settings, not contents. RDS PostgreSQL
+      logs and ECS task overrides can also hold identity data.
+  - **The policy guard** (a `.agents/policy/` change needing approval):
+    - It allows `terraform test`, which applies unless mocked, and `terraform force-unlock`.
+    - It allows mutating `aws` verbs outside its prefix list, including `ecs run-task`,
+      `ec2 authorize-security-group-ingress`, `kms schedule-key-deletion`, `s3 cp` and
+      `ec2 request-spot-instances`.
+    - It allows reads that print secrets or emails into a transcript: `terraform output
+      -raw`, `terraform state pull`, `terraform show -json`, `aws secretsmanager
+      get-secret-value`, `aws cognito-idp describe-user-pool-client` and `list-users`.
 - **Evidence promotion:** Milestone 2 could be promoted to VERIFIED LIVE by capturing the
   foundation-suite run with `/record-evidence` under `docs/evidence/m2/`. Until then the
   **implemented and tested** classification stands for all four slices. M3.1 is
@@ -392,7 +742,10 @@ fails rather than skips when its prerequisites are absent — checked, not assum
   until an artifact and a deployment exist it is not VERIFIED LIVE either.
 - **M3.1 follow-ups needing approval:** whether the hash-harvest limitation of
   application-side password verification (ADR 0009 decision 6) is acceptable through M3.3 or
-  needs a separated verifier process there. **M3.2 does not change this**: the signed-in
+  needs a separated verifier process there. **ADR 0011 answers it for AWS mode**: a
+  Cognito-bound account carries no Firmbatch password hash, the web/API service holds no
+  authenticator credential there, and the limitation is confined to local development and
+  test, where it stands as recorded. **M3.2 does not change this**: the signed-in
   password change reads one hash per call and does it on the same narrow authenticator
   principal, which neither worsens nor solves the limitation. The two protected inventories
   are no longer open: both were extended with the human's explicit approval, and the
@@ -400,7 +753,7 @@ fails rather than skips when its prerequisites are absent — checked, not assum
   reaches — **twelve** at present, after mailbox verification joined it at M3.1 and the two
   password-change functions at M3.2 — closing the least-privilege follow-up that correction
   had left behind.
-- **M3.2 follow-ups, carried to M3.3:**
+- **M3.2 follow-ups, carried to M3.3 — now M3.3c and M3.3d under ADR 0011:**
   - **A real-browser end-to-end suite.** Nothing here has been run in a browser. The cookie
     contract is asserted at the header level against real PostgreSQL and the client behaviour
     in jsdom with a real cookie jar, but the *browser's own* enforcement of the `__Host-`
@@ -408,13 +761,21 @@ fails rather than skips when its prerequisites are absent — checked, not assum
     visual result of the stylesheet are both unobserved. M3.3's gate is already "the real
     customer portal can be opened and reviewed on AWS with verified test identities", which is
     the natural home for a Playwright suite covering reload, multiple tabs, session
-    replacement, expiry and mismatch against a deployed environment.
+    replacement, expiry and mismatch against a deployed environment. **M3.3d's gate** (ADR
+    0011 decision 10) requires that journey against the real URL, through Cognito with TOTP.
   - **Same-origin is now a requirement on M3.3's infrastructure**, not a preference. The
     `__Host-` prefix forbids a `Domain` attribute, so a portal on `app.` could not read a
-    cookie an API set on `api.`. The staging deployment must put both behind one origin.
+    cookie an API set on `api.`. The staging deployment must put both behind one origin —
+    **decided** (ADR 0011 decision 3): one origin, `https://staging.app.firmbatch.com`, the
+    API under `/v1/*` and the broker under `/auth/*`; `staging.api.` is not retained.
   - **No email is delivered**, so a human cannot complete the signup, verification, recovery
-    or invitation journeys locally without reading the token out of the API process. A real
-    provider is M8, pulled forward in part by M3.3.
+    or invitation journeys locally without reading the token out of the API process. In AWS
+    mode, verification and recovery mail become Cognito's (ADR 0011 decision 4, through an
+    SES identity that is a deployment parameter, whose delivery and event records can hold
+    recipient addresses and fall under M3.3d's review of AWS-managed records); Firmbatch's
+    own workspace-invitation mail
+    still needs a delivery adapter, which is an M3.3c decision — an SES adapter, or the
+    invitation journey honestly unavailable in staging. A general provider remains M8's.
   - **A follow-up lock regeneration** could still move the development test-client pin from
     `httpx` to `httpx2`, which Starlette 1.6 prefers. Unchanged by M3.2.
 
@@ -1239,7 +1600,7 @@ supplied post-merge transcript reporting **14 gates, 0 failed** and 97 required 
    into Milestone 3" above.)
 
 **What is next.** **Milestone 3 under the revision D.1 roadmap**: M3.0 documentation adoption
-(this branch), then M3.1 identity, workspaces, memberships, permissions and credential
+(merged since at `116b5ee`, PR #8), then M3.1 identity, workspaces, memberships, permissions and credential
 issuance with `AUTH-MEMBERSHIP-BOUND-IDENTITY` above as its launch-blocking gate, then the
 customer application (M3.2) and a protected AWS staging preview (M3.3, planned and not yet
 authorized). The portal it builds is the **customer** application and nothing else; the
