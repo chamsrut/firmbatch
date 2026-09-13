@@ -319,6 +319,63 @@ REQUIRED_FILES=(
   # The M3.1 Codex security correction pass: the trusted-issuer boundary, the recovery
   # epoch, the shared workspace serializer, bounded KDF admission and the streamed body cap.
   control_plane/tests/test_identity_security_corrections.py
+  # --- the customer portal (Milestone 3.2) ------------------------------------------
+  # The authenticated customer application, and the one migration behind it. Unlike every
+  # earlier slice this one DOES add a gate -- see "customer portal" below -- because its
+  # tests are TypeScript and the foundation-suite gate cannot reach them.
+  docs/adr/0010-customer-portal-csrf-cookie-and-stated-preferences.md
+  control_plane/db/migrations/versions/0006_preferences_and_password.py
+  control_plane/db/preferences.py
+  control_plane/api/consent.py
+  control_plane/tests/test_portal_preferences.py
+  control_plane/tests/test_portal_password_change.py
+  control_plane/tests/test_portal_http.py
+  control_plane/tests/test_portal_migration.py
+  # The portal itself. package-lock.json is tracked and is what `npm ci` installs from;
+  # node_modules and dist are not, and are gitignored.
+  portal/package.json
+  portal/package-lock.json
+  portal/tsconfig.json
+  portal/vite.config.ts
+  portal/vitest.setup.ts
+  portal/biome.json
+  portal/.npmrc
+  portal/index.html
+  # Refuses to run the portal's checks on a Node older than package.json requires. In the
+  # portal rather than in this file, because `engine-strict` covers `npm ci` and not
+  # `npm run`, and a version assertion is the portal's own business.
+  portal/scripts/require-node.mjs
+  portal/src/main.tsx
+  portal/src/App.tsx
+  portal/src/api/client.ts
+  portal/src/api/endpoints.ts
+  portal/src/api/errors.ts
+  portal/src/api/types.ts
+  portal/src/auth/session.tsx
+  portal/src/lib/csrf.ts
+  portal/src/lib/one-time-token.ts
+  portal/src/lib/redirect.ts
+  portal/src/lib/router.tsx
+  portal/src/ui/components.tsx
+  portal/src/ui/Shell.tsx
+  portal/src/routes/account.tsx
+  portal/src/routes/auth.tsx
+  portal/src/routes/credentials.tsx
+  portal/src/routes/preferences.tsx
+  portal/src/routes/product.tsx
+  portal/src/routes/team.tsx
+  portal/src/routes/workspaces.tsx
+  portal/tests/harness.tsx
+  portal/tests/accessibility.test.tsx
+  portal/tests/auth-flows.test.tsx
+  portal/tests/client.test.ts
+  portal/tests/credentials.test.tsx
+  portal/tests/permissions.test.tsx
+  portal/tests/preferences.test.tsx
+  portal/tests/redirect.test.ts
+  portal/tests/security.test.tsx
+  portal/tests/storage.test.ts
+  portal/tests/workspace-flows.test.tsx
 )
 missing=()
 for f in "${REQUIRED_FILES[@]}"; do
@@ -532,6 +589,34 @@ gate_in "${REPO_ROOT}" "agent policy tests" python3 .agents/policy/test_guard.py
 # deferred and conditional imports that no parser can see.
 gate_in "${REPO_ROOT}" "runtime import closure (production code vs requirements-v1-lock.txt)" \
   python3 scripts/check-runtime-imports.py --static
+
+# --- the customer portal (Milestone 3.2) --------------------------------------------
+#
+# The portal is TypeScript, so its format, lint, type, test and build checks are its own
+# toolchain's and the foundation-suite gate below cannot reach them. `npm run verify` in
+# portal/ runs all five in one command: `biome ci . && tsc --noEmit && vitest run && vite
+# build`.
+#
+# It FAILS rather than skips when its prerequisites are absent, for the same reason the
+# PostgreSQL gate does: a portal whose type check and tests silently did not run reports
+# exactly the same green as one where they passed. The failure names the command that fixes
+# it. Node 24 LTS is the pinned runtime, here and in .github/workflows/ci.yml; portal/
+# declares it in `engines` with engine-strict, so `npm ci` refuses an older one rather than
+# installing against it.
+printf '\ncustomer portal\n'
+
+if ! command -v npm >/dev/null 2>&1; then
+  fail "customer portal (format, lint, types, tests, build)" \
+       "npm is not installed. The portal needs Node 24 LTS; see portal/README.md."
+elif [ ! -d "${REPO_ROOT}/portal/node_modules" ]; then
+  fail "customer portal (format, lint, types, tests, build)" \
+       "portal/node_modules is absent. Install the pinned dependencies once:
+          cd \"${REPO_ROOT}/portal\" && npm ci
+        This gate does not skip: an unrun test suite reports the same green as a passing one."
+else
+  gate_in "${REPO_ROOT}/portal" "customer portal (format, lint, types, tests, build)" \
+    npm run --silent verify
+fi
 
 # --- the v1 PostgreSQL foundation suite ---------------------------------------------
 # Milestone 2.1. Runs against a REAL PostgreSQL 16 server: the properties under test are

@@ -230,6 +230,28 @@ RESOURCE_RULES: tuple[ResourceRule, ...] = (
         ),
     ),
     ResourceRule(
+        table="workspace_preferences",
+        kind="customer",
+        tenant_column="tenant_id",
+        read=(Scope.WORKSPACE_READ,),
+        write=(Scope.WORKSPACE_WRITE,),
+        append_only=False,
+        note=(
+            "Milestone 3.2. What the customer says they intend for this workspace: region "
+            "groups, excluded provider classes, a model and profile note, whether they mean to "
+            "run the free evaluation, and the consent version in force. The same read/write "
+            "pair workspaces carries, because a preference is a property of the workspace -- a "
+            "viewer who may not rename a workspace may not restate its provider policy either. "
+            "The write scope is exercised only through two SECURITY DEFINER functions, "
+            "state_workspace_preferences and acknowledge_workspace_consent; the application "
+            "role holds SELECT on the relation and no write privilege, so the INSERT and UPDATE "
+            "policies bind the owner running those functions and nobody else. No DELETE policy: "
+            "preferences are amended, and they leave with the workspace through the composite "
+            "foreign key's cascade. Nothing here is a JobSpec, a quote or an admission input; "
+            "see the model's docstring."
+        ),
+    ),
+    ResourceRule(
         table="idempotency_records",
         kind="framework",
         tenant_column="tenant_id",
@@ -478,6 +500,13 @@ RESOURCE_RULES: tuple[ResourceRule, ...] = (
                 "One transaction's bound session, or the account it challenged at login: keyed by "
                 "backend pid, readable only by the transaction whose id it carries. The mechanism, "
                 "beside auth_transaction_context, and protected for the same reasons.",
+            ),
+            (
+                "identity_expected_workspace",
+                "One transaction's expected workspace -- the workspace the page or action that "
+                "made the request began under -- keyed like identity_transaction_context and read "
+                "only by workspace_membership_authority, which refuses a mutation whose expectation "
+                "is not the transaction's binding. Milestone 3.2's expected-workspace contract.",
             ),
         )
     ),

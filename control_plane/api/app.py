@@ -40,12 +40,22 @@ Cookie, CSRF and origin
 -----------------------
 
 The session cookie is host-only, ``Path=/``, ``HttpOnly``, ``Secure`` (except in the test
-environment when told otherwise) and ``SameSite=Strict``: ``app.firmbatch.com`` and
-``api.firmbatch.com`` are one site, so the application's credentialed requests carry it
-and nobody else's do. On top of that, **every cookie-authenticated mutation** must carry
-the session's CSRF secret in ``X-CSRF-Token`` -- verified inside the database against the
-session's own fingerprint -- and an ``Origin`` header on the explicit allow-list. CORS is
-that same allow-list with credentials, and never a wildcard.
+environment when told otherwise) and ``SameSite=Strict``. On top of that, **every
+cookie-authenticated mutation** must carry the session's CSRF secret in ``X-CSRF-Token`` --
+verified inside the database against the session's own fingerprint -- and an ``Origin``
+header on the explicit allow-list. CORS is that same allow-list with credentials, and never
+a wildcard; the Milestone 3.2 portal is served same-origin behind a proxy, so it does not
+use CORS at all, and the allow-list is what the ``Origin`` check reads.
+
+**Milestone 3.2 adds a second cookie, and it is not a credential.** The CSRF secret exists
+in plaintext exactly once -- in the login response -- because the database stores only its
+fingerprint, so a portal that kept it in memory could read but never write after a reload,
+and nothing could re-issue it. The same secret is therefore also set as a readable,
+host-only, ``SameSite=Strict`` cookie with the session's lifetime (``__Host-`` prefixed when
+it is ``Secure``), cleared with the session cookie. The boundary **never compares the two**:
+the header alone is checked, inside PostgreSQL, against the stored fingerprint, so a caller
+must produce the session's actual secret rather than echo a value it set itself. See
+``api/settings.py``.
 
 Errors
 ------
@@ -57,14 +67,39 @@ already gone is one ``404``. Every error body is ``{"error": <code>}`` and nothi
 no field value, no database text, no identifier the caller did not send. Validation
 failures say which rule, not which value.
 
+What Milestone 3.2 added
+------------------------
+
+``POST /v1/account/password`` -- the signed-in password change M3.1 left to this milestone.
+Cookie, CSRF **and** the current password; one atomic transaction on the authenticator
+engine that verifies, replaces by compare-and-swap, ends every token, credential and
+session, and mints the replacement. ``GET``/``PUT /v1/workspace/preferences`` and
+``POST /v1/workspace/preferences/consent`` -- the customer's stated policy, profile and
+preferences, and their acknowledgement of the consent statement, which
+``GET /v1/consent`` serves publicly. Nothing here is a job, a quote or an invoice.
+
+**Every workspace mutation names the workspace the page or action began under** (the
+``X-Workspace-Id`` header on every one; the two preference mutations also carry it as
+``workspace_id`` in the body, their original contract), and the database compares it with
+the workspace the session is bound to, inside the mutation, under the workspace lock, before
+anything is written. A page loaded for one workspace whose shared session another tab has
+since re-bound to another is refused as ``409 workspace_mismatch`` -- the same answer a
+forged or another tenant's identifier gets -- and the portal reloads the current workspace
+rather than applying one workspace's action to another. A mutation with no header is a
+``422``. **Every workspace read answers with the workspace it describes** (``workspace_id``
+in the envelope), so the portal can drop an answer that arrives after the page's workspace
+has changed rather than render one workspace's data under another.
+
 What is deliberately not here
 -----------------------------
 
-No HTML, no portal, no template: the customer application is Milestone 3.2. No rate
+No HTML and no template: the portal is a separate TypeScript application under ``portal/``
+that calls this API same-origin behind a proxy, and this process serves JSON only. No rate
 limiting, no request logging beyond method, route and status, no metrics: Milestone 8's
 observability work, stated rather than half-built. No real email provider (see
-``api/email.py``). No password change while signed in: recovery covers it, and a change
-flow needs the re-authentication design Milestone 3.2 owns.
+``api/email.py``). No job, quote, invoice, evaluation, supplier or operator surface --
+those are M4 onward, and the operator capacity agent is separate operator-side software
+that never appears in a customer interface at all.
 """
 
 from __future__ import annotations
@@ -89,7 +124,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from .. import config
-from ..db import accounts, auth, credentials, membership
+from ..db import accounts, auth, credentials, membership, preferences
 from ..db import engine as db_engine
 from ..db.audit import audit_events
 from ..db.idempotency import IdempotencyConflict, IdempotencyError
@@ -103,8 +138,10 @@ from ..security.secrets import (
     is_well_formed_identity_secret,
     looks_like_secret,
 )
+from .consent import CONSENT_DOCUMENTS, CURRENT_CONSENT_VERSION
 from .email import EmailDelivery, EmailDeliveryError, OutboundEmail
 from .settings import (
+    CSRF_COOKIE_SAMESITE,
     CSRF_HEADER,
     IDEMPOTENCY_KEY_HEADER,
     MAX_BODY_BYTES,
@@ -119,6 +156,9 @@ log = logging.getLogger("firmbatch.api")
 #: identifiers, addresses and short labels; a field longer than this is refused before it
 #: is looked at.
 MAX_FIELD_LENGTH = 512
+
+#: The header every workspace mutation carries: the workspace the page or action began under.
+WORKSPACE_HEADER = "x-workspace-id"
 MAX_SCOPES = 16
 _UUID_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _ROLES = ("admin", "member", "owner", "viewer")
@@ -408,6 +448,13 @@ class Boundary:
         except accounts.IdentityRefused:
             raise self._refused_bind(secret, mode, csrf) from None
         try:
+            if mode == "workspace" and mutation:
+                # The workspace the page or action began under, recorded in the transaction
+                # before the handler runs, so that the database compares it with the binding
+                # inside the mutation itself, under the workspace lock, before anything is
+                # written. Read after the bind, so a request with no session is 401 before it
+                # is anything else, and a missing or malformed header is the syntactic 422.
+                accounts.expect_workspace(pair[0], _expected_workspace_header(request))
             yield pair
         except BaseException:
             if not transaction.__exit__(*sys.exc_info()):
@@ -465,14 +512,38 @@ class Boundary:
     # --- cookies --------------------------------------------------------------------------
 
     def set_session_cookie(self, response: Response, opened: accounts.OpenedSession) -> None:
+        """The two cookies one opened session hands the browser, and they are not alike.
+
+        ``fb_session`` is the credential: ``HttpOnly``, so no script reads it. The CSRF
+        cookie is not a credential and must be readable, because the portal has to put its
+        value in ``X-CSRF-Token`` on every mutation and PostgreSQL verifies *that* against
+        the session's stored fingerprint. See ``api/settings.py`` for why handing it over
+        this way is not a weakening, and why it carries ``__Host-`` when it is ``Secure``.
+
+        Both are set together, both carry the session's own lifetime, and both are cleared
+        together, so a browser never holds one without the other for longer than one
+        response.
+        """
+        max_age = int(self.settings.session_ttl.total_seconds())
         response.set_cookie(
             SESSION_COOKIE_NAME,
             opened.session_secret.reveal(),
-            max_age=int(self.settings.session_ttl.total_seconds()),
+            max_age=max_age,
             path="/",
             secure=self.settings.cookie_secure,
             httponly=True,
             samesite=SESSION_COOKIE_SAMESITE,
+        )
+        response.set_cookie(
+            self.settings.csrf_cookie,
+            opened.csrf_secret.reveal(),
+            max_age=max_age,
+            path="/",
+            secure=self.settings.cookie_secure,
+            # Readable by the portal, deliberately, and by nothing else: the cookie is
+            # host-only (no Domain), so a sibling subdomain cannot read it either.
+            httponly=False,
+            samesite=CSRF_COOKIE_SAMESITE,
         )
 
     def clear_session_cookie(self, response: Response) -> None:
@@ -483,6 +554,13 @@ class Boundary:
             httponly=True,
             samesite=SESSION_COOKIE_SAMESITE,
         )
+        response.delete_cookie(
+            self.settings.csrf_cookie,
+            path="/",
+            secure=self.settings.cookie_secure,
+            httponly=False,
+            samesite=CSRF_COOKIE_SAMESITE,
+        )
 
 
 def _translate(exc: Exception) -> JSONResponse | None:
@@ -491,6 +569,12 @@ def _translate(exc: Exception) -> JSONResponse | None:
         return _error(exc.status, exc.code)
     if isinstance(exc, accounts.SessionAuthenticationError):
         return _error(401, "authentication_required")
+    if isinstance(exc, accounts.WorkspaceBindingMismatch):
+        # The workspace the page named is not the one the session is bound to: a stale form,
+        # a forged identifier or another tenant's, indistinguishably. A client acts on it by
+        # reloading the current workspace, which is why it is a 409 with its own code rather
+        # than the neutral 404.
+        return _error(409, "workspace_mismatch")
     if isinstance(exc, accounts.IdentityRefused):
         return _error(404, "not_found")
     if isinstance(exc, accounts.SessionContextError):
@@ -622,7 +706,14 @@ def h_login(b: Boundary, request: Request, body: RequestBody) -> Response:
             # The password matched, so the caller already knows the account exists; saying
             # why it cannot sign in reveals nothing further.
             raise ApiError(403, "email_verification_required")
-        opened = accounts.open_session(session, ttl=b.settings.session_ttl)
+        try:
+            opened = accounts.open_session(session, ttl=b.settings.session_ttl)
+        except accounts.IdentityRefused:
+            # The password verified against a hash the account no longer has: a recovery or a
+            # signed-in change committed while Argon2 ran, and `open_browser_session` refused
+            # under the account row lock. The neutral answer is the one a wrong password
+            # gets -- the old password *is* wrong now -- never the boundary's generic 404.
+            raise ApiError(401, "invalid_credentials") from None
     response = _json(
         200,
         {
@@ -662,6 +753,74 @@ def h_account(b: Boundary, request: Request, body: RequestBody) -> Response:
             },
         },
     )
+
+
+def h_change_password(b: Boundary, request: Request, body: RequestBody) -> Response:
+    """Change a signed-in account's password. Cookie, CSRF, and the current password.
+
+    Milestone 3.2, and the flow ``app.py`` said Milestone 3.1 was leaving to it. Three
+    proofs, and none of them substitutes for another: the session cookie says which account
+    is asking, the CSRF secret says the request came from the portal rather than from
+    another site, and the **current password** says the person at the keyboard is the
+    account holder rather than somebody who sat down at an unlocked screen.
+
+    Two transactions on two engines, in this order and for this reason. The first binds the
+    session on the **application** engine -- that is where a session secret is proved, and
+    the authenticator role deliberately cannot bind one -- and yields nothing but the account
+    id, the session id and the two passwords from the body. It is closed before the second
+    begins: holding a transaction open on one engine while a second runs on another is how
+    an avoidable deadlock gets written. The second, on the **authenticator** engine, is where
+    everything that changes state happens, and it is atomic: verify, replace by
+    compare-and-swap, end every token, credential and session, mint the replacement.
+
+    The replacement session is what the browser leaves with. Every other session of this
+    account -- other devices, other browsers, an attacker's -- is revoked by the same
+    statement sequence, which is the point of asking.
+    """
+    with b.bind(request, mode="account", mutation=True) as (_session, context):
+        fields = body.json()
+        current_password = _secret(fields, "current_password")
+        new_password = _secret(fields, "new_password")
+        account_id = context.account_id
+        session_id = context.session_id
+    try:
+        with db_engine.transaction(b.authenticator_engine) as session:
+            opened = accounts.change_password(
+                session,
+                account_id=account_id,
+                session_id=session_id,
+                current_password=current_password,
+                new_password=new_password,
+                ttl=b.settings.session_ttl,
+            )
+    except accounts.IdentityRefused:
+        # **Not a 404 here, unlike everywhere else on this boundary.** The neutral refusal
+        # normally means "absent, hidden, in another tenant, revoked or expired", and `404` is
+        # the honest rendering of that. It cannot mean "absent" on this route: the bind one
+        # transaction earlier proved this session was live for this account, so a refusal now
+        # says the account state moved in between -- another session changed the password, or
+        # a recovery completed, either of which revokes every session including this one.
+        # `409` is what a client can act on, and it is what the portal renders as "changed
+        # somewhere else; nothing was changed here".
+        raise ApiError(409, "conflict") from None
+    if opened is None:
+        # The same refusal a wrong password gets anywhere else, and it names no field: the
+        # caller already knows which account it is signed in as, and learns nothing more.
+        raise ApiError(401, "invalid_credentials")
+    response = _json(
+        200,
+        {
+            "account_id": str(opened.account_id),
+            "session_id": str(opened.session_id),
+            "csrf_token": opened.csrf_secret.reveal(),
+            "expires_at": _iso(opened.expires_at),
+            # Stated rather than implied: every other session is gone, and a client that
+            # renders "you have been signed out everywhere else" is telling the truth.
+            "other_sessions_revoked": True,
+        },
+    )
+    b.set_session_cookie(response, opened)
+    return response
 
 
 def h_sessions(b: Boundary, request: Request, body: RequestBody) -> Response:
@@ -804,15 +963,141 @@ def h_rename_workspace(b: Boundary, request: Request, body: RequestBody) -> Resp
     return _json(200, {"workspace_id": str(context.workspace_id), "name": name, "replayed": result.replayed})
 
 
+# ------------------------------------------------------------------- handlers: preferences
+
+
+def _preferences_payload(row: preferences.WorkspacePreferencesRow) -> dict[str, Any]:
+    return {
+        "workspace_id": str(row.workspace_id),
+        "region_policy": list(row.region_policy),
+        "excluded_provider_classes": list(row.excluded_provider_classes),
+        "model_profile_note": row.model_profile_note,
+        "evaluation_intent": row.evaluation_intent,
+        "consent_version": row.consent_version,
+        "consent_acknowledged_at": _iso(row.consent_acknowledged_at),
+        # The account that acknowledged, not the membership: a membership can be removed and
+        # re-created, and the acknowledgement was made by a person.
+        "consent_account_id": _ident(row.consent_account_id),
+        "updated_at": _iso(row.updated_at),
+        # Derived from the architecture, not stored. True when the stated exclusions include
+        # one v1 cannot honour -- today, excluding Amazon, because the payload plane is S3.
+        "unservable_exclusion": row.unservable_exclusion,
+        # So a client never renders a stale statement as current.
+        "current_consent_version": CURRENT_CONSENT_VERSION,
+    }
+
+
+def h_preferences(b: Boundary, request: Request, body: RequestBody) -> Response:
+    with b.bind(request, mode="workspace", mutation=False) as (session, context):
+        row = preferences.read(session, context.workspace_id)
+    return _json(200, _preferences_payload(row))
+
+
+def _expected_workspace_header(request: Request) -> uuid.UUID:
+    """The workspace a mutation's page or action began under, from ``X-Workspace-Id``.
+
+    Required on every workspace mutation and never defaulted, for the reason
+    :func:`_expected_workspace` gives: defaulting an absent value to the binding would skip
+    exactly the comparison the header exists for.
+    """
+    value = request.headers.get(WORKSPACE_HEADER)
+    if not isinstance(value, str) or not _UUID_PATTERN.match(value.strip().lower()):
+        raise ApiError(422, "invalid_request")
+    return uuid.UUID(value.strip())
+
+
+def _expected_workspace(fields: dict[str, Any]) -> uuid.UUID:
+    """The workspace the page loaded its form for. Required, and never defaulted.
+
+    The bound workspace is what the session says; this is what the *page* says, and the
+    database compares the two under the workspace lock. Defaulting an absent field to the
+    binding would skip exactly that comparison, so an absent or malformed value is a ``422``
+    like any other malformed field -- a syntactic refusal, which answers nothing about any
+    workspace.
+    """
+    value = _string(fields, "workspace_id", maximum=36)
+    if not _UUID_PATTERN.match(value.lower()):
+        raise ApiError(422, "invalid_request")
+    return uuid.UUID(value)
+
+
+def h_preferences_state(b: Boundary, request: Request, body: RequestBody) -> Response:
+    """Replace this workspace's stated intent. A full replacement, so no idempotency key.
+
+    Every other mutation on this boundary that creates something takes one. This one does
+    not, and the absence is the design rather than an omission: ``PUT`` here writes the
+    whole statement, so sending the same body twice leaves the same row and there is no
+    duplicate to collapse. A key would be machinery that proved nothing.
+
+    The body's ``workspace_id`` is the workspace the page loaded its form for; the database
+    refuses the write with ``409 workspace_mismatch`` unless it is the workspace this
+    session is bound to now.
+    """
+    with b.bind(request, mode="workspace", mutation=True) as (session, _context):
+        fields = body.json()
+        row = preferences.state(
+            session,
+            _expected_workspace(fields),
+            region_policy=fields.get("region_policy"),
+            excluded_provider_classes=fields.get("excluded_provider_classes"),
+            model_profile_note=_string(fields, "model_profile_note", required=False, maximum=200),
+            evaluation_intent=_string(fields, "evaluation_intent", maximum=32),
+        )
+    return _json(200, _preferences_payload(row))
+
+
+def h_preferences_consent(b: Boundary, request: Request, body: RequestBody) -> Response:
+    """Record assent to the consent statement currently published.
+
+    The body names the version the portal displayed and the workspace the page loaded for,
+    and nothing else. The version recorded is the database's own current one -- a displayed
+    version that is no longer current is a ``409 conflict``, so assent is never recorded to
+    text the customer was not shown. Who acknowledged and when are derived inside the
+    database function from the bound account and ``clock_timestamp()``; there is no field
+    for either, so there is nothing for a caller to state wrongly.
+    """
+    with b.bind(request, mode="workspace", mutation=True) as (session, _context):
+        fields = body.json()
+        version = _string(fields, "consent_version", maximum=64)
+        row = preferences.acknowledge_consent(session, _expected_workspace(fields), version=version)
+    return _json(200, _preferences_payload(row))
+
+
+def h_consent(b: Boundary, request: Request, body: RequestBody) -> Response:
+    """The consent and subprocessor statement. Unauthenticated, and deliberately so.
+
+    A person deciding whether to sign up is entitled to read what they would be agreeing to
+    before they have an account. The text is public, carries no customer data and no
+    identifier, and is the same for everybody -- so there is nothing here for a credential to
+    protect, and requiring one would only mean the portal had to show a version it had
+    stored itself.
+
+    A version may be requested by name so that a workspace which acknowledged an older
+    statement can still display the text it actually agreed to.
+    """
+    requested = request.query_params.get("version") or CURRENT_CONSENT_VERSION
+    document = CONSENT_DOCUMENTS.get(requested)
+    if document is None:
+        # The vocabulary is closed and public; an unknown name is simply absent.
+        return _error(404, "not_found")
+    payload = document.payload()
+    payload["current_version"] = CURRENT_CONSENT_VERSION
+    payload["versions"] = sorted(CONSENT_DOCUMENTS)
+    return _json(200, payload)
+
+
 # --------------------------------------------------------------------------- handlers: members
 
 
 def h_members(b: Boundary, request: Request, body: RequestBody) -> Response:
-    with b.bind(request, mode="workspace", mutation=False) as (session, _context):
+    with b.bind(request, mode="workspace", mutation=False) as (session, context):
         rows = membership.workspace_memberships(session)
     return _json(
         200,
         {
+            # The workspace this list describes, so a page can drop a list that arrives
+            # after its workspace changed rather than render it under another.
+            "workspace_id": str(context.workspace_id),
             "members": [
                 {
                     "membership_id": str(row.membership_id),
@@ -848,11 +1133,12 @@ def h_member_role(b: Boundary, request: Request, body: RequestBody) -> Response:
 
 
 def h_invitations(b: Boundary, request: Request, body: RequestBody) -> Response:
-    with b.bind(request, mode="workspace", mutation=False) as (session, _context):
+    with b.bind(request, mode="workspace", mutation=False) as (session, context):
         rows = membership.workspace_invitations(session)
     return _json(
         200,
         {
+            "workspace_id": str(context.workspace_id),
             "invitations": [
                 {
                     "invitation_id": str(row.invitation_id),
@@ -927,9 +1213,12 @@ def _credential_payload(row: credentials.CredentialSummary) -> dict[str, Any]:
 
 
 def h_credentials(b: Boundary, request: Request, body: RequestBody) -> Response:
-    with b.bind(request, mode="workspace", mutation=False) as (session, _context):
+    with b.bind(request, mode="workspace", mutation=False) as (session, context):
         rows = credentials.list_credentials(session)
-    return _json(200, {"credentials": [_credential_payload(row) for row in rows]})
+    return _json(
+        200,
+        {"workspace_id": str(context.workspace_id), "credentials": [_credential_payload(row) for row in rows]},
+    )
 
 
 def _issued_payload(issued: credentials.IssuedCredential) -> dict[str, Any]:
@@ -987,7 +1276,7 @@ def h_credential_history(b: Boundary, request: Request, body: RequestBody) -> Re
     a session demoted out of ``audit:read`` since it bound gets ``403`` here even though its
     cached context still carries the permission.
     """
-    with b.bind(request, mode="workspace", mutation=False) as (session, _context):
+    with b.bind(request, mode="workspace", mutation=False) as (session, context):
         target = _uuid_path(request.path_params["credential_id"])
         membership.require_membership(session, scope=Scope.AUDIT_READ.value)
         rows = [
@@ -1010,7 +1299,9 @@ def h_credential_history(b: Boundary, request: Request, body: RequestBody) -> Re
     if not payload:
         # A credential this session may not see, or one with no history: one answer.
         return _error(404, "not_found")
-    return _json(200, {"credential_id": str(target), "history": payload})
+    return _json(
+        200, {"workspace_id": str(context.workspace_id), "credential_id": str(target), "history": payload}
+    )
 
 
 # --------------------------------------------------------------------------- handlers: bearer
@@ -1075,6 +1366,9 @@ def create_app(
 
     routes = [
         route("/v1/health", h_health, ["GET"]),
+        # The consent and subprocessor statement: public, because somebody deciding whether
+        # to sign up is entitled to read it first.
+        route("/v1/consent", h_consent, ["GET"]),
         # --- accounts (browser boundary) -------------------------------------------
         route("/v1/account/signup", h_signup, ["POST"]),
         route("/v1/account/verification/request", h_verification_request, ["POST"]),
@@ -1084,6 +1378,7 @@ def create_app(
         route("/v1/account/login", h_login, ["POST"]),
         route("/v1/account/logout", h_logout, ["POST"]),
         route("/v1/account", h_account, ["GET"]),
+        route("/v1/account/password", h_change_password, ["POST"]),
         route("/v1/account/sessions", h_sessions, ["GET"]),
         route("/v1/account/sessions/revoke-all", h_sessions_revoke_all, ["POST"]),
         route("/v1/account/sessions/{session_id}", h_session_revoke, ["DELETE"]),
@@ -1095,6 +1390,9 @@ def create_app(
         # --- the bound workspace (browser boundary) --------------------------------
         route("/v1/workspace", h_workspace, ["GET"]),
         route("/v1/workspace", h_rename_workspace, ["PATCH"]),
+        route("/v1/workspace/preferences", h_preferences, ["GET"]),
+        route("/v1/workspace/preferences", h_preferences_state, ["PUT"]),
+        route("/v1/workspace/preferences/consent", h_preferences_consent, ["POST"]),
         route("/v1/workspace/members", h_members, ["GET"]),
         route("/v1/workspace/members/{membership_id}", h_member_remove, ["DELETE"]),
         route("/v1/workspace/members/{membership_id}", h_member_role, ["PATCH"]),

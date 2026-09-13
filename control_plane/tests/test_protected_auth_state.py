@@ -462,6 +462,13 @@ _PROTECTED_WRITES = {
         "gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 'owner', true, now())",
         "UPDATE {schema}.identity_transaction_context SET tenant_id = gen_random_uuid()",
     ),
+    "identity_expected_workspace": (
+        # The forged expectation: a caller that could write this could make a stale page's
+        # mutation pass the expected-workspace comparison for any workspace it named.
+        "INSERT INTO {schema}.identity_expected_workspace (backend_pid, xact_id, workspace_id) "
+        "VALUES (pg_backend_pid(), pg_current_xact_id(), gen_random_uuid())",
+        "UPDATE {schema}.identity_expected_workspace SET workspace_id = gen_random_uuid()",
+    ),
 }
 
 

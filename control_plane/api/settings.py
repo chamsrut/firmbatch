@@ -35,6 +35,41 @@ SESSION_TTL_VAR = "FIRMBATCH_API_SESSION_TTL_SECONDS"
 SESSION_COOKIE_NAME = "fb_session"
 SESSION_COOKIE_SAMESITE = "strict"
 
+#: The **CSRF cookie**, added by Milestone 3.2, and the one thing about it that matters is
+#: what it is *not*: it is not an authentication credential, and holding it authenticates
+#: nobody. The session cookie above stays ``HttpOnly`` and is the only credential.
+#:
+#: **Why it exists.** ``open_browser_session`` mints the CSRF secret once and stores only its
+#: SHA-256 fingerprint, so the plaintext exists exactly once, in the login response. A
+#: single-page portal that kept it in memory would lose it on every reload and could then
+#: read but never write -- and there is no route that re-issues it, because the fingerprint
+#: is one-way. Milestone 3.1 left that gap; this closes it by handing the same secret to the
+#: browser in a cookie the portal's JavaScript can read, with the session's own lifetime.
+#:
+#: **Why it is not a weakening.** The header is still required and is still verified inside
+#: PostgreSQL against ``browser_sessions.csrf_fingerprint``. The boundary never compares the
+#: cookie with the header -- a double-submit check that only proved "these two values match"
+#: would be satisfied by any value a caller could set on both sides. So an attacker must
+#: produce the session's *actual* secret, not merely echo something. On top of that the
+#: session cookie is ``SameSite=Strict`` (a cross-site request carries no credential at all)
+#: and every cookie-authenticated mutation checks ``Origin`` against the allow-list.
+#:
+#: **``__Host-``**, when the cookie is ``Secure``. The prefix is a browser-enforced promise
+#: that the cookie was set over HTTPS, carries no ``Domain`` (so no sibling subdomain can set
+#: or shadow it) and has ``Path=/``. A browser rejects a ``__Host-`` cookie that breaks any of
+#: those, which is why the unprefixed name is used in the test environment, where
+#: ``FIRMBATCH_API_COOKIE_SECURE=false`` is permitted for a plain-http local client. The
+#: prefix is therefore a property of the deployment, not a second configuration knob:
+#: :func:`csrf_cookie_name` derives it from ``cookie_secure`` and nothing else.
+CSRF_COOKIE_BASE_NAME = "fb_csrf"
+CSRF_COOKIE_HOST_PREFIX = "__Host-"
+CSRF_COOKIE_SAMESITE = "strict"
+
+
+def csrf_cookie_name(*, secure: bool) -> str:
+    """The CSRF cookie's name for this deployment. ``__Host-`` prefixed when it is ``Secure``."""
+    return f"{CSRF_COOKIE_HOST_PREFIX}{CSRF_COOKIE_BASE_NAME}" if secure else CSRF_COOKIE_BASE_NAME
+
 #: The header a cookie-authenticated mutation must carry, holding the CSRF secret the
 #: login response handed to the client. Verified inside the database against the
 #: session's own CSRF fingerprint; a request without it, or with another session's, is
@@ -66,6 +101,11 @@ class ApiSettings:
     @property
     def is_test(self) -> bool:
         return self.environment is Environment.TEST
+
+    @property
+    def csrf_cookie(self) -> str:
+        """The CSRF cookie's name here: ``__Host-``-prefixed exactly when it is ``Secure``."""
+        return csrf_cookie_name(secure=self.cookie_secure)
 
     def __repr__(self) -> str:
         return (

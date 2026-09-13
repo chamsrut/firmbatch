@@ -280,7 +280,7 @@ def test_the_downgrade_to_0004_restores_the_milestone_24_catalogue_exactly(envir
             # The Milestone 2.4 plan wires this revision and nothing identity-shaped.
             assert roles.schema_revision(connection) == roles.M2_4_REVISION
 
-            assert migrate.upgrade_to_head(connection, expected=expected) == REVISION
+            assert migrate.upgrade_to_head(connection, expected=expected) == migrate.head_revision()
             connection.commit()
             again = _catalogue(connection)
             assert again == head
@@ -293,7 +293,7 @@ def test_the_downgrade_to_0004_restores_the_milestone_24_catalogue_exactly(envir
             connection.commit()
             second = _catalogue(connection)
             assert second == first
-            assert migrate.upgrade_to_head(connection, expected=expected) == REVISION
+            assert migrate.upgrade_to_head(connection, expected=expected) == migrate.head_revision()
             connection.commit()
     finally:
         drop_disposable_database(handle)
@@ -366,7 +366,7 @@ def test_the_populated_downgrade_and_reupgrade_ladder_is_deterministic(environme
 
     try:
         with migrate.migration_connection(handle.migration_url) as (connection, expected):
-            assert roles.schema_revision(connection) == roles.M3_1_REVISION
+            assert roles.schema_revision(connection) == roles.M3_2_REVISION
             # The downgrade that used to fail with 23514 on populated data now succeeds.
             migrate.downgrade_to(connection, roles.M2_4_REVISION, expected=expected)
             connection.commit()
@@ -392,8 +392,8 @@ def test_the_populated_downgrade_and_reupgrade_ladder_is_deterministic(environme
             assert remaining == 0
 
             # Re-upgrade to head: the ladder is whole again.
-            assert migrate.upgrade_to_head(connection, expected=expected) == REVISION
+            assert migrate.upgrade_to_head(connection, expected=expected) == migrate.head_revision()
             connection.commit()
-            assert roles.schema_revision(connection) == roles.M3_1_REVISION
+            assert roles.schema_revision(connection) == roles.M3_2_REVISION
     finally:
         drop_disposable_database(handle)

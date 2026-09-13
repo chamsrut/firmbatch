@@ -97,12 +97,19 @@ from .base import SCHEMA
 from .idempotency import IdempotencyConflict
 from .models import EMAIL_MAX_LENGTH, EMAIL_REGEX
 
-#: The SQLSTATEs migration ``0005`` raises, mirrored here because this module translates
-#: them; a test holds the copies equal.
+#: The SQLSTATEs migrations ``0005`` and ``0006`` raise, mirrored here because this module
+#: translates them; tests hold the copies equal.
 IDENTITY_REFUSED_SQLSTATE = "FB010"
 IDENTITY_CONFLICT_SQLSTATE = "FB011"
 IDENTITY_KEY_REUSE_SQLSTATE = "FB012"
 IDENTITY_CONTEXT_SQLSTATE = "FB013"
+#: Raised by migration ``0006``'s two workspace-preference mutations, and by the
+#: ``workspace_membership_authority`` body ``0006`` replaces, which every ``0005`` workspace
+#: mutation calls under the workspace lock: the workspace the caller's page state named -- the
+#: preference body's ``workspace_id``, or the ``X-Workspace-Id`` header the boundary recorded
+#: through ``identity_expect_workspace`` -- is not the workspace this session is bound to. One
+#: code for a stale page, a forged identifier and another tenant's identifier alike.
+IDENTITY_BINDING_SQLSTATE = "FB014"
 
 _INSUFFICIENT_PRIVILEGE = "42501"
 _INVALID_PARAMETER_VALUE = "22023"
@@ -119,6 +126,14 @@ IDENTITY_REFUSED_MESSAGE = (
     "revoked, expired, not addressed to this account, or not bound -- the cases are "
     "deliberately indistinguishable, because a refusal that told them apart would answer "
     "whether an identifier exists outside what this session may see."
+)
+
+#: What a binding mismatch says, written here for the same reason as the neutral refusal: the
+#: database's text would carry a plpgsql CONTEXT line, and this one names no identifier.
+WORKSPACE_BINDING_MISMATCH_MESSAGE = (
+    "the workspace this request names is not the one this session is bound to. The page was "
+    "loaded for another workspace, or the identifier is not this session's; nothing was "
+    "changed. Reload the current workspace and try again."
 )
 
 #: Lifetimes. Configuration inside the bounds the database enforces; stated here rather
@@ -156,6 +171,24 @@ class SessionContextError(IdentityError):
 
 class SessionAuthenticationError(IdentityError):
     """A session secret was refused before it reached the database: it is not one."""
+
+
+class WorkspaceBindingMismatch(IdentityError):
+    """The workspace a mutation named is not the one this session is bound to.
+
+    Milestone 3.2. Every workspace mutation names the workspace its page or action began
+    under: a preference form carries that workspace's identifier in its body, and every
+    workspace mutation carries it in the ``X-Workspace-Id`` header, which the boundary records
+    in the transaction once, after the bind. The database compares it, under the workspace
+    lock, with the workspace the bound session actually acts in -- the preference functions
+    against their body field, and ``workspace_membership_authority``, which every ``0005``
+    workspace mutation calls before it writes, against the recorded header. A page loaded for
+    workspace A whose shared session another tab has since re-bound to workspace B is refused
+    here rather than having A's action applied to B. The refusal is deliberately the same for
+    a stale page, a forged identifier and another tenant's identifier, so it answers nothing
+    about whether the identifier exists; the HTTP boundary renders it as
+    ``409 workspace_mismatch``, which the portal treats as "reload the current workspace".
+    """
 
 
 @dataclass(frozen=True)
@@ -278,6 +311,8 @@ def translate(error: DBAPIError) -> Exception | None:
         )
     if state == IDENTITY_CONTEXT_SQLSTATE:
         return SessionContextError(message or "this transaction has no usable session context")
+    if state == IDENTITY_BINDING_SQLSTATE:
+        return WorkspaceBindingMismatch(WORKSPACE_BINDING_MISMATCH_MESSAGE)
     if state == _INSUFFICIENT_PRIVILEGE:
         return AuthorizationError(message or "this context is not permitted to do that")
     if state == _INVALID_PARAMETER_VALUE:
@@ -541,6 +576,82 @@ def login(session: Session, *, email: str, password: Secret) -> LoginOutcome:
     return LoginOutcome(account_id=row.account_id, email_verified=bool(row.email_verified))
 
 
+def change_password(
+    session: Session,
+    *,
+    account_id: uuid.UUID,
+    session_id: uuid.UUID,
+    current_password: Secret,
+    new_password: Secret,
+    ttl: timedelta = DEFAULT_SESSION_TTL,
+) -> OpenedSession | None:
+    """Change a signed-in account's password, end everything the old one authorised, and
+    return the replacement session. ``None`` when the current password does not match.
+
+    Milestone 3.2. Runs on the **authenticator** engine, in **one transaction**, which is
+    what makes the whole change atomic: the current password is verified against the hash
+    the database just locked, the replacement is written by compare-and-swap against that
+    same hash, every outstanding token, every membership-bound API credential and **every**
+    browser session are ended, and the new session is minted afterwards so it survives the
+    sweep. Any failure rolls all of it back.
+
+    ``account_id`` and ``session_id`` come from a browser session the *application* engine
+    has already bound and CSRF-verified -- that is where the cookie is proved -- and the
+    database re-proves the session is live for that account before it hands back a hash.
+    Two engines, because the two authorities are deliberately split; the second transaction
+    is the one that matters, and it either happens completely or not at all.
+
+    The lookup takes the account row ``FOR UPDATE`` first, which is the account-plane lock
+    order migration ``0006`` states and every identity writer follows -- ``accounts``, then
+    ``account_tokens``, ``account_passwords``, ``auth_bindings``, ``browser_sessions``. A
+    recovery, a login or a second change that overlaps this one waits at the account row and
+    then observes what committed; none of them can deadlock with it, and the loser gets a
+    refusal it can act on rather than a serialisation failure.
+
+    A wrong current password returns ``None`` and changes nothing. It costs one Argon2id
+    verification, like a login, and the caller renders it as a refusal that names no field.
+    A password that moved between the lookup and the change -- a concurrent change, or a
+    recovery that committed while this call was running Argon2 -- fails the compare-and-swap
+    and reaches the caller as :class:`IdentityConflict`, which the HTTP boundary renders as
+    ``409``. Nothing was changed in that case either.
+    """
+    _require_transaction(session, "change_password")
+    for value, what in ((current_password, "current password"), (new_password, "new password")):
+        if not isinstance(value, Secret):
+            raise PasswordPolicyError(f"the {what} is handled as a Secret, never as a plain string")
+    if not isinstance(account_id, uuid.UUID) or not isinstance(session_id, uuid.UUID):
+        raise IdentityError("an account id and a session id are UUIDs")
+    row = _execute(
+        session,
+        text(f"SELECT password_hash FROM {SCHEMA}.password_change_lookup(:account, :session)"),
+        {"account": account_id, "session": session_id},
+    ).one()
+    stored = row.password_hash if row.password_hash else DUMMY_HASH
+    if not verify_password(stored, current_password):
+        # The challenge is written and the account row is locked; returning here rolls both
+        # back with the transaction. Nothing was changed and nothing was disclosed.
+        return None
+    # Only now is the new password hashed. A wrong current password costs one verification
+    # rather than a verification and a derivation.
+    new_hash = hash_password(new_password)
+    opened = _execute(
+        session,
+        text(
+            "SELECT session_id, account_id, session_secret, csrf_secret, expires_at "
+            f"FROM {SCHEMA}.change_account_password(:expected, :new_hash, CAST(:ttl AS interval))"
+        ),
+        {"expected": stored, "new_hash": new_hash, "ttl": _require_ttl(ttl, what="session")},
+        scrub=(new_hash, stored),
+    ).one()
+    return OpenedSession(
+        session_id=opened.session_id,
+        account_id=opened.account_id,
+        session_secret=Secret(opened.session_secret),
+        csrf_secret=Secret(opened.csrf_secret),
+        expires_at=opened.expires_at,
+    )
+
+
 def open_session(session: Session, *, ttl: timedelta = DEFAULT_SESSION_TTL) -> OpenedSession:
     """Open a browser session for the account this transaction challenged and verified.
 
@@ -619,6 +730,25 @@ def bind_session_context(
     return context
 
 
+def expect_workspace(session: Session, workspace_id: uuid.UUID) -> None:
+    """Record, for this transaction, the workspace the request was made **for**.
+
+    Milestone 3.2's expected-workspace contract. The bound workspace is what the session
+    says; this is what the *page or action* says, and ``workspace_membership_authority``
+    -- the one revalidation every workspace mutation makes, under the workspace lock --
+    compares the two inside the mutation itself and refuses a mismatch as
+    :class:`WorkspaceBindingMismatch` before anything is written. Recorded once per
+    transaction; a second, different expectation is a :class:`SessionContextError`.
+    """
+    if not isinstance(workspace_id, uuid.UUID):
+        raise IdentityError("an expected workspace is a UUID")
+    _execute(
+        session,
+        text(f"SELECT {SCHEMA}.identity_expect_workspace(:workspace_id)"),
+        {"workspace_id": workspace_id},
+    )
+
+
 @contextmanager
 def session_transaction(
     engine: Engine,
@@ -626,10 +756,17 @@ def session_transaction(
     *,
     csrf_secret: Secret | str | None = None,
     mode: str = "account",
+    expected_workspace_id: uuid.UUID | None = None,
 ) -> Iterator[tuple[Session, SessionContext]]:
-    """One transaction acting as one browser session. Commits on success, rolls back on error."""
+    """One transaction acting as one browser session. Commits on success, rolls back on error.
+
+    ``expected_workspace_id`` is recorded in the transaction right after the bind, so that
+    every workspace mutation the transaction goes on to make is compared against it.
+    """
     with db_engine.transaction(engine) as session:
         context = bind_session_context(session, session_secret, csrf_secret=csrf_secret, mode=mode)
+        if expected_workspace_id is not None:
+            expect_workspace(session, expected_workspace_id)
         yield session, context
 
 

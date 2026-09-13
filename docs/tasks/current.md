@@ -2,13 +2,15 @@
 
 Active work and open questions. Updated at the end of each task, alongside `docs/STATE.md`.
 
-Last updated: 2026-09-09, on `feat/milestone-3-1-identity-membership` from `main` at
-`116b5ee` (Milestone 3.0, PR #8), with **Milestone 3.1 implemented, tested and committed at
-`f92ecb9`** — after two review correction passes closing ten findings and two gaps (Codex)
-and six findings (GPT-5.6 Sol), and a third, clean independent review (GPT-5.6 Sol at xhigh
-effort) that verified all six of those findings as fixed and raised no actionable regression.
-The branch is **ready for pull request and merge**; it is not merged, not deployed and not
-VERIFIED LIVE. Milestone 1 merged at
+Last updated: 2026-09-13, on `feat/milestone-3-2-customer-portal` from `main` at `87159d5`
+(Milestone 3.1, PR #9), with **Milestone 3.2 — the customer-only product portal — implemented,
+tested and independently reviewed at implementation commit `ce097cb`, every actionable
+finding closed, and awaiting pull request and merge**. **Milestone 3.1 is merged** at `87159d5`
+(PR #9, implementation commit `f92ecb9`, status commit `c841f77`) — after two review
+correction passes closing ten findings and two gaps (Codex) and six findings (GPT-5.6 Sol),
+and a third, clean independent review (GPT-5.6 Sol at xhigh effort) that verified all six of
+those findings as fixed and raised no actionable regression. M3.2 is not merged, not
+deployed and not VERIFIED LIVE, and no evidence artifact has been captured. Milestone 1 merged at
 `6b4f341`; M2.1 merged at `712b51a` (implementation commit `521870b`, plus the bootstrap
 trust-boundary correction `78eae1d`); M2.2 merged at `b028f21` (implementation commit
 `d362717`); M2.3 merged at `dca2d49` (implementation commit `89fbdd9`), after a fourth
@@ -32,17 +34,19 @@ triggers; the target is at revision D.1 with verbatim source snapshots (D.1 curr
 historical) and a review register that records each rev D review item's D.1 resolution;
 ADR 0008 records the decision; M3.0 merged at `116b5ee` (PR #8). **Milestone 3.1 —
 membership-bound identity, sessions and credential issuance — is implemented, tested and
-independently reviewed at `f92ecb9` on this branch, ready for pull request and merge, and
-not merged, not deployed and not VERIFIED LIVE** (ADR 0009).
+independently reviewed at `f92ecb9` and merged at `87159d5` (PR #9); it is not deployed and
+not VERIFIED LIVE** (ADR 0009).
 
 ---
 
 ## Active — Milestone 3, accounts, identity, portal and protected staging
 
 Milestones 0, 1 and 2 are complete. Milestone 3 is the active milestone, under the
-revision D.1 roadmap. Its slices: **M3.0** documentation adoption (this branch), **M3.1**
-identity, membership and credential issuance, **M3.2** the customer application, **M3.3**
-the protected AWS staging preview.
+revision D.1 roadmap. Its slices: **M3.0** documentation adoption (merged, PR #8), **M3.1**
+identity, membership and credential issuance (merged, PR #9), **M3.2** the customer
+application (**this branch**, implemented, tested and independently reviewed at `ce097cb`,
+awaiting pull request and merge), **M3.3** the protected AWS staging preview with the
+Cognito adoption decision (next, and not yet authorized).
 
 ### M3.0 — revision D.1 documentation adoption — **merged at `116b5ee` (PR #8)**
 
@@ -116,16 +120,17 @@ Order for the human, from here (item 1 done at the 2026-09-07 review):
    per-run authorisations. These are the human's decisions; the documents leave them open on
    purpose.
 
-### M3.1 — identity, workspace membership and credential issuance — **implemented, tested and reviewed at `f92ecb9`, ready for PR**
+### M3.1 — identity, workspace membership and credential issuance — **implemented, tested and reviewed at `f92ecb9`; merged at `87159d5` (PR #9)**
 
-Implemented on `feat/milestone-3-1-identity-membership` from `main` at `116b5ee` and
-**committed at `f92ecb9`**. Nothing is pushed, no PR is opened, nothing is merged, nothing is
-deployed, no provider is contacted and no cloud spend is incurred. Migrations `0001`–`0004`
-are unchanged; migration `0005` carries the unmerged M3.1 implementation. ADR 0009 records
-the design; `docs/STATE.md` "CURRENT — Milestone 3.1" records what it is and what it proves.
+Implemented on `feat/milestone-3-1-identity-membership` from `main` at `116b5ee`,
+**committed at `f92ecb9`** and merged to `main` at `87159d5` (PR #9, status commit
+`c841f77`). Nothing is deployed, no provider is contacted and no cloud spend is incurred.
+Migrations `0001`–`0004` are unchanged; migration `0005` carries the M3.1 implementation.
+ADR 0009 records the design; `docs/STATE.md` "CURRENT — Milestone 3.1" records what it is
+and what it proves.
 
-**Where it stands:** implemented, tested, independently reviewed and **ready for pull request
-and merge**. It is **not merged, not deployed and not VERIFIED LIVE** — no deployment exists
+**Where it stands:** implemented, tested, independently reviewed and **merged** (PR #9). It
+is **not deployed and not VERIFIED LIVE** — no deployment exists
 and no evidence artifact has been captured, so the standard's VERIFIED LIVE label does not
 apply however green the suite is.
 
@@ -260,11 +265,108 @@ The slice as it was proposed, for the record:
   real PostgreSQL 16, each failing closed — plus every existing M2 protection passing
   unchanged. Not blocked by any open register entry.
 
-**Next is M3.2 — the customer-only portal UI**, the authenticated customer application, once
-M3.1 is merged. **M3.3 remains later**: its AWS staging needs a reviewed infrastructure and
-cost plan and explicit authorization before any resource is created. The **operator capacity
-agent remains separate operator-side software** and is not part of the customer portal — it
-is Phase P work, after a supplier signs.
+M3.1 merged at `87159d5` (PR #9). **M3.2 is implemented, tested and independently reviewed
+at `ce097cb`, awaiting pull request and merge** — see the section below. **M3.3 is next**:
+its AWS staging needs a reviewed infrastructure and cost plan and explicit authorization
+before any resource is created, and it carries the **Cognito adoption decision** — Cognito
+to own customer authentication, Firmbatch retaining its server-side browser session, CSRF,
+workspace authorization, RLS, audit, consent and API credentials — to be recorded as an ADR
+before anything is built on it. The **operator capacity agent remains
+separate operator-side software** and is not part of the customer portal — it is Phase P
+work, after a supplier signs, and the M3.2 portal contains no route, navigation entry,
+setting or scope that would reach one.
+
+### M3.2 — the customer-only product portal — **implemented, tested and independently reviewed at `ce097cb`, awaiting pull request and merge**
+
+The authenticated customer application, `portal/`: TypeScript, Vite and React, with React and
+ReactDOM as its only runtime packages (`portal/package.json` is the authority), served
+**same-origin with the API** behind a proxy. Committed as implementation commit `ce097cb`.
+ADR 0010 records the design and the corrections made after its four review passes
+(2026-09-10 to 2026-09-12), every actionable finding of which is closed; `docs/STATE.md`
+records what it proves and what it does not claim.
+
+- **Customer journeys:** signup and email confirmation; sign-in, sign-out and recovery; the
+  first workspace, for a verified account that is a member of nothing; workspace selection and
+  switching, revalidated by the server on every change; workspace details and rename; team,
+  roles and invitations, with the two owner-only rules stated where they bite; the customer's
+  stated policy, profile and preferences, and the consent statement; API credentials — list,
+  create, show once, rotate, revoke, and audit history for a role that holds `audit:read`;
+  the account, its verification status, its sessions, and the signed-in password change.
+- **Honest empty states:** Evaluation, Jobs, Results and Billing are in the navigation,
+  marked unavailable in text rather than only by styling, and contain **no fabricated job,
+  result, figure, chart, invoice or sample row**. The first journey is described around the
+  free 1,000-request evaluation and conversion to paid flex, with the steps that exist today
+  linked and working and the steps that do not marked as such.
+- **Schema:** forward migration `0006_preferences_and_password`. `0001`–`0005` untouched,
+  byte for byte. Two relations — the tenant-plane `workspace_preferences`, on which the
+  application role holds `SELECT` alone, and the transaction-scoped, protected
+  `identity_expected_workspace` — one trigger, and six functions: the two mutation entry
+  points `state_workspace_preferences` and `acknowledge_workspace_consent` (the authorization
+  and audit boundary for the relation), the expected-workspace writer
+  `identity_expect_workspace`, the consent trigger function as defence in depth, and the two
+  password-change entry points on the trusted-issuer boundary. It states the account-plane
+  lock order (`accounts` first, then tokens, passwords, bindings, sessions) and replaces the
+  bodies of `0005`'s `verify_account_email` and `complete_account_recovery` under it, and of
+  `workspace_membership_authority` to compare the recorded expected workspace with the
+  binding, restoring `0005`'s text verbatim for all three on downgrade.
+- **API:** five new routes. `GET /v1/consent` (public), `GET`/`PUT
+  /v1/workspace/preferences`, `POST /v1/workspace/preferences/consent`, and
+  `POST /v1/account/password`. Both preference mutations require `workspace_id` — the
+  workspace the page loaded for — and answer `409 workspace_mismatch` when it is not the
+  bound workspace.
+- **Independent review, 2026-09-10:** eleven findings, all corrected at the root with tests
+  that fail without the correction — the stale workspace form; application-role DML,
+  read-bound contexts and the trigger as boundary (one `SECURITY DEFINER` mutation boundary,
+  `SELECT`-only grant); the password-change/recovery deadlock (the lock order above, real
+  overlap tests, no `40P01`); logout forgotten locally only after a successful logout or after
+  one safe account read confirms the session is gone, a logout `401` proving nothing on its
+  own (the P2 follow-up), the sign-out then made one provider-owned operation — single-flight
+  across every control, fenced to the session generation it began under, its validity read
+  under a real deadline (the three remaining logout findings, 2026-09-11) — and the same
+  fence then extended to every route: a lease on every request, no unfenced `forget`, a
+  mutation `401` checked rather than believed, an answer to a replaced session dropped (the
+  session-generation race, 2026-09-11) — and, from a clean-context review's eight findings
+  (2026-09-11), the replacement barrier (a replacement session adopted synchronously from
+  the response that opened it, refusals deferred while one is in flight), sequenced and
+  coherent account loads, the binding-first workspace switch, the expected workspace on
+  every workspace mutation (`X-Workspace-Id`, compared inside `workspace_membership_authority`
+  under the workspace lock, migration `0006`) and on every workspace read's envelope, page
+  request tickets and keyed single-flight reads (ADR 0010 decision 11); one-time tokens safe
+  under `StrictMode`; the public
+  invitation landing page;
+  audit atomicity; focus after every route transition; and the dependency wording here and in
+  the other three documents. `docs/STATE.md` lists them one by one.
+- **Final review, 2026-09-12:** two P3 findings, both corrected. A `next=` destination that
+  is a path by every syntactic rule but normalises to a protocol-relative URL
+  (`/..//evil.example`, `/.//evil.example`, `/a/..//evil.example` → `//evil.example`) is now
+  refused: the destination rebuilt from the parser's parts is checked again, syntactically
+  and by a second parse, before it is returned, with the three cases and their variants in
+  the hostile corpus and asserted through every redirect helper, the router and a rendered
+  link. And every count, name, comment, docstring and file reference the review found
+  inaccurate was re-derived from the migration, the route tables, the diff and the
+  verification script and corrected in place — `0006` adds two relations, one trigger and
+  six functions and replaces three `0005` bodies; the application role gains three
+  functions; six check constraints; nineteen registered routes and twenty pages in seven
+  route modules; six existing test modules changed; the identity plane has fifty-one
+  functions; the fail-closed "13 passed, 2 FAILED" figure included a foundation-suite gate
+  starved of its database URL in the same experiment, so the missing dependencies alone fail
+  one gate of fifteen. `docs/STATE.md` "Final review corrections" lists each site.
+- **Verification (2026-09-12, after the review corrections, the centralised sign-out, the
+  session lease on every route, the clean-context review's eight corrections and the final
+  review's two P3 corrections):** **15 gates passed, 0 failed**, 167 required files; the
+  foundation suite **2,188 passed, 1 skipped** of 2,189 collected; the portal suite **392
+  tests across 10 files** (327 before the redirect corpus grew), on Node 24.21.0 LTS.
+  Migrations `0001`–`0005` are byte-identical to `main`. `git diff --check` clean. No
+  evidence artifact captured. That code is **implementation commit `ce097cb`**; the
+  canonical script re-run at `ce097cb` on 2026-09-13, with only this status update in the
+  working tree, reports the same **15 gates passed, 0 failed** over 167 required files.
+
+**Two protected files were changed, both with the human's explicit prior approval**, and both
+narrowly: `scripts/verify-repository.sh` gains the customer-portal gate and forty-eight
+`REQUIRED_FILES` entries (forty-seven with the milestone, and one more, approved under the
+same decision, for `portal/src/lib/one-time-token.ts` with the review corrections), and `.github/workflows/ci.yml` gains `actions/setup-node@v4` pinned
+to Node 24 and an `npm ci` step. No gate was removed, reordered or weakened, and the new one
+fails rather than skips when its prerequisites are absent — checked, not assumed.
 
 ### Open questions carried into Milestone 3
 
@@ -276,19 +378,45 @@ is Phase P work, after a supplier signs.
   needed before M3.
 - **AWS staging authorization** (M3.3): region, access model, cost estimate, managed-RDS role
   and migration feasibility, and the human's explicit go-ahead.
+- **The Cognito adoption decision** (M3.3): the ADR recording that Cognito owns customer
+  authentication while Firmbatch retains its server-side browser session, CSRF, workspace
+  authorization, RLS, audit, consent and API credentials — and what that means for the M3.1
+  authentication path and the M3.2 pages that drive it, decided there rather than here.
 - **Evidence promotion:** Milestone 2 could be promoted to VERIFIED LIVE by capturing the
   foundation-suite run with `/record-evidence` under `docs/evidence/m2/`. Until then the
   **implemented and tested** classification stands for all four slices. M3.1 is
   **implemented, tested and independently reviewed** at `f92ecb9` and could be promoted the
   same way, by capturing its foundation-suite run under `docs/evidence/m3/` at or after that
-  commit; until an artifact and a deployment exist it is not VERIFIED LIVE.
+  commit; until an artifact and a deployment exist it is not VERIFIED LIVE. **M3.2** is in
+  the same position at `ce097cb`, and now has a commit to provenance an artifact against;
+  until an artifact and a deployment exist it is not VERIFIED LIVE either.
 - **M3.1 follow-ups needing approval:** whether the hash-harvest limitation of
   application-side password verification (ADR 0009 decision 6) is acceptable through M3.3 or
-  needs a separated verifier process there. The two protected inventories are no longer open:
-  both were extended with the human's explicit approval, and the authenticator's grant has
-  since been narrowed to the functions its call graph actually reaches — ten at present,
-  after mailbox verification joined it — closing the least-privilege follow-up that
-  correction had left behind.
+  needs a separated verifier process there. **M3.2 does not change this**: the signed-in
+  password change reads one hash per call and does it on the same narrow authenticator
+  principal, which neither worsens nor solves the limitation. The two protected inventories
+  are no longer open: both were extended with the human's explicit approval, and the
+  authenticator's grant has since been narrowed to the functions its call graph actually
+  reaches — **twelve** at present, after mailbox verification joined it at M3.1 and the two
+  password-change functions at M3.2 — closing the least-privilege follow-up that correction
+  had left behind.
+- **M3.2 follow-ups, carried to M3.3:**
+  - **A real-browser end-to-end suite.** Nothing here has been run in a browser. The cookie
+    contract is asserted at the header level against real PostgreSQL and the client behaviour
+    in jsdom with a real cookie jar, but the *browser's own* enforcement of the `__Host-`
+    prefix and `SameSite=Strict` — vendor behaviour, not this repository's code — and the
+    visual result of the stylesheet are both unobserved. M3.3's gate is already "the real
+    customer portal can be opened and reviewed on AWS with verified test identities", which is
+    the natural home for a Playwright suite covering reload, multiple tabs, session
+    replacement, expiry and mismatch against a deployed environment.
+  - **Same-origin is now a requirement on M3.3's infrastructure**, not a preference. The
+    `__Host-` prefix forbids a `Domain` attribute, so a portal on `app.` could not read a
+    cookie an API set on `api.`. The staging deployment must put both behind one origin.
+  - **No email is delivered**, so a human cannot complete the signup, verification, recovery
+    or invitation journeys locally without reading the token out of the API process. A real
+    provider is M8, pulled forward in part by M3.3.
+  - **A follow-up lock regeneration** could still move the development test-client pin from
+    `httpx` to `httpx2`, which Starlette 1.6 prefers. Unchanged by M3.2.
 
 ---
 
