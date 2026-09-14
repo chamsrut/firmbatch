@@ -7,13 +7,17 @@
 > tested and independently reviewed; **none of it deployed, none VERIFIED LIVE**. To run the
 > portal locally, see `portal/README.md`.
 > **Current slice:** Milestone 3.3b — the Terraform, container and delivery foundation under
-> `infra/`, `Dockerfile` and `.github/workflows/` (ADR 0012), implemented and statically tested
-> on its branch. M3.3a — the AWS staging, Cognito and Terraform architecture (ADR 0011) — merged
-> through PR #11 at `86d4195`. **No Terraform plan or apply has run, no AWS or GitHub resource
-> exists, and no deployment or deployment evidence exists**; the hosted portal becomes visible
-> only after M3.3d's authorized deployment. M3.3c — the broker, bootstrap and identity-binding
-> programs and the identity-mapping migration, now `0008` — is next. (`0007` is M3.3b's incidental
-> password-hash correction.)
+> `infra/`, `Dockerfile` and `.github/workflows/` (ADR 0012) — implemented, statically tested
+> and independently reviewed at implementation commit `cff27c8`, every actionable review
+> finding closed, awaiting pull-request CI and merge. The image has not been built locally
+> (Docker is unavailable), so the first actual container build is a required PR CI condition.
+> M3.3a — the AWS staging, Cognito and Terraform architecture (ADR 0011) — merged through PR #11
+> at `86d4195`. **No Terraform plan or apply has run, no AWS or GitHub resource exists, no image
+> has been pushed, no deployment or deployment evidence exists, and nothing is VERIFIED LIVE**;
+> the hosted portal becomes visible only after M3.3d's authorized deployment. Milestone 3.3
+> remains active; M3.3c — the broker, bootstrap and identity-binding programs and the
+> identity-mapping migration, now `0008` — is next. (`0007` is M3.3b's incidental password-hash
+> correction.)
 > **Target:** Firmbatch v1 revision D.1.
 >
 > The canonical target is `docs/architecture/v1-target-architecture.md`.

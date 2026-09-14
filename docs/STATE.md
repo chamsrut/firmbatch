@@ -16,10 +16,14 @@ Five labels, kept strictly apart:
 
 Last updated: 2026-09-14, on `feat/milestone-3-3b-terraform-foundation` from `main` at
 `86d4195`, with **Milestone 3.3b — the Terraform, container and delivery foundation — as the
-current slice, implemented and statically tested on this branch** (ADR 0012). **Milestone 3.3a
-— the AWS staging, Cognito and Terraform architecture adoption — is merged** through PR #11 at
-`86d4195` (documentation only, ADR 0011). **No Terraform plan or apply has run, no AWS or GitHub
-resource has been created, and no deployment or evidence artifact exists for Milestone 3.3.**
+current slice, implemented, statically tested and independently reviewed at implementation commit
+`cff27c8`, with every actionable review finding closed, and awaiting pull-request CI and merge** (ADR 0012).
+Its final local canonical run was **16 gates passed, 0 failed**, with **257** required files; the image has not
+been built locally because Docker is unavailable, and the first actual container build remains a required PR CI
+condition. **Milestone 3.3a — the AWS staging, Cognito and Terraform architecture adoption — is merged** through
+PR #11 at `86d4195` (documentation only, ADR 0011). **No Terraform plan or apply has run, no AWS or GitHub
+resource has been created, no image has been pushed, and no deployment or evidence artifact exists for
+Milestone 3.3; nothing of it is VERIFIED LIVE.**
 **Milestone 3.2 — the customer-only product portal — is merged** through PR #10 at
 `ae61747` (implementation commit `ce097cb`, status commit `59d82a7`), implemented, tested
 and independently reviewed: every actionable finding from its four review passes — the
@@ -73,8 +77,8 @@ Cognito and Terraform architecture adoption (ADR 0011) — is merged through PR 
 it records the Cognito adoption decision and splits M3.3 into four slices — M3.3a architecture,
 M3.3b Terraform and task scaffolding, M3.3c the bootstrap, identity-binding and broker programs
 with the identity mapping and dependencies, M3.3d authorized deployment and evidence. **M3.3b
-is the current slice**: implemented and statically tested on its branch, scaffolding only, with
-nothing planned, applied, pushed or deployed (ADR 0012). **M3.3c is next** and owns the
+is the current slice**: implemented, statically tested and independently reviewed at `cff27c8`, awaiting
+pull-request CI and merge; scaffolding only, with nothing planned, applied, pushed or deployed (ADR 0012). **M3.3c is next** and owns the
 executable identity broker, database bootstrap and identity-binding programs and migration
 `0008` (renumbered: `0007` is the incidental password-hash correction found by M3.3b's
 verification, ADR 0012 decision 14). Nothing of M3.3 is deployed; the customer can see the real hosted portal only after
@@ -2128,9 +2132,11 @@ deployment authorization.
 
 ---
 
-## CURRENT — Milestone 3.3b Terraform, container and delivery foundation — **this branch; implemented and statically tested; nothing planned, applied, pushed or deployed**
+## CURRENT — Milestone 3.3b Terraform, container and delivery foundation — **implemented, statically tested and independently reviewed at `cff27c8`; awaiting PR CI and merge; nothing planned, applied, pushed or deployed**
 
-On `feat/milestone-3-3b-terraform-foundation` from `main` at `86d4195` (M3.3a, PR #11). ADR 0012
+On `feat/milestone-3-3b-terraform-foundation` from `main` at `86d4195` (M3.3a, PR #11), committed at
+implementation commit `cff27c8` and awaiting pull-request CI and merge; every actionable finding of its
+independent reviews is closed (the correction passes below). ADR 0012
 records the implementation decisions and the places they refine ADR 0011. It is **scaffolding
 only**: no Terraform plan or apply has run against AWS; no AWS resource, GitHub environment,
 branch protection, ruleset, variable, secret, image, deployment or evidence artifact exists
@@ -2220,7 +2226,7 @@ and the delivery checks' unit tests. **None of it has run against AWS or GitHub.
 
 ### The correction pass before commit (2026-09-14)
 
-Three corrections to the staged, uncommitted tree, at the human's instruction:
+Three corrections before the implementation commit, at the human's instruction:
 
 1. **An incidental reliability and security correction: the password-hash contract, migration
    `0007_password_hash_contract`.** M3.3b's canonical verification failed once in the PostgreSQL suite
@@ -2247,7 +2253,7 @@ Three corrections to the staged, uncommitted tree, at the human's instruction:
 ### The second correction pass: the independent M3.3b review (2026-09-14)
 
 An independent review of the corrected tree raised sixteen findings and asked for a regression sweep;
-all are corrected in the staged, uncommitted tree, at the human's instruction (ADR 0012, whose
+all are corrected before the implementation commit, at the human's instruction (ADR 0012, whose
 decisions are amended in place, with decision 15 new). Implemented and statically tested, not VERIFIED LIVE.
 
 1. **The apply boundary.** The former `DenyEveryIamChange` `NotAction` statement denied everything
@@ -2313,7 +2319,7 @@ decisions are amended in place, with decision 15 new). Implemented and staticall
 ### The third correction pass: the review's verification (2026-09-14)
 
 The same independent reviewer verified the second pass and found nine of its seventeen corrections
-incomplete, one at P1. Each is corrected in the staged, uncommitted tree, at the human's instruction, and
+incomplete, one at P1. Each is corrected before the implementation commit, at the human's instruction, and
 the eight it verified closed are preserved with their regression tests. Implemented and statically tested,
 not VERIFIED LIVE.
 
@@ -2381,7 +2387,7 @@ rather than written here.
 ### The fourth correction pass: findings 14, 16 and 17, and two regression gaps (2026-09-14)
 
 The same reviewer found three findings still incomplete and two regression tests missing under closed findings.
-Each is corrected in the staged, uncommitted tree, at the human's instruction; the behaviour of every finding
+Each is corrected before the implementation commit, at the human's instruction; the behaviour of every finding
 already verified closed is unchanged. Implemented and statically tested, not VERIFIED LIVE.
 
 1. **Finding 14 — the versioned workflow identity.** `verify_publish_attempt` compared the attempt's workflow path
@@ -2432,8 +2438,8 @@ the final staged tree is reported with the change rather than written here.
 
 The reviewer showed that a role outside the bootstrap root could still become a delivery identity — a staging-root
 role imported from `firmbatch-staging-github-plan` and given `AdministratorAccess`, and a compute-module role named
-`${var.name_prefix}-github-apply` — and that two policy-checker paths had no direct test. Corrected in the staged,
-uncommitted tree at the human's instruction; the behaviour of every finding already verified closed is unchanged.
+`${var.name_prefix}-github-apply` — and that two policy-checker paths had no direct test. Corrected before the
+implementation commit at the human's instruction; the behaviour of every finding already verified closed is unchanged.
 Implemented and statically tested, not VERIFIED LIVE.
 
 1. **Only the bootstrap root declares or owns a GitHub delivery identity** — the staging plan, staging apply and
@@ -2460,8 +2466,9 @@ and mutation tests, **221** (the fourth pass's **213** above is historical); the
 `terraform test` against mocked providers, **19 passed** for `bootstrap`, **12** for `artifacts` and **41** for
 `environments/staging`; the agent policy tests, **460 checks passed**. The canonical run on that staged tree
 (staged-diff SHA-256 `5f426da6869ce990b401218cd795ab48fa962d4ae1399f491a9a0d96efc66db6`): **16 passed, 0 failed**,
-**257** required files. This documentation reconciliation came after that run; its own canonical run is reported
-with the change rather than written here. None of this is AWS-live: no plan or apply, no image built or pushed, no
+**257** required files. The documentation reconciliation came after that run; **the final local canonical run**, on
+its staged tree (staged-diff SHA-256 `e6b90bc5efb35903bae89ef6f35933c9198a5a1ead2ee16788ccc66a1930dd0d`, the tree
+committed as `cff27c8`): **16 passed, 0 failed**, **257** required files. None of this is AWS-live: no plan or apply, no image built or pushed, no
 deployment and no evidence.
 
 ### What M3.3b does not do, and does not claim
@@ -2472,8 +2479,8 @@ deployment and no evidence.
   an unrecorded observation rather than an artifact — `main` had no branch protection, no ruleset
   and no environment; the workflows refuse for exactly that reason, and nothing here
   claims otherwise because a test checks their shape.
-- **The image has not been built here.** Docker is not installed locally; the build is CI's
-  `container` job, which has not run for this branch.
+- **The image has not been built locally.** Docker is unavailable locally; the first actual container build is
+  CI's `container` job, which has not yet run and remains a required condition of the pull request's CI.
 - **Not operational.** The broker, bootstrap and identity-binding programs do not exist; the
   existing web/API entry point still requires an authenticator URL the AWS-mode task does not
   receive; today's API does not serve the compiled portal the image carries.
@@ -2689,7 +2696,7 @@ capture new artifacts with provenance matching the committed tree.
 
 | Claim | How to settle it |
 | --- | --- |
-| All gates in `scripts/verify-repository.sh` pass — **sixteen** gates since Milestone 3.3b, over **257** required files since its second correction pass (2026-09-14; **256** after its first, **241** before it): **16 passed, 0 failed** at the 2026-09-13 run of the uncommitted M3.3b working tree over `86d4195` (241 files) and at the first correction pass's run (256 files). The second correction pass's edits came after both runs, which verify none of them. The third correction pass's canonical run on its final staged tree (staged-diff SHA-256 `7b93440739c6b6e7e860ed9c7b462cce8ff114377d325107d39d71ecd3284c17`), observed locally on 2026-09-14 with no artifact: **16 passed, 0 failed**, **257** required files — the current gate and manifest counts (the 241 and 256 above are historical). The fourth correction pass's edits came after that run and are verified by its own run, reported with that change. All recorded in `docs/tasks/current.md` under M3.3b; **fifteen** gates over **167** required files from Milestone 3.2 to Milestone 3.3a, **15 passed, 0 failed** at the 2026-09-13 Milestone 3.3a run recorded at the end of this cell. The lineage, kept as history: at Milestone 2.4 there were **fourteen** gates, **14 passed, 0 failed**: layout (**119** required files since Milestone 3.1 registered its production and test modules; 97 at Milestone 2.4), agent configuration, hygiene, v0 property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 247/247, the runtime import closure check, and the PostgreSQL foundation suite **1,746 collected — 1,745 passed, 1 skipped** locally — the one skip is the pre-existing REPLICATION skip (granting REPLICATION needs a superuser admin, which CI has and the developer cluster does not. On CI that test runs and two others skip instead -- the owner-only-refusal assertions, which have no meaning for a superuser bootstrap administrator). Observed locally on 2026-09-06, after all three correction passes, against PostgreSQL 16.15 on the developer's WSL machine, at Milestone 2.4 implementation commit `d91e4f2` — that suite count is HISTORICAL to that commit. **Re-run for Milestone 3.0** on 2026-09-06 at `main` `4511f7d`, twice — once with the rev D documentation changes uncommitted in the working tree, and again after the correction to rev D.1 with the documentation changes staged — against the same attested PostgreSQL 16.15 cluster: **14 gates passed, 0 failed** both times, 97 required files; the script's passing output does not print the foundation suite's collected/passed/skipped counts, so no new count is claimed here. Still no artifact. **Re-run for Milestone 3.1** on 2026-09-09 at implementation commit `f92ecb9`, against the same attested PostgreSQL 16.15 cluster: **14 gates passed, 0 failed**, with **119** required files in the layout gate, and no disposable database, role or session left behind. The foundation-suite figure current at that commit is the **2,038 collected — 2,037 passed, 1 environment-dependent REPLICATION skip** recorded in the Milestone 3.1 row below; the 1,746 above stays HISTORICAL to `d91e4f2`. **No milestone from M2.2 to M3.1 added a gate**; the foundation-suite gate already runs the whole `control_plane/tests` directory, so each of those milestones' new modules runs inside it. **Milestone 3.2 is the first since M2.1 to add one** — the customer portal is TypeScript and the foundation-suite gate cannot reach it — taking the count to **fifteen**; see the Milestone 3.2 row below. **Re-run for Milestone 3.3a** on 2026-09-13 at the working tree over `main` `ae61747`, with the documentation changes uncommitted, against the same attested PostgreSQL 16 cluster: **15 gates passed, 0 failed**, 167 required files; the passing output prints no suite counts, so none is claimed for this run. **Re-run after the M3.3a review corrections** the same day, at the corrected working tree before it was re-staged, against PostgreSQL 16.15 and Node 24.19.0: **15 gates passed, 0 failed**, 167 required files. Wording fixes prompted by the post-correction reviews, all in the eight M3.3a markdown files, came after that run. Still no artifact. | `/record-evidence` → `docs/evidence/r0/gates.txt` (and a Milestone 2 artifact for the foundation suite). Not yet captured. |
+| All gates in `scripts/verify-repository.sh` pass — **sixteen** gates since Milestone 3.3b, over **257** required files since its second correction pass (2026-09-14; **256** after its first, **241** before it): **16 passed, 0 failed** at the 2026-09-13 run of the uncommitted M3.3b working tree over `86d4195` (241 files) and at the first correction pass's run (256 files). The second correction pass's edits came after both runs, which verify none of them. The third correction pass's canonical run on its final staged tree (staged-diff SHA-256 `7b93440739c6b6e7e860ed9c7b462cce8ff114377d325107d39d71ecd3284c17`), observed locally on 2026-09-14 with no artifact: **16 passed, 0 failed**, **257** required files — the current gate and manifest counts (the 241 and 256 above are historical). The fourth and fifth correction passes came after that run; **the final local canonical run**, on the finished tree committed as M3.3b implementation commit `cff27c8` (staged-diff SHA-256 `e6b90bc5efb35903bae89ef6f35933c9198a5a1ead2ee16788ccc66a1930dd0d`), observed locally on 2026-09-14 with no artifact: **16 passed, 0 failed**, **257** required files. All recorded in `docs/tasks/current.md` under M3.3b; **fifteen** gates over **167** required files from Milestone 3.2 to Milestone 3.3a, **15 passed, 0 failed** at the 2026-09-13 Milestone 3.3a run recorded at the end of this cell. The lineage, kept as history: at Milestone 2.4 there were **fourteen** gates, **14 passed, 0 failed**: layout (**119** required files since Milestone 3.1 registered its production and test modules; 97 at Milestone 2.4), agent configuration, hygiene, v0 property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 247/247, the runtime import closure check, and the PostgreSQL foundation suite **1,746 collected — 1,745 passed, 1 skipped** locally — the one skip is the pre-existing REPLICATION skip (granting REPLICATION needs a superuser admin, which CI has and the developer cluster does not. On CI that test runs and two others skip instead -- the owner-only-refusal assertions, which have no meaning for a superuser bootstrap administrator). Observed locally on 2026-09-06, after all three correction passes, against PostgreSQL 16.15 on the developer's WSL machine, at Milestone 2.4 implementation commit `d91e4f2` — that suite count is HISTORICAL to that commit. **Re-run for Milestone 3.0** on 2026-09-06 at `main` `4511f7d`, twice — once with the rev D documentation changes uncommitted in the working tree, and again after the correction to rev D.1 with the documentation changes staged — against the same attested PostgreSQL 16.15 cluster: **14 gates passed, 0 failed** both times, 97 required files; the script's passing output does not print the foundation suite's collected/passed/skipped counts, so no new count is claimed here. Still no artifact. **Re-run for Milestone 3.1** on 2026-09-09 at implementation commit `f92ecb9`, against the same attested PostgreSQL 16.15 cluster: **14 gates passed, 0 failed**, with **119** required files in the layout gate, and no disposable database, role or session left behind. The foundation-suite figure current at that commit is the **2,038 collected — 2,037 passed, 1 environment-dependent REPLICATION skip** recorded in the Milestone 3.1 row below; the 1,746 above stays HISTORICAL to `d91e4f2`. **No milestone from M2.2 to M3.1 added a gate**; the foundation-suite gate already runs the whole `control_plane/tests` directory, so each of those milestones' new modules runs inside it. **Milestone 3.2 is the first since M2.1 to add one** — the customer portal is TypeScript and the foundation-suite gate cannot reach it — taking the count to **fifteen**; see the Milestone 3.2 row below. **Re-run for Milestone 3.3a** on 2026-09-13 at the working tree over `main` `ae61747`, with the documentation changes uncommitted, against the same attested PostgreSQL 16 cluster: **15 gates passed, 0 failed**, 167 required files; the passing output prints no suite counts, so none is claimed for this run. **Re-run after the M3.3a review corrections** the same day, at the corrected working tree before it was re-staged, against PostgreSQL 16.15 and Node 24.19.0: **15 gates passed, 0 failed**, 167 required files. Wording fixes prompted by the post-correction reviews, all in the eight M3.3a markdown files, came after that run. Still no artifact. | `/record-evidence` → `docs/evidence/r0/gates.txt` (and a Milestone 2 artifact for the foundation suite). Not yet captured. |
 | The M2.1 tenant-isolation properties hold in PostgreSQL: absent context reads nothing and writes nothing; tenant A cannot read, insert, update or delete tenant B's rows; a fabricated cross-tenant or dangling foreign key is rejected; tenant context is not inherited from a session value, a pooled connection, or a URL option; a reused ORM `Session` cannot serve a previous tenant's object; a temporary relation cannot shadow a Firmbatch table; the application role is non-owner, `NOSUPERUSER`, `NOBYPASSRLS`, is refused at connect time if it were any of those, cannot disable a policy, cannot create tables or temporary tables, cannot read the schema history, and cannot create a tenant even with matching context; workspace uniqueness is tenant-local. | `/record-evidence` → `docs/evidence/m2/tenant-isolation-suite.txt`, after the Milestone 2.1 commit. Until then this is a re-runnable claim with no captured artifact. |
 | The M2.2 idempotency and outbox properties hold in PostgreSQL: an identical retry returns the stored result and invokes the mutation once; four identical calls leave one workspace, one claim and one linked event; a conflicting reuse is rejected; two callers observed contending on a real lock commit one effect and one event, and the loser replays; a failure before commit leaves nothing and does not block the retry; a mutation callback cannot commit or roll back the primitive's transaction and an escape by any other route is detected; unflushed ORM state at entry is rejected; malformed operations and keys are refused before the mutation runs; the same key is independent between tenants; cross-tenant reads and writes on both new tables fail closed; missing context fails closed; a committed event is immutable to the application role and matches zero rows even for the owner; an internal state change appends an event with no idempotency record and a rollback removes both; and no value of the request identity reaches a row. **At M2.2 this was 511 passing checks with 1 skipped, of which 130 were new; the same properties are asserted at M2.3 inside a suite of 806.** | `/record-evidence` → `docs/evidence/m2/idempotency-outbox-suite.txt`, at or after Milestone 2.2 implementation commit `d362717`. Until then this is a re-runnable claim with no captured artifact, and M2.2 is **not** VERIFIED LIVE. |
 | The M2.3 authenticated-context, authorization, audit and secrets properties hold in PostgreSQL: a forged `app.tenant_id` or any fabricated setting grants nothing; a fabricated tenant, binding id, fingerprint, actor or scope grants nothing; the function that writes a context is executable by nobody; a relation forged where the context lives is ignored because it is not owned by the schema owner; unknown, malformed, revoked and expired credentials fail closed with one indistinguishable message; binding twice or switching identity is refused; context survives no commit, rollback, failed statement, pool reuse or `Session` reuse, and a Connection-bound `Session` is refused; a valid credential reaches its own tenant and no other; the credential is never stored; authorization is deny-by-default with read/write scope distinctions, minimal framework capabilities and no non-customer scope; every `SECURITY DEFINER` function is owned, path-pinned, `PUBLIC`-revoked, minimally granted and free of dynamic SQL; the registry has no grants and no policy; audit events derive tenant and actor, refuse a supplied alternative, cannot be backdated, are immutable, roll back with their action and reject secret-shaped metadata; secrets never render themselves and production fails closed; and the migration reverses to the M2.2 shape and back. **1,314 pytest checks pass, 1 skipped**, a net increase of 803 collected checks over M2.2's 512 -- five new modules, plus every existing module moved onto the authenticated mechanism, plus a handful of M2.1 tests replaced by the stronger property that superseded them. | `/record-evidence` → `docs/evidence/m2/authenticated-context-suite.txt`, at or after Milestone 2.3 implementation commit `89fbdd9`. No evidence artifact has been captured, so this remains a re-runnable claim and M2.3 is **implemented and tested**, **not** VERIFIED LIVE. |
@@ -2863,7 +2870,8 @@ OIDC delivery through two protected GitHub environments with saved plans kept ou
 customer authentication (password, required TOTP, recovery and verification email in AWS
 mode), while Firmbatch retains its server-side browser session, the CSRF cookie, workspace
 authorization, row-level security, the audit trail, consent and API credentials. **M3.3b**,
-the current slice, is implemented and statically tested on its branch — the Terraform and task
+the current slice, is implemented, statically tested and independently reviewed at `cff27c8`, awaiting
+pull-request CI and merge — the Terraform and task
 scaffolding, the container build and the fail-closed delivery structure, not operational until
 M3.3c passes review (ADR 0012); **M3.3c**, next, builds every program that scaffolding runs — database
 bootstrap, identity binding, the broker and its Cognito, JWT and KMS clients — with migration

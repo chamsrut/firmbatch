@@ -4,10 +4,14 @@ Active work and open questions. Updated at the end of each task, alongside `docs
 
 Last updated: 2026-09-14, on `feat/milestone-3-3b-terraform-foundation` from `main` at
 `86d4195`, with **Milestone 3.3b — the Terraform, container and delivery foundation — as the
-current slice, implemented and statically tested on this branch** (ADR 0012). **Milestone 3.3a is
-merged** through PR #11 at `86d4195` (documentation only, ADR 0011). No Terraform plan or apply
-has run, no AWS or GitHub resource has been created, and no deployment or evidence artifact
-exists for Milestone 3.3. **Milestone 3.3 remains active; M3.3c is next.**
+current slice, implemented, statically tested and independently reviewed at implementation commit
+`cff27c8`, every actionable review finding closed, and awaiting pull-request CI and merge** (ADR 0012).
+Its final local canonical run was **16 gates passed, 0 failed**, with **257** required files; the image has
+not been built locally because Docker is unavailable, and the first actual container build remains a required
+PR CI condition. **Milestone 3.3a is merged** through PR #11 at `86d4195` (documentation only, ADR 0011). No
+Terraform plan or apply has run, no AWS or GitHub resource has been created, no image has been pushed, and no
+deployment or evidence artifact exists for Milestone 3.3; nothing is VERIFIED LIVE. **Milestone 3.3 remains
+active; M3.3c is next.**
 **Milestone 3.2 is merged** through PR #10 at `ae61747` (implementation commit `ce097cb`,
 status commit `59d82a7`), implemented, tested and independently reviewed with every
 actionable finding closed. **Milestone 3.1 is merged** at `87159d5` (PR #9, implementation
@@ -52,8 +56,8 @@ identity, membership and credential issuance (merged, PR #9), **M3.2** the custo
 application (merged, PR #10 at `ae61747`), and **M3.3** the protected AWS staging preview in
 four slices under ADR 0011 — **M3.3a** the AWS, Cognito and Terraform architecture adoption
 (documentation only, merged through PR #11 at `86d4195`), **M3.3b** Terraform and task
-scaffolding with the delivery structure (**this branch**, implemented and statically tested,
-ADR 0012), **M3.3c** every program the scaffolding runs — database bootstrap,
+scaffolding with the delivery structure (**this branch**, implemented, statically tested and
+independently reviewed at `cff27c8`, awaiting pull-request CI and merge, ADR 0012), **M3.3c** every program the scaffolding runs — database bootstrap,
 identity binding, the broker — with the identity mapping, dependencies and tests,
 **M3.3d** the authorized deployment with evidence. Nothing before M3.3d is deployment
 authorization, and the customer can see the real hosted portal only after M3.3d.
@@ -659,13 +663,13 @@ Order for the human, from here:
 5. Before M3.3d: confirm every deployment parameter above, review the plan and the cost
    estimate, and record the authorization. Nothing before that creates a resource.
 
-### M3.3b — Terraform, container and delivery foundation — **this branch; implemented and statically tested; nothing planned, applied, pushed or deployed**
+### M3.3b — Terraform, container and delivery foundation — **implemented, statically tested and independently reviewed at `cff27c8`; awaiting PR CI and merge; nothing planned, applied, pushed or deployed**
 
 On `feat/milestone-3-3b-terraform-foundation` from `main` at `86d4195` (M3.3a, merged through PR
 #11). ADR 0012 records the decisions; `docs/STATE.md` "CURRENT — Milestone 3.3b" records what exists
 and what it does not claim. No Terraform plan or apply ran against AWS, no AWS or GitHub resource
-was created, no image was pushed, nothing was deployed, no evidence was captured, and no commit,
-push or pull request was made.
+was created, no image was pushed, nothing was deployed and no evidence was captured. The implementation
+is committed at `cff27c8`, every actionable review finding is closed, and it awaits pull-request CI and merge.
 
 **Approval (2026-09-13).** The human approved the protected-file changes for the purposes proposed,
 with amendments, all applied: no agent-run AWS CLI call except local commands such as `aws
@@ -704,8 +708,8 @@ pinned by digest; `actions/checkout` v7.0.1, `hashicorp/setup-terraform` v4.0.1 
 `aws-actions/configure-aws-credentials` v6.2.4 pinned by commit SHA in the new workflows.
 
 **Local limitations.** Docker and Podman are not installed, so **the image has not been built
-locally**; the Dockerfile's shape is checked by the policy gate and the build is CI's `container`
-job, which has not yet run for this branch. actionlint, tflint and checkov are not installed; the
+locally**; the Dockerfile's shape is checked by the policy gate, and the first actual container build is
+CI's `container` job, which has not yet run and remains a required PR CI condition. actionlint, tflint and checkov are not installed; the
 workflows are checked by the repository's own structural rules.
 
 **Verification (2026-09-13, the uncommitted working tree over `86d4195`; runs, not evidence
@@ -740,7 +744,7 @@ the tree recorded.
 | Workflows manually dispatched, `refs/heads/main` only, no fork or pull-request context | Checked statically and in the preflight's unit tests; never run |
 | Environments: `main` only, reviewers, self-review prevented, no permanent AWS credential | **Unmet until a human creates them** — the preflight refuses without them |
 | Workflow files covered by CODEOWNERS **and branch protection** | `CODEOWNERS` written; **branch protection unmet until a human configures it** |
-| Container build from the pinned locks | **Unmet locally** (no Docker); a CI `container` job is written and has not run |
+| Container build from the pinned locks | **Unmet locally** (no Docker); a CI `container` job is written and has not run; the first actual build is a required PR CI condition |
 | "Lint and policy" | Policy checks written and passing; **no Terraform linter** (tflint is not installed and is not introduced) |
 
 **Independent reviews before staging (2026-09-13).** A read-only `security-operations-reviewer`
@@ -750,7 +754,7 @@ above gives the counts from before and after these corrections. That pass widene
 set to every IAM resource, KMS key, secret container, ECS task definition and service and the budget;
 **the human reviewed that and replaced it** in the correction pass below.
 
-**Correction pass (2026-09-14), at the human's instruction; still uncommitted.**
+**Correction pass (2026-09-14), at the human's instruction.**
 
 1. **Migration `0007_password_hash_contract`** — an incidental reliability and security correction
    found by this slice's verification (ADR 0012 decision 14; `docs/STATE.md` "The correction pass
@@ -772,7 +776,7 @@ set to every IAM resource, KMS key, secret container, ECS task definition and se
 
 That pass's canonical run on its staged tree: **16 gates passed, 0 failed**, **256** required files.
 
-**Second correction pass (2026-09-14): the independent M3.3b review; still uncommitted.** Sixteen
+**Second correction pass (2026-09-14): the independent M3.3b review.** Sixteen
 findings and a regression sweep, all corrected (`docs/STATE.md` "The second correction pass"; ADR 0012,
 decision 15 new). One new file, `infra/terraform/bootstrap/delivery_policies.tf` (the delivery
 identities' policies and boundaries), was added to `REQUIRED_FILES` with the human's explicit approval,
@@ -790,7 +794,7 @@ password-hash contract and migration tests, **147 passed** against the local Pos
 `ruff check .` clean; migrations `0001`–`0006` byte-identical to `86d4195`. The canonical run on the
 final staged tree is reported with the change rather than written here.
 
-**Third correction pass (2026-09-14): the reviewer's verification of the second; still uncommitted.** Nine
+**Third correction pass (2026-09-14): the reviewer's verification of the second.** Nine
 of the seventeen corrections were found incomplete, one at P1; each is corrected and the eight verified closed
 are preserved (`docs/STATE.md` "The third correction pass"; ADR 0012, with "Amendments to ADR 0011" new).
 In short: promotion and apply read the admission policy — the live security overlay — from `origin/main`,
@@ -811,7 +815,7 @@ checks passed**; `ruff check .` clean. The canonical run on the final staged tre
 rather than written here. That run, on the third pass's staged tree: **16 gates passed, 0 failed**, **257**
 required files.
 
-**Fourth correction pass (2026-09-14): findings 14, 16 and 17 and two regression gaps; still uncommitted.**
+**Fourth correction pass (2026-09-14): findings 14, 16 and 17 and two regression gaps.**
 Publish-attempt verification uses the workflow identity of the record's own contract, with a renamed-workflow
 version-2 test; every policy and attachment that could reach a delivery identity is checked against an explicit
 graph and read in full, and the plan role gains a human-applied permissions boundary that refuses secret values,
@@ -829,8 +833,8 @@ the delivery unit tests, **101**; `terraform test` against mocked providers, **1
 `ruff check .` clean. The canonical run on the final staged tree is reported with the change rather than written
 here.
 
-**Fifth correction pass (2026-09-14): finding 17's delivery-identity adoption and two policy-checker test gaps; still
-uncommitted.** Only the bootstrap root declares or owns a GitHub delivery identity (staging plan, staging apply,
+**Fifth correction pass (2026-09-14): finding 17's delivery-identity adoption and two policy-checker test gaps.**
+Only the bootstrap root declares or owns a GitHub delivery identity (staging plan, staging apply,
 artifact publish); every other root and module declares only its explicitly allow-listed workload roles, judged by
 effective `name`/`name_prefix` resolved through locals, interpolation, variables and module values rather than
 Terraform resource labels; `import` blocks are refused under `infra/terraform`, so adopting an existing AWS identity
@@ -843,8 +847,9 @@ tests, **221** (the fourth pass's **213** above is historical); the delivery uni
 against mocked providers, **19 passed** for `bootstrap`, **12** for `artifacts` and **41** for
 `environments/staging`; the agent policy tests, **460 checks passed**. The canonical run on that staged tree
 (staged-diff SHA-256 `5f426da6869ce990b401218cd795ab48fa962d4ae1399f491a9a0d96efc66db6`): **16 passed, 0 failed**,
-**257** required files. This documentation reconciliation came after that run; its canonical run is reported with
-the change.
+**257** required files. The documentation reconciliation came after that run; **the final local canonical run**, on
+its staged tree (staged-diff SHA-256 `e6b90bc5efb35903bae89ef6f35933c9198a5a1ead2ee16788ccc66a1930dd0d`, the tree
+committed as `cff27c8`): **16 passed, 0 failed**, **257** required files.
 
 **Remaining M3.3c work** (ADR 0011 decision 1, unchanged): the database bootstrap command; the
 identity-binding command and its one-function database boundary; the identity-broker entry point and
@@ -864,8 +869,8 @@ tooling; and the decision on who writes the Cognito client secret value.
    ECS delivery contract, the release repository and record-bucket policies, the artifact-publish
    boundary, the plan bucket policy, the frozen approval rule, the release-record contract and the
    admission exceptions.
-2. Commit, push, open the pull request, and confirm CI's `verify` and `container` jobs pass; the image
-   build is proven there or not at all.
+2. Committed at `cff27c8`. Push, open the pull request, confirm CI's `verify` and `container` jobs pass —
+   the first actual image build is proven there or not at all — and merge.
 3. Before any AWS trust: protect `main`, add a second qualified reviewer, create and protect the
    three environments (`infra/terraform/runbooks/staging-delivery.md`, part A).
 4. M3.3c. At M3.3d, in this order: the bootstrap root and the `artifacts` root, each naming the declared
