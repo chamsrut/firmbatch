@@ -1,0 +1,234 @@
+# Manual staging plan of one published release (ADR 0011 decision 9; ADR 0012 decisions 5, 13 and 15).
+#
+# FAIL-CLOSED UNTIL A HUMAN HAS PREPARED IT. The preflight job references no GitHub environment
+# and requests no OIDC token. It refuses unless the run is a manual dispatch of protected main
+# in this exact repository (by pinned ID), infra/delivery/readiness.json attests every human
+# prerequisite, the staging-plan environment already exists with required reviewers,
+# self-review prevention, no administrator bypass and a main-only branch policy, and the commit is
+# the merge of a pull request a qualified reviewer other than its author approved before the merge.
+# GitHub creates an environment, unprotected, when a job first references it; because the plan job
+# needs preflight, it never starts -- and never names the environment -- until all of that holds.
+#
+# PROMOTION BY DIGEST. Dispatched with the release_commit of an image artifact-publish already
+# published; the preflight requires it to be reachable from main. The plan job then reads the release
+# record and verifies, in delivery.py verify-release: its schema version's contract; the approval
+# frozen into it at publication, cross-checked against the pull request's immutable facts -- never a
+# reviewer's current permission or a later review; the EXACT publish run attempt it names, through the
+# attempt endpoint, never the run's aggregate conclusion; the recorded digest in the canonical
+# repository BY DIGEST, never by tag, carrying exactly git-<release_commit> in an immutable repository;
+# and admission of that digest under infra/delivery/admission-policy.json as origin/main holds it when
+# the job runs -- a complete scan, the severity maxima, unexpired digest-scoped exceptions and security
+# stops. The plan job's checkout therefore fetches main's history. Terraform receives
+# the full digest-qualified reference from that record and from nowhere else. Rollback is the same run
+# with an earlier release_commit whose digest is still retained. This workflow never builds, tags or
+# pushes.
+#
+# What leaves this workflow: a sanitized summary (action counts, the human-applied change count and
+# the checked ECS change count), the verified release -- commit, image, and the release record's
+# version ID and SHA-256 -- and the saved plan's key, version ID and SHA-256 in the job summary: the
+# tuple a deployment authorization and staging-apply name. Every other file -- the binary plan, its
+# rendering and log, the release documents, the plan-time variables, Terraform's data directory and
+# any errored.tfstate or crash log -- stays in a private runner directory created with umask 077 and
+# removed by a final step that runs whatever happened. Nothing is uploaded as a GitHub artifact.
+#
+# This workflow cannot run in Milestone 3.3b: readiness.json is false, neither environment
+# exists, main is not protected, and no release has been published.
+
+name: staging-plan
+run-name: "staging plan of release ${{ inputs.release_commit }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_commit:
+        description: "Full 40-hex commit of a release artifact-publish published (an earlier one to roll back)"
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: staging-terraform
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  preflight:
+    name: Preflight (no environment, no AWS)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      source_commit: ${{ steps.preflight.outputs.source_commit }}
+      release_commit: ${{ steps.preflight.outputs.release_commit }}
+    steps:
+      - name: Refuse anything but a manual dispatch of main in this repository
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+        run: |
+          test "$EVENT_NAME" = "workflow_dispatch"
+          test "$REF" = "refs/heads/main"
+          test "$REPOSITORY_ID" = "1349512121"
+
+      - name: Check out main with history for the reachability check
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Preflight
+        id: preflight
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+        run: python3 infra/delivery/delivery.py preflight --workflow plan
+
+  plan:
+    name: Plan (staging-plan)
+    needs: preflight
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.repository_id == '1349512121'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: staging-plan
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      id-token: write
+    env:
+      AWS_EC2_METADATA_DISABLED: "true"
+      CHECKPOINT_DISABLE: "1"
+      TF_IN_AUTOMATION: "1"
+      TF_INPUT: "0"
+      PRIVATE_DIR: ${{ runner.temp }}/firmbatch-private
+      TF_DATA_DIR: ${{ runner.temp }}/firmbatch-private/terraform-data
+      SOURCE_COMMIT: ${{ needs.preflight.outputs.source_commit }}
+      RELEASE_COMMIT: ${{ needs.preflight.outputs.release_commit }}
+      STAGING_AWS_ACCOUNT_ID: ${{ vars.STAGING_AWS_ACCOUNT_ID }}
+      STAGING_AWS_REGION: ${{ vars.STAGING_AWS_REGION }}
+      STAGING_PLAN_ROLE_ARN: ${{ vars.STAGING_PLAN_ROLE_ARN }}
+      STAGING_APPLY_ROLE_ARN: ${{ vars.STAGING_APPLY_ROLE_ARN }}
+      STAGING_STATE_BUCKET: ${{ vars.STAGING_STATE_BUCKET }}
+      STAGING_STATE_KMS_KEY_ARN: ${{ vars.STAGING_STATE_KMS_KEY_ARN }}
+      STAGING_PLAN_BUCKET: ${{ vars.STAGING_PLAN_BUCKET }}
+      STAGING_PLAN_KMS_KEY_ARN: ${{ vars.STAGING_PLAN_KMS_KEY_ARN }}
+      ARTIFACT_REGISTRY_ACCOUNT_ID: ${{ vars.ARTIFACT_REGISTRY_ACCOUNT_ID }}
+      ARTIFACT_REGISTRY_REGION: ${{ vars.ARTIFACT_REGISTRY_REGION }}
+      ARTIFACT_REPOSITORY_NAME: ${{ vars.ARTIFACT_REPOSITORY_NAME }}
+      ARTIFACT_RELEASE_BUCKET: ${{ vars.ARTIFACT_RELEASE_BUCKET }}
+    steps:
+      - name: Check out the preflighted commit, with main's history for the security overlay
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.source_commit }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Create the private working directory every plan file stays in
+        run: |
+          umask 077
+          mkdir -m 700 "$PRIVATE_DIR"
+
+      - name: Install the pinned Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+
+      - name: Refuse any Terraform but the pinned version
+        run: terraform version -json | python3 infra/delivery/delivery.py check-terraform-version --pinned-file infra/terraform/.terraform-version
+
+      - name: Refuse malformed or mismatched environment configuration and plan-time variables, before any credential
+        env:
+          STAGING_TFVARS_JSON: ${{ secrets.STAGING_TFVARS_JSON }}
+        run: python3 infra/delivery/delivery.py check-environment-variables --workflow plan
+
+      - name: Assume the plan role through OIDC
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        with:
+          role-to-assume: ${{ vars.STAGING_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.STAGING_AWS_REGION }}
+          audience: sts.amazonaws.com
+          role-session-name: firmbatch-staging-plan-${{ github.run_id }}
+          role-duration-seconds: 3600
+          allowed-account-ids: ${{ vars.STAGING_AWS_ACCOUNT_ID }}
+          mask-aws-account-id: true
+
+      - name: Verify the release -- record, frozen approval, exact publish attempt, digest and admission
+        id: release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          umask 077
+          aws s3api get-object --region "$ARTIFACT_REGISTRY_REGION" --bucket "$ARTIFACT_RELEASE_BUCKET" --key "releases/$RELEASE_COMMIT/release-manifest.json" "$PRIVATE_DIR/release-record.json" > "$PRIVATE_DIR/release-record-head.json"
+          DIGEST="$(python3 infra/delivery/delivery.py release-digest --record "$PRIVATE_DIR/release-record.json" --commit "$RELEASE_COMMIT")"
+          aws ecr describe-repositories --region "$ARTIFACT_REGISTRY_REGION" --registry-id "$ARTIFACT_REGISTRY_ACCOUNT_ID" --repository-names "$ARTIFACT_REPOSITORY_NAME" --output json > "$PRIVATE_DIR/release-repository.json"
+          aws ecr describe-images --region "$ARTIFACT_REGISTRY_REGION" --registry-id "$ARTIFACT_REGISTRY_ACCOUNT_ID" --repository-name "$ARTIFACT_REPOSITORY_NAME" --image-ids "imageDigest=$DIGEST" --output json > "$PRIVATE_DIR/release-image.json"
+          aws ecr describe-image-scan-findings --region "$ARTIFACT_REGISTRY_REGION" --registry-id "$ARTIFACT_REGISTRY_ACCOUNT_ID" --repository-name "$ARTIFACT_REPOSITORY_NAME" --image-id "imageDigest=$DIGEST" --output json > "$PRIVATE_DIR/release-scan.json"
+          python3 infra/delivery/delivery.py verify-release --record "$PRIVATE_DIR/release-record.json" --record-head "$PRIVATE_DIR/release-record-head.json" --commit "$RELEASE_COMMIT" --repository-json "$PRIVATE_DIR/release-repository.json" --image-json "$PRIVATE_DIR/release-image.json" --scan-json "$PRIVATE_DIR/release-scan.json" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Write the plan-time variables with the verified image, after the allow-list check (never echoed)
+        env:
+          STAGING_TFVARS_JSON: ${{ secrets.STAGING_TFVARS_JSON }}
+          RELEASE_IMAGE: ${{ steps.release.outputs.release_image }}
+        run: |
+          umask 077
+          python3 infra/delivery/delivery.py write-tfvars --out "$PRIVATE_DIR/staging.tfvars.json"
+
+      - name: Initialize against the remote state
+        working-directory: infra/terraform/environments/staging
+        run: |
+          umask 077
+          terraform init -input=false -lockfile=readonly -backend-config="bucket=$STAGING_STATE_BUCKET" -backend-config="region=$STAGING_AWS_REGION" -backend-config="kms_key_id=$STAGING_STATE_KMS_KEY_ARN" > "$PRIVATE_DIR/init.log" 2>&1
+
+      - name: Plan, keeping the output in the private directory, and show only a sanitized summary
+        working-directory: infra/terraform/environments/staging
+        env:
+          RELEASE_IMAGE: ${{ steps.release.outputs.release_image }}
+        run: |
+          umask 077
+          PLAN_FILE="$PRIVATE_DIR/staging.tfplan"
+          if ! terraform plan -input=false -lock-timeout=5m -var-file="$PRIVATE_DIR/staging.tfvars.json" -out="$PLAN_FILE" > "$PRIVATE_DIR/plan.log" 2>&1; then
+            echo "::error::The plan failed. Its output can hold state values, so it stays on the runner and is removed; reproduce it in an operator session."
+            exit 1
+          fi
+          terraform show -json "$PLAN_FILE" | python3 "$GITHUB_WORKSPACE/infra/delivery/delivery.py" plan-summary --mode plan --terraform-version 1.15.8 --expected-image "$RELEASE_IMAGE" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Store the saved plan as a new, content-addressed, Object-Locked object
+        env:
+          RELEASE_IMAGE: ${{ steps.release.outputs.release_image }}
+          RELEASE_RECORD_VERSION_ID: ${{ steps.release.outputs.release_record_version_id }}
+          RELEASE_RECORD_SHA256: ${{ steps.release.outputs.release_record_sha256 }}
+        run: |
+          umask 077
+          PLAN_FILE="$PRIVATE_DIR/staging.tfplan"
+          PLAN_SHA256="$(sha256sum "$PLAN_FILE" | cut -d ' ' -f 1)"
+          PLAN_KEY="plans/staging/${SOURCE_COMMIT}/${PLAN_SHA256}.tfplan"
+          PLAN_VERSION_ID="$(aws s3api put-object --bucket "$STAGING_PLAN_BUCKET" --key "$PLAN_KEY" --body "$PLAN_FILE" --if-none-match '*' --server-side-encryption aws:kms --ssekms-key-id "$STAGING_PLAN_KMS_KEY_ARN" --checksum-algorithm SHA256 --query VersionId --output text)"
+          {
+            echo "### Saved plan -- authorize, then start staging-apply with exactly these values"
+            echo ""
+            echo "| Input | Value |"
+            echo "| --- | --- |"
+            echo "| plan_key | \`$PLAN_KEY\` |"
+            echo "| plan_version_id | \`$PLAN_VERSION_ID\` |"
+            echo "| plan_sha256 | \`$PLAN_SHA256\` |"
+            echo "| release_commit | \`$RELEASE_COMMIT\` |"
+            echo "| release_image | \`$RELEASE_IMAGE\` |"
+            echo "| release_record_version_id | \`$RELEASE_RECORD_VERSION_ID\` |"
+            echo "| release_record_sha256 | \`$RELEASE_RECORD_SHA256\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the plan, its logs, the release documents, the variables and Terraform's files from the runner
+        if: always()
+        run: |
+          rm -rf -- "$PRIVATE_DIR"
+          rm -f -- infra/terraform/environments/staging/errored.tfstate infra/terraform/environments/staging/crash.log infra/terraform/environments/staging/crash.*.log

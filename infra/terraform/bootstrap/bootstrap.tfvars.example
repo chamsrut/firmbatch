@@ -1,0 +1,19 @@
+# Values-free template for the bootstrap root. Copy it OUTSIDE the repository, fill it in
+# with human-confirmed values, and pass it with -var-file. A valued *.tfvars file is
+# git-ignored and must never be committed.
+
+expected_account_id                     = "" # twelve digits; confirmed before the first plan
+region                                  = "" # eu-central-1 recommended; the workload and release registry region
+environment                             = "staging"
+name_prefix                             = "firmbatch-staging" # exactly the staging root's name_prefix
+release_name_prefix                     = "firmbatch"         # environment-neutral: the artifact-publish role and release key
+state_bucket_name                       = ""                  # globally unique
+plan_bucket_name                        = ""                  # globally unique; never the state bucket
+plan_retention_days                     = 1                   # the saved-plan lifetime; one day is recommended
+state_noncurrent_version_retention_days = 90
+artifact_registry_account_id            = ""                        # declared, never derived; this root requires expected_account_id
+artifact_registry_region                = ""                        # declared, never derived; this root requires region
+release_repository_name                 = "firmbatch/control-plane" # the artifacts root's repository_name
+release_bucket_name                     = ""                        # the artifacts root's release_bucket_name; globally unique
+route53_zone_id                         = ""                        # the staging root's hosted zone
+rds_instance_class                      = ""                        # the one reviewed class; the staging root's rds_instance_class

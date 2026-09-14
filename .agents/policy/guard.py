@@ -52,6 +52,15 @@ Design notes that matter:
   * `gh` and `aws` scan adjacent non-flag pairs rather than indexing a position, so a
     global option (`gh -R o/r`, `aws --region x`) cannot shift the verb out of view --
     the same bug as `git -C`, which is why all three are written the same way.
+  * Options are parsed by each program's own grammar, never guessed by shape: a
+    wrapper's long option is resolved as GNU getopt_long does, by unique prefix
+    (`env --ch=DIR`, `timeout --sig KILL`), and an ambiguous prefix is refused; a
+    `gh api` short-flag cluster is read letter by letter (`-if` is `-i -f`), with
+    a value flag's value never scanned as a flag.
+  * `find` and `tree` stay readers, but their write options (`find -fprint`,
+    `-fprint0`, `-fprintf`, `-fls`; `tree -o`/`--output`) route the file they
+    write through the same write rule as a redirect, and `find -ok`/`-okdir`
+    run commands just as `-exec` does.
   * Paths are resolved (`..` and symlinks collapsed) before any comparison, so
     `docs/../docs/evidence/x` and a symlink into the evidence tree are caught.
   * Unparseable input, exhausted wrapper nesting, and an unexpected exception in the
@@ -91,9 +100,64 @@ READERS = frozenset({"cat", "bat", "less", "more", "head", "tail", "strings", "x
 # Trivial "run this command" wrappers. Stripped so the real command word is found.
 # Deliberately NOT including sudo, xargs, busybox, or interpreters -- see the
 # "Outside the guardrail" note in AGENTS.md.
-PREFIX_COMMANDS = frozenset({"env", "nohup", "timeout", "nice", "stdbuf", "command", "ionice"})
-# `timeout 5m`, `timeout 30s`, `timeout 1.5h` -- a duration is a wrapper value, not a command.
-DURATION_RE = re.compile(r"^\d+(\.\d+)?[smhd]?$")
+#
+# Each wrapper's own grammar: the short options that take a value (`-s KILL`, or attached as
+# `-sKILL`), the long options that take one (`--signal KILL`, `--signal=KILL`), every long option
+# that takes none, and how many positional operands the wrapper itself consumes before the command
+# -- timeout's DURATION. A generic "skip anything that looks like an option" parse left
+# `timeout -s KILL 5 terraform apply` classified as the command `KILL`. The flag-only long options
+# are listed because getopt_long accepts any UNIQUE prefix of a long option: whether `--ch` is
+# `--chdir` depends on every option the program knows, not only on the ones that take a value.
+WRAPPER_GRAMMARS = {
+    "env": (
+        frozenset({"-u", "-C", "-S", "-a"}),
+        frozenset({"--unset", "--chdir", "--split-string", "--argv0"}),
+        frozenset({
+            "--ignore-environment", "--null", "--block-signal", "--default-signal", "--ignore-signal",
+            "--list-signal-handling", "--debug", "--help", "--version",
+        }),
+        0,
+    ),
+    "timeout": (
+        frozenset({"-s", "-k"}),
+        frozenset({"--signal", "--kill-after"}),
+        frozenset({"--foreground", "--preserve-status", "--verbose", "--help", "--version"}),
+        1,
+    ),
+    "nice": (frozenset({"-n"}), frozenset({"--adjustment"}), frozenset({"--help", "--version"}), 0),
+    "stdbuf": (frozenset({"-i", "-o", "-e"}), frozenset({"--input", "--output", "--error"}), frozenset({"--help", "--version"}), 0),
+    "ionice": (
+        frozenset({"-c", "-n", "-p", "-P", "-u"}),
+        frozenset({"--class", "--classdata", "--pid", "--pgid", "--uid"}),
+        frozenset({"--ignore", "--help", "--version"}),
+        0,
+    ),
+    "time": (
+        frozenset({"-f", "-o"}),
+        frozenset({"--format", "--output"}),
+        frozenset({"--portability", "--append", "--verbose", "--quiet", "--help", "--version"}),
+        0,
+    ),
+    "exec": (frozenset({"-a"}), frozenset(), frozenset(), 0),
+    "nohup": (frozenset(), frozenset(), frozenset(), 0),
+    "command": (frozenset(), frozenset(), frozenset(), 0),
+}
+PREFIX_COMMANDS = frozenset(WRAPPER_GRAMMARS)
+
+# Every spelling of the tools the Terraform and AWS rules restrict. OpenTofu is Terraform for this
+# purpose, and `aws2` is the AWS CLI v2's alternative name.
+TERRAFORM_PROGRAMS = frozenset({"terraform", "tofu", "opentofu"})
+AWS_PROGRAMS = frozenset({"aws", "aws2"})
+
+
+def program_name(token):
+    """The command word as a rule compares it: the last path component, `.exe` removed, lowercased.
+
+    `terraform.exe`, `C:\\tools\\aws.exe` and `/usr/bin/Terraform` all name the tool their rule
+    restricts. Lowercasing can only over-match, which costs a false block, never a false allow.
+    """
+    name = re.split(r"[\\/]", str(token))[-1].lower()
+    return name[:-4] if name.endswith(".exe") else name
 
 # Commands that replace a file in place, destroying the original.
 INPLACE_MUTATORS = frozenset({"gzip", "gunzip", "bzip2", "bunzip2", "xz", "unxz", "zstd", "compress"})
@@ -134,14 +198,53 @@ GH_DENIED = {
     ("gist", "create"): "publishing a gist is an outward-facing action",
     ("secret", "set"): "writing a secret to GitHub is never an agent action",
     ("secret", "delete"): "deleting a GitHub secret is irreversible",
+    ("variable", "set"): "writing a GitHub Actions variable changes what a deployment workflow does",
+    ("variable", "delete"): "deleting a GitHub Actions variable changes what a deployment workflow does",
+    ("run", "rerun"): "re-running a workflow run is an outward-facing action",
+    ("workflow", "enable"): "enabling a workflow is an outward-facing action",
 }
 GH_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+# `gh api`'s own value-taking options besides the method and body ones: a short flag's value is the
+# rest of its token or the next token, and a long option's value is the next token -- neither is a flag.
+GH_API_SHORT_VALUES = frozenset("Hpqt")
+GH_API_LONG_VALUES = frozenset({"--header", "--preview", "--jq", "--template", "--hostname", "--cache"})
 
 AWS_MUTATING_PREFIXES = (
     "delete", "terminate", "create", "put", "update", "modify", "remove", "run-instances",
     "stop", "start", "reboot", "attach", "detach", "associate", "disassociate", "register",
     "deregister", "import", "restore", "invalidate", "cancel", "purchase", "release",
 )
+
+# Milestone 3.3b (ADR 0012): agents make NO AWS API call -- not a mutating one, and not a
+# read-only one either, because a read prints account state, secrets or identity data into a
+# transcript. Only commands that never reach AWS pass. A narrowly scoped set may be authorized
+# in M3.3d, once the account, role, region and operation are explicitly confirmed.
+AWS_LOCAL_ONLY_FLAGS = frozenset({"--version"})
+
+# Terraform subcommands an agent may run: formatting, validation, version and provider
+# locking, and `init` only with the backend disabled. `test` runs only through
+# infra/terraform/scripts/static-checks.sh, which proves every test file mocks every provider
+# before running it. Everything else either changes infrastructure or state or reads state.
+TERRAFORM_ALLOWED = frozenset({"fmt", "validate", "version", "providers", "init", "help"})
+TERRAFORM_MUTATING = frozenset({
+    "plan", "apply", "destroy", "import", "refresh", "taint", "untaint", "force-unlock",
+})
+
+# Container registries: an image is never logged in for, or pushed, by an agent.
+REGISTRY_CLIENTS = frozenset({"docker", "podman", "buildah", "nerdctl", "finch"})
+REGISTRY_VERBS = frozenset({"push", "login", "imagetools"})
+REGISTRY_TOOLS = frozenset({"skopeo", "crane", "oras"})
+REGISTRY_TOOL_WRITES = frozenset({
+    "copy", "cp", "push", "login", "sync", "tag", "delete", "attach", "mutate", "append", "rebase", "flatten", "manifest",
+})
+
+# Commands that only read. Any other command naming a path inside the M3.3 staging evidence
+# directory -- touch, curl -o, tar -C, unzip -d, git mv -- is refused.
+EVIDENCE_READ_ONLY_COMMANDS = READERS | frozenset({"ls", "stat", "grep", "rg", "wc", "file", "test", "diff", "tree", "du", "find"})
+
+# M3.3 AWS staging and deployment evidence is captured only by an authorized M3.3d
+# deployment (ADR 0012). Every other evidence location is unaffected.
+DEPLOYMENT_EVIDENCE_DIR = EVIDENCE_DIR / "m3" / "aws-staging"
 
 
 class Decision:
@@ -242,6 +345,13 @@ def check_write(path, cwd=None, deleting=False, recursive=False):
             "artifact, never by removing the old one.",
         )
 
+    if under(p, DEPLOYMENT_EVIDENCE_DIR) and not deleting:
+        return deny(
+            "deployment-evidence-deferred",
+            f"{p} is M3.3 AWS staging or deployment evidence, which is unavailable until an explicitly "
+            "authorized M3.3d deployment captures it (ADR 0012). Evidence for other milestones is unaffected.",
+        )
+
     if under(p, EVIDENCE_DIR):
         if deleting:
             return deny(
@@ -335,37 +445,93 @@ def redirect_targets(argv):
 SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "fish"})
 
 
-def strip_command_prefixes(argv):
-    """Drop `env`, `timeout 60`, `nice -n 5`, ... so the real command word is found.
+def resolve_long_option(name, flag, long_values, long_flags):
+    """The long option `flag` names, as getopt_long resolves it: an exact name, or the one option
+    it is a unique prefix of. None for an option the wrapper does not know. An ambiguous prefix
+    raises ValueError: the program itself refuses it, and guessing either reading could shift the
+    command word and fail open."""
+    known = long_values | long_flags
+    if flag in known:
+        return flag
+    candidates = sorted(option for option in known if option.startswith(flag))
+    if len(candidates) > 1:
+        raise ValueError(f"`{name} {flag}` is an ambiguous abbreviation of {', '.join(candidates)}")
+    return candidates[0] if candidates else None
 
-    Returns (argv, exhausted). Exhausting the bound must DENY rather than fall through,
-    for the same reason wrapper-shell nesting does: a stack of prefixes deep enough to
-    run out the parser is a command this engine cannot claim to have inspected.
+
+def wrapper_command_index(name, rest):
+    """Parse one wrapper's own options and operands by its grammar.
+
+    Returns (index of the wrapped command in `rest`, `env -C` directory or None, `env -S` string
+    or None). An option that takes a value consumes it whether it is attached (`-sKILL`,
+    `--signal=KILL`) or separate (`-s KILL`, `--signal KILL`); a long option is also recognised by
+    any unique prefix (`--sig KILL`, `--ch=DIR`); `--` ends the options. An ambiguous long-option
+    prefix raises ValueError.
+    """
+    short_values, long_values, long_flags, operand_count = WRAPPER_GRAMMARS[name]
+    values = {}
+    i = 0
+    while i < len(rest):
+        tok = rest[i]
+        if tok == "--":
+            i += 1
+            break
+        if tok == "-" and name == "env":
+            i += 1
+            continue
+        if tok.startswith("--"):
+            written, eq, inline = tok.partition("=")
+            flag = resolve_long_option(name, written, long_values, long_flags)
+            if flag in long_values:
+                values[flag] = inline if eq else (rest[i + 1] if i + 1 < len(rest) else "")
+                i += 1 if eq else 2
+            else:
+                i += 1
+            continue
+        if tok.startswith("-") and len(tok) > 1:
+            consumed = 1
+            for j in range(1, len(tok)):
+                flag = "-" + tok[j]
+                if flag in short_values:
+                    attached = tok[j + 1:]
+                    if attached:
+                        values[flag] = attached
+                    else:
+                        values[flag] = rest[i + 1] if i + 1 < len(rest) else ""
+                        consumed = 2
+                    break
+            i += consumed
+            continue
+        break
+    i = min(i + operand_count, len(rest))
+    chdir = values.get("-C", values.get("--chdir"))
+    split = values.get("-S", values.get("--split-string"))
+    return i, chdir, split
+
+
+def strip_command_prefixes(argv, cwd=None):
+    """Drop `env`, `timeout -s KILL 60`, `nice -n 5`, ... so the real command word is found.
+
+    Returns (argv, exhausted, cwd). `env -C DIR` moves the directory later paths resolve
+    against, and `env -S STRING` splits STRING into the command it runs. Exhausting the
+    bound must DENY rather than fall through, for the same reason wrapper-shell nesting does:
+    a stack of prefixes deep enough to run out the parser is a command this engine cannot
+    claim to have inspected. An `env -S` string the shell lexer cannot split raises ValueError.
     """
     for _ in range(4):
         argv = strip_env_assignments(argv)
-        if not argv or Path(argv[0]).name not in PREFIX_COMMANDS:
-            return argv, False
+        if not argv or program_name(argv[0]) not in WRAPPER_GRAMMARS:
+            return argv, False, cwd
+        name = program_name(argv[0])
         rest = argv[1:]
-        i = 0
-        # Skip the wrapper's own options and their values: `-n 5`, `-oL`, `60`, `5m`,
-        # `30s`, and `env -u NAME`. A duration suffix or an option's NAME value used to
-        # stop the scan and leave the wrapper itself as the command word.
-        while i < len(rest):
-            tok = rest[i]
-            if tok.startswith("-"):
-                # These options take a separate value; consume it too.
-                if tok in ("-u", "-n", "-S", "--unset", "--adjustment") and i + 1 < len(rest):
-                    i += 2
-                    continue
-                i += 1
-                continue
-            if DURATION_RE.match(tok):
-                i += 1
-                continue
-            break
-        argv = rest[i:]
-    return argv, True
+        index, chdir, split = wrapper_command_index(name, rest)
+        argv = rest[index:]
+        if chdir:
+            resolved = resolve(chdir, cwd)
+            cwd = str(resolved) if resolved is not None else cwd
+        if split is not None:
+            argv = shlex.split(split) + argv
+    return argv, True, cwd
 
 
 def git_subcommand(args):
@@ -407,10 +573,96 @@ def positional_operands(args):
     return operands
 
 
+def gh_api_write_reason(args):
+    """Why a `gh api` invocation may write, or "" when it is a plain GET or HEAD.
+
+    Only GET and HEAD with no field and no input are reads. `-XPOST`, `-X=POST`, `-X POST`,
+    `--method POST` and `--method=POST` all name a method; `-f`, `-F`, `--field`, `--raw-field`
+    and `--input`, attached or separate, all send a body, and gh turns a request with a body
+    into a POST. The graphql endpoint is always a POST.
+
+    A single-dash token is a cluster of short flags, read letter by letter as gh's flag parser
+    reads it: `-i` takes no value, so `-if state=approved` is `-i -f state=approved`; `-X`, `-H`,
+    `-p`, `-q` and `-t` take the rest of the token, or the next token, as their value, which is
+    never itself read as a flag.
+    """
+    body = "`gh api` with a field or an input sends a request body, which gh sends as a write."
+    methods = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        following = args[i + 1] if i + 1 < len(args) else ""
+        if a == "--method":
+            methods.append(following)
+            i += 2
+            continue
+        if a.startswith("--method="):
+            methods.append(a.split("=", 1)[1])
+        elif a in ("--field", "--raw-field", "--input") or a.startswith(("--field=", "--raw-field=", "--input=")):
+            return body
+        elif a in GH_API_LONG_VALUES:
+            i += 2
+            continue
+        elif a.startswith("-") and not a.startswith("--") and len(a) > 1:
+            takes_next = False
+            for j, letter in enumerate(a[1:], start=1):
+                rest = a[j + 1:]
+                if letter in "fF":
+                    return body
+                if letter == "X":
+                    if rest:
+                        methods.append(rest[1:] if rest.startswith("=") else rest)
+                    else:
+                        methods.append(following)
+                        takes_next = True
+                    break
+                if letter in GH_API_SHORT_VALUES:
+                    takes_next = not rest
+                    break
+            i += 2 if takes_next else 1
+            continue
+        i += 1
+    for method in methods:
+        if method.upper() not in ("GET", "HEAD"):
+            return f"`gh api` with method {method or '<missing>'} can write through the GitHub API; only GET and HEAD are allowed."
+    if "graphql" in [a for a in args if not a.startswith("-")]:
+        return "`gh api graphql` is always a POST."
+    return ""
+
+
+FIND_WRITE_ACTIONS = frozenset({"-fprint", "-fprint0", "-fprintf", "-fls"})
+
+
+def reader_write_targets(cmd, args):
+    """The files `find` or `tree` would write, though both are otherwise readers.
+
+    `find -fprint FILE`, `-fprint0 FILE`, `-fprintf FILE FORMAT` and `-fls FILE`; `tree -o FILE`
+    (in a flag cluster, with the file attached or next), `--output FILE`, `--output=FILE` and any
+    prefix of `--output`. tree's own parser is looser than getopt, so every reading that could name
+    the output file is returned: an extra candidate costs a false block, a missed one a false allow.
+    """
+    targets = []
+    for i, a in enumerate(args):
+        following = args[i + 1] if i + 1 < len(args) else ""
+        if cmd == "find" and a in FIND_WRITE_ACTIONS:
+            targets.append(following)
+        elif cmd == "tree" and a.startswith("--"):
+            flag, eq, inline = a.partition("=")
+            if len(flag) > 2 and "--output".startswith(flag):
+                targets.append(inline if eq else following)
+        elif cmd == "tree" and a.startswith("-") and "o" in a[1:]:
+            attached = a[a.index("o", 1) + 1:]
+            targets.extend([attached, following])
+    return [t for t in targets if t]
+
+
 def check_bash_segment(argv, cwd, depth=0):
     argv = [a for a in argv if a not in REDIRECTS]
     argv = strip_env_assignments(argv)
-    argv, prefixes_exhausted = strip_command_prefixes(argv)
+    try:
+        argv, prefixes_exhausted, cwd = strip_command_prefixes(argv, cwd)
+    except ValueError as exc:
+        return deny("malformed-input", f"could not parse a command prefix's options ({exc}); failing closed")
     if prefixes_exhausted:
         return deny(
             "wrapper-depth",
@@ -420,7 +672,7 @@ def check_bash_segment(argv, cwd, depth=0):
     if not argv:
         return ALLOW
 
-    cmd = Path(argv[0]).name
+    cmd = program_name(argv[0])
     args = argv[1:]
     words = set(args)
 
@@ -440,6 +692,29 @@ def check_bash_segment(argv, cwd, depth=0):
                         "Run the command directly instead of through nested shells.",
                     )
                 return check_bash(args[i + 1], cwd, depth=depth + 1)
+
+    # find and tree only read -- except through their write options, which write a file as surely
+    # as a redirect does. Those files pass the write rule before the reader exemption below.
+    if cmd in ("find", "tree"):
+        for target in reader_write_targets(cmd, args):
+            d = check_write(target, cwd)
+            if not d.allowed:
+                return d
+
+    # M3.3 staging evidence: any argument naming a path inside the reserved directory, for any
+    # command that does not only read.
+    if cmd not in EVIDENCE_READ_ONLY_COMMANDS:
+        for a in args:
+            candidate = a.split("=", 1)[1] if (a.startswith("-") and "=" in a) else a
+            if not candidate or candidate.startswith("-"):
+                continue
+            p = resolve(candidate, cwd)
+            if p is not None and under(p, DEPLOYMENT_EVIDENCE_DIR):
+                return deny(
+                    "deployment-evidence-deferred",
+                    f"`{cmd}` names {p}, inside the M3.3 AWS staging evidence directory, which stays empty until an "
+                    "explicitly authorized M3.3d deployment (ADR 0012). Evidence for other milestones is unaffected.",
+                )
 
     # Any argument naming a credential file is refused before the command-specific
     # rules, except where a later rule produces a more precise verdict.
@@ -464,14 +739,9 @@ def check_bash_segment(argv, cwd, depth=0):
             if (noun, verb) in GH_DENIED:
                 return deny("git-destructive", f"`gh {noun} {verb}` is blocked: {GH_DENIED[(noun, verb)]}.")
         if "api" in nouns:
-            for i, a in enumerate(args):
-                if a in ("-X", "--method") and i + 1 < len(args) and args[i + 1].upper() in GH_WRITE_METHODS:
-                    return deny("git-destructive", f"`gh api -X {args[i + 1]}` writes through the GitHub API.")
-                if a.startswith("--method=") and a.split("=", 1)[1].upper() in GH_WRITE_METHODS:
-                    return deny("git-destructive", f"`gh api {a}` writes through the GitHub API.")
-                # gh implies POST as soon as a field is supplied.
-                if a in ("-f", "--field", "-F", "--raw-field") or a.startswith(("-f=", "--field=", "--raw-field=")):
-                    return deny("git-destructive", "`gh api` with a field implies a write request.")
+            reason = gh_api_write_reason(args)
+            if reason:
+                return deny("git-destructive", reason)
         return ALLOW
 
     if cmd == "git":
@@ -543,8 +813,8 @@ def check_bash_segment(argv, cwd, depth=0):
     if cmd in ("chmod", "chown", "chgrp") and any(a in ("-R", "--recursive") for a in args):
         return deny("fs-destructive", f"recursive `{cmd}` rewrites permissions across a tree.")
 
-    if cmd == "find" and ("-delete" in words or "-exec" in words or "-execdir" in words):
-        return deny("fs-destructive", "`find -delete`/`-exec` is an unbounded destructive operation.")
+    if cmd == "find" and words & {"-delete", "-exec", "-execdir", "-ok", "-okdir"}:
+        return deny("fs-destructive", "`find -delete`/`-exec`/`-ok` is an unbounded destructive operation.")
 
     if cmd == "dd" and any(a.startswith("of=") for a in args):
         return deny("fs-destructive", "`dd of=` writes raw blocks over a destination.")
@@ -552,8 +822,16 @@ def check_bash_segment(argv, cwd, depth=0):
     if cmd.startswith("mkfs"):
         return deny("fs-destructive", "filesystem creation is never a repository task.")
 
-    if cmd == "aws":
+    if cmd in AWS_PROGRAMS:
         nouns = [a for a in args if not a.startswith("-")]
+        # Only commands that never reach AWS pass: bare `aws`, `aws --version`, and help pages --
+        # `aws help`, `aws <service> help`, `aws <service> <operation> help`. With more positional
+        # arguments `help` is an ordinary operand (`aws s3 cp s3://b/k help` downloads), so it is not
+        # a help page.
+        if nouns and nouns[-1] == "help" and len(nouns) <= 3 and not (set(args) - set(nouns)):
+            return ALLOW
+        if not nouns and set(args) <= AWS_LOCAL_ONLY_FLAGS:
+            return ALLOW
         for service, action in zip(nouns, nouns[1:]):
             if action.startswith(AWS_MUTATING_PREFIXES):
                 return deny("cloud-mutation", f"`aws {service} {action}` changes cloud state and must be run by a human.")
@@ -562,14 +840,56 @@ def check_bash_segment(argv, cwd, depth=0):
                 return deny("cloud-mutation", f"`aws s3 {action}` can delete or overwrite objects; a human runs it.")
         if "s3" in nouns and "--delete" in words:
             return deny("cloud-mutation", "`aws s3 ... --delete` removes objects at the destination.")
+        return deny(
+            "cloud-access",
+            "agent-run AWS CLI calls are not authorized in Milestone 3.3b, read-only ones included: "
+            "they print account state, secrets or identity data into a transcript. A human runs AWS commands; "
+            "M3.3d may authorize a narrowly scoped set once account, role, region and operation are confirmed.",
+        )
+
+    if cmd in TERRAFORM_PROGRAMS:
+        sub = next((a for a in args if not a.startswith("-")), "")
+        if sub in TERRAFORM_MUTATING or (sub == "state" and any(a in ("rm", "mv", "push", "replace-provider") for a in args)):
+            return deny(
+                "cloud-mutation",
+                f"`{cmd} {sub}` plans, changes or unlocks infrastructure or state and must be run by a human.",
+            )
+        if not sub and set(args) & {"-version", "--version", "-help", "--help", "-h"}:
+            return ALLOW
+        if sub not in TERRAFORM_ALLOWED:
+            return deny(
+                "terraform-bounded",
+                f"`terraform {sub or ' '.join(args)}` is outside the bounded local operations agents may run "
+                "(fmt, validate, version, providers lock, init -backend=false). Run the mocked tests through "
+                "infra/terraform/scripts/static-checks.sh; state and outputs are read by a human.",
+            )
+        backend = [a.split("=", 1)[1] for a in args if a.startswith("-backend=") or a.startswith("--backend=")]
+        if sub == "init" and (not backend or backend[-1] != "false" or "-backend" in args or "--backend" in args):
+            return deny(
+                "terraform-bounded",
+                "`terraform init` would configure the real S3 backend; agents run `init -backend=false` only.",
+            )
+        if sub == "providers":
+            rest = [a for a in args[args.index("providers") + 1:] if not a.startswith("-")]
+            if rest[:1] != ["lock"]:
+                return deny(
+                    "terraform-bounded",
+                    "`terraform providers` other than `providers lock` can load state from a configured backend.",
+                )
         return ALLOW
 
-    if cmd == "terraform":
-        sub = next((a for a in args if not a.startswith("-")), "")
-        if sub in ("apply", "destroy", "import", "taint", "untaint"):
-            return deny("cloud-mutation", f"`terraform {sub}` changes infrastructure and must be run by a human.")
-        if sub == "state" and any(a in ("rm", "mv", "push") for a in args):
-            return deny("cloud-mutation", "`terraform state` mutation must be run by a human.")
+    # Image registries: no agent logs in to one or pushes to one (ECR included).
+    if cmd in REGISTRY_CLIENTS or cmd in REGISTRY_TOOLS:
+        verbs = [a for a in args if not a.startswith("-")]
+        outputs = [args[i + 1] for i, a in enumerate(args[:-1]) if a in ("-o", "--output")]
+        outputs += [a.split("=", 1)[1] for a in args if a.startswith(("--output=", "-o="))]
+        if (
+            REGISTRY_VERBS & set(verbs)
+            or "--push" in words
+            or any("type=registry" in o or "push=true" in o for o in outputs)
+            or (cmd in REGISTRY_TOOLS and verbs[:1] and verbs[0] in REGISTRY_TOOL_WRITES)
+        ):
+            return deny("registry-push", f"`{cmd}` registry login or push is not an agent action; image publication is a human step.")
         return ALLOW
 
     if cmd == "sed" and any(

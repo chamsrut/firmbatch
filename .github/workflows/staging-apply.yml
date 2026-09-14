@@ -1,0 +1,253 @@
+# Manual staging apply of one reviewed saved plan of one verified release (ADR 0011 decisions 9.2
+# and 9.3; ADR 0012 decisions 5, 7, 13 and 15).
+#
+# FAIL-CLOSED UNTIL A HUMAN HAS PREPARED AND AUTHORIZED IT. Started with the deployment tuple the
+# plan summary printed: the saved plan's exact key, S3 version ID and SHA-256, and the release's
+# commit, image and release-record version ID and SHA-256. All seven are shown in the run name, and
+# so in the staging-apply approval request. The preflight job -- no environment, no OIDC token --
+# refuses unless everything the plan workflow's preflight requires holds, the inputs are well formed
+# and agree with each other, the commit the key names is the approved merge of a pull request into
+# main and reachable from it, the release commit is reachable from main, and readiness.json on
+# origin/main records ONE unexpired deployment authorization naming exactly this tuple. An
+# authorization expires within 24 hours and names one plan object and one release, so it never
+# authorizes another or a later plan.
+#
+# The apply job then trusts nothing the plan job or the preflight wrote. Before any OIDC token it
+# re-verifies the checkout, its approval, and the deployment authorization. Then, immediately before
+# applying, it re-verifies the release itself: exactly the authorized release-record version and
+# SHA-256, its contract, frozen approval and exact publish attempt, the digest's repository and tags,
+# and admission under the admission policy as origin/main holds it now -- never the plan's older
+# checkout, so a security stop or an exception's removal merged after the plan still refuses -- with a
+# fresh scan query and exceptions re-evaluated against the current time. It downloads THAT plan version, refuses it unless it is KMS-encrypted,
+# under unexpired Object Lock governance retention and younger than the allowed age, recomputes its
+# SHA-256, compares the plan's embedded provider lock with the approved commit's lock file, and refuses
+# a plan that changes a trust anchor (IAM, KMS, secret containers, the release registry, buckets,
+# budget actions), whose release_image is not the verified one, or whose task-definition revisions and
+# services depart from the delivery contract. Only then does it apply the saved plan. It never plans,
+# and it never builds, tags or pushes an image. Terraform itself refuses a stale plan.
+#
+# Every file -- the plan, its apply log, the release documents, Terraform's data directory -- stays in
+# a private runner directory created with umask 077, and a final step that runs whatever happened
+# removes it and any errored.tfstate or crash log. Nothing is printed or uploaded.
+#
+# This workflow cannot run in Milestone 3.3b: readiness.json is false, neither environment
+# exists, main is not protected, and no deployment is authorized.
+
+name: staging-apply
+run-name: "staging apply of plan ${{ inputs.plan_key }} version ${{ inputs.plan_version_id }} sha256 ${{ inputs.plan_sha256 }} | release ${{ inputs.release_commit }} image ${{ inputs.release_image }} record ${{ inputs.release_record_version_id }} sha256 ${{ inputs.release_record_sha256 }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      plan_key:
+        description: "Exact saved-plan key: plans/staging/<40-hex commit>/<64-hex sha256>.tfplan"
+        required: true
+        type: string
+      plan_version_id:
+        description: "Exact S3 version ID of the reviewed plan object"
+        required: true
+        type: string
+      plan_sha256:
+        description: "Expected SHA-256 of the reviewed plan object"
+        required: true
+        type: string
+      release_commit:
+        description: "The release commit the plan summary printed"
+        required: true
+        type: string
+      release_image:
+        description: "The verified release image the plan summary printed: <release repository>@sha256:<64 hex>"
+        required: true
+        type: string
+      release_record_version_id:
+        description: "The release record's S3 version ID the plan summary printed"
+        required: true
+        type: string
+      release_record_sha256:
+        description: "The release record's SHA-256 the plan summary printed"
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: staging-terraform
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  preflight:
+    name: Preflight (no environment, no AWS)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      source_commit: ${{ steps.preflight.outputs.source_commit }}
+    steps:
+      - name: Refuse anything but a manual dispatch of main in this repository
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+        run: |
+          test "$EVENT_NAME" = "workflow_dispatch"
+          test "$REF" = "refs/heads/main"
+          test "$REPOSITORY_ID" = "1349512121"
+
+      - name: Check out main with history for the reachability and authorization checks
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Preflight
+        id: preflight
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PLAN_KEY: ${{ inputs.plan_key }}
+          PLAN_VERSION_ID: ${{ inputs.plan_version_id }}
+          PLAN_SHA256: ${{ inputs.plan_sha256 }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          RELEASE_IMAGE: ${{ inputs.release_image }}
+          RELEASE_RECORD_VERSION_ID: ${{ inputs.release_record_version_id }}
+          RELEASE_RECORD_SHA256: ${{ inputs.release_record_sha256 }}
+        run: python3 infra/delivery/delivery.py preflight --workflow apply
+
+  apply:
+    name: Apply the reviewed saved plan (staging-apply)
+    needs: preflight
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.repository_id == '1349512121'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    environment: staging-apply
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      id-token: write
+    env:
+      AWS_EC2_METADATA_DISABLED: "true"
+      CHECKPOINT_DISABLE: "1"
+      TF_IN_AUTOMATION: "1"
+      TF_INPUT: "0"
+      PRIVATE_DIR: ${{ runner.temp }}/firmbatch-private
+      TF_DATA_DIR: ${{ runner.temp }}/firmbatch-private/terraform-data
+      PLAN_KEY: ${{ inputs.plan_key }}
+      PLAN_VERSION_ID: ${{ inputs.plan_version_id }}
+      PLAN_SHA256: ${{ inputs.plan_sha256 }}
+      RELEASE_COMMIT: ${{ inputs.release_commit }}
+      RELEASE_IMAGE: ${{ inputs.release_image }}
+      RELEASE_RECORD_VERSION_ID: ${{ inputs.release_record_version_id }}
+      RELEASE_RECORD_SHA256: ${{ inputs.release_record_sha256 }}
+      STAGING_AWS_ACCOUNT_ID: ${{ vars.STAGING_AWS_ACCOUNT_ID }}
+      STAGING_AWS_REGION: ${{ vars.STAGING_AWS_REGION }}
+      STAGING_PLAN_ROLE_ARN: ${{ vars.STAGING_PLAN_ROLE_ARN }}
+      STAGING_APPLY_ROLE_ARN: ${{ vars.STAGING_APPLY_ROLE_ARN }}
+      STAGING_STATE_BUCKET: ${{ vars.STAGING_STATE_BUCKET }}
+      STAGING_STATE_KMS_KEY_ARN: ${{ vars.STAGING_STATE_KMS_KEY_ARN }}
+      STAGING_PLAN_BUCKET: ${{ vars.STAGING_PLAN_BUCKET }}
+      STAGING_PLAN_KMS_KEY_ARN: ${{ vars.STAGING_PLAN_KMS_KEY_ARN }}
+      STAGING_MAX_PLAN_AGE_HOURS: ${{ vars.STAGING_MAX_PLAN_AGE_HOURS }}
+      ARTIFACT_REGISTRY_ACCOUNT_ID: ${{ vars.ARTIFACT_REGISTRY_ACCOUNT_ID }}
+      ARTIFACT_REGISTRY_REGION: ${{ vars.ARTIFACT_REGISTRY_REGION }}
+      ARTIFACT_REPOSITORY_NAME: ${{ vars.ARTIFACT_REPOSITORY_NAME }}
+      ARTIFACT_RELEASE_BUCKET: ${{ vars.ARTIFACT_RELEASE_BUCKET }}
+    steps:
+      - name: Check out the commit the plan key names
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.source_commit }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Create the private working directory every apply file stays in
+        run: |
+          umask 077
+          mkdir -m 700 "$PRIVATE_DIR"
+
+      - name: Re-verify the checkout, its reachability from main and its approval
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 infra/delivery/delivery.py verify-checkout
+
+      - name: Refuse unless one unexpired authorization names exactly this plan and release, before any OIDC token
+        run: python3 infra/delivery/delivery.py check-deployment-authorization
+
+      - name: Install the pinned Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+
+      - name: Refuse any Terraform but the approved commit's pinned version
+        run: terraform version -json | python3 infra/delivery/delivery.py check-terraform-version --pinned-file infra/terraform/.terraform-version
+
+      - name: Refuse malformed or mismatched environment configuration, and an image outside the release repository
+        run: python3 infra/delivery/delivery.py check-environment-variables --workflow apply
+
+      - name: Assume the apply role through OIDC
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        with:
+          role-to-assume: ${{ vars.STAGING_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.STAGING_AWS_REGION }}
+          audience: sts.amazonaws.com
+          role-session-name: firmbatch-staging-apply-${{ github.run_id }}
+          # Longer than the job's 90-minute timeout, so a slow apply cannot lose its state write
+          # to an expired credential.
+          role-duration-seconds: 7200
+          allowed-account-ids: ${{ vars.STAGING_AWS_ACCOUNT_ID }}
+          mask-aws-account-id: true
+
+      - name: Re-verify the authorized release immediately before applying -- record version, approval, attempt, digest, admission
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          umask 077
+          aws s3api get-object --region "$ARTIFACT_REGISTRY_REGION" --bucket "$ARTIFACT_RELEASE_BUCKET" --key "releases/$RELEASE_COMMIT/release-manifest.json" --version-id "$RELEASE_RECORD_VERSION_ID" "$PRIVATE_DIR/release-record.json" > "$PRIVATE_DIR/release-record-head.json"
+          DIGEST="$(python3 infra/delivery/delivery.py release-digest --record "$PRIVATE_DIR/release-record.json" --commit "$RELEASE_COMMIT")"
+          aws ecr describe-repositories --region "$ARTIFACT_REGISTRY_REGION" --registry-id "$ARTIFACT_REGISTRY_ACCOUNT_ID" --repository-names "$ARTIFACT_REPOSITORY_NAME" --output json > "$PRIVATE_DIR/release-repository.json"
+          aws ecr describe-images --region "$ARTIFACT_REGISTRY_REGION" --registry-id "$ARTIFACT_REGISTRY_ACCOUNT_ID" --repository-name "$ARTIFACT_REPOSITORY_NAME" --image-ids "imageDigest=$DIGEST" --output json > "$PRIVATE_DIR/release-image.json"
+          aws ecr describe-image-scan-findings --region "$ARTIFACT_REGISTRY_REGION" --registry-id "$ARTIFACT_REGISTRY_ACCOUNT_ID" --repository-name "$ARTIFACT_REPOSITORY_NAME" --image-id "imageDigest=$DIGEST" --output json > "$PRIVATE_DIR/release-scan.json"
+          python3 infra/delivery/delivery.py verify-release --record "$PRIVATE_DIR/release-record.json" --record-head "$PRIVATE_DIR/release-record-head.json" --commit "$RELEASE_COMMIT" --repository-json "$PRIVATE_DIR/release-repository.json" --image-json "$PRIVATE_DIR/release-image.json" --scan-json "$PRIVATE_DIR/release-scan.json" --expected-record-version-id "$RELEASE_RECORD_VERSION_ID" --expected-record-sha256 "$RELEASE_RECORD_SHA256" --expected-image "$RELEASE_IMAGE" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Download exactly the reviewed plan version and verify it independently
+        run: |
+          umask 077
+          PLAN_FILE="$PRIVATE_DIR/staging.tfplan"
+          aws s3api head-object --bucket "$STAGING_PLAN_BUCKET" --key "$PLAN_KEY" --version-id "$PLAN_VERSION_ID" --output json | python3 infra/delivery/delivery.py check-plan-object --expected-version-id "$PLAN_VERSION_ID" --max-age-hours "$STAGING_MAX_PLAN_AGE_HOURS"
+          aws s3api get-object --bucket "$STAGING_PLAN_BUCKET" --key "$PLAN_KEY" --version-id "$PLAN_VERSION_ID" "$PLAN_FILE" > /dev/null
+          echo "$PLAN_SHA256  $PLAN_FILE" | sha256sum --check --status
+          python3 infra/delivery/delivery.py compare-lock --plan "$PLAN_FILE" --lockfile infra/terraform/environments/staging/.terraform.lock.hcl
+
+      - name: Initialize against the remote state
+        working-directory: infra/terraform/environments/staging
+        run: |
+          umask 077
+          terraform init -input=false -lockfile=readonly -backend-config="bucket=$STAGING_STATE_BUCKET" -backend-config="region=$STAGING_AWS_REGION" -backend-config="kms_key_id=$STAGING_STATE_KMS_KEY_ARN" > "$PRIVATE_DIR/init.log" 2>&1
+
+      - name: Refuse a plan that changes a trust anchor, departs from the delivery contract or names another digest
+        working-directory: infra/terraform/environments/staging
+        run: terraform show -json "$PRIVATE_DIR/staging.tfplan" | python3 "$GITHUB_WORKSPACE/infra/delivery/delivery.py" plan-summary --mode apply --terraform-version 1.15.8 --expected-image "$RELEASE_IMAGE" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Apply exactly the verified saved plan, keeping the output in the private directory
+        working-directory: infra/terraform/environments/staging
+        run: |
+          umask 077
+          PLAN_FILE="$PRIVATE_DIR/staging.tfplan"
+          if ! terraform apply -input=false -lock-timeout=5m "$PLAN_FILE" > "$PRIVATE_DIR/apply.log" 2>&1; then
+            echo "::error::The apply failed or was refused; Terraform refuses a stale saved plan itself. Its output stays on the runner and is removed; investigate in an operator session."
+            exit 1
+          fi
+          echo "The verified saved plan was applied." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the plan, its logs, the release documents and Terraform's files from the runner
+        if: always()
+        run: |
+          rm -rf -- "$PRIVATE_DIR"
+          rm -f -- infra/terraform/environments/staging/errored.tfstate infra/terraform/environments/staging/crash.log infra/terraform/environments/staging/crash.*.log

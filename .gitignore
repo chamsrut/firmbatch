@@ -18,3 +18,26 @@ __pycache__/
 # portal gate reproducible for a human and in CI.
 portal/node_modules/
 portal/dist/
+
+# Terraform (Milestone 3.3b, ADR 0011 decision 8). State and saved plans are as sensitive as
+# each other -- state holds the Cognito client secret and a plan carries the prior state -- so
+# neither is ever committed. A valued tfvars file carries human-owned deployment parameters,
+# reviewer CIDRs among them; only the values-free `*.tfvars.example` is tracked.
+# `.terraform.lock.hcl` IS tracked: it pins the provider hashes `init -lockfile=readonly` checks.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfplan.*
+tfplan
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc

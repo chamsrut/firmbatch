@@ -1,0 +1,14 @@
+# Values-free template for the artifacts root. Copy it OUTSIDE the repository, fill it in with
+# human-confirmed values, and pass it with -var-file. A valued *.tfvars file is git-ignored and
+# must never be committed. Apply the bootstrap root first: every role named here must exist.
+
+expected_account_id           = ""                        # the bootstrap root's artifact_registry.account_id, as declared
+region                        = ""                        # the bootstrap root's artifact_registry.region, as declared
+repository_name               = "firmbatch/control-plane" # the bootstrap root's release_repository_name
+release_bucket_name           = ""                        # the bootstrap root's release_bucket_name
+release_record_retention_days = 0                         # at least 365; a record outlives every deployment that could roll back to it
+untagged_image_expiry_days    = 0                         # 1 to 30
+release_kms_key_arn           = ""                        # the bootstrap root's output
+artifact_publish_role_arn     = ""                        # the bootstrap root's output
+release_reader_role_arns      = []                        # the bootstrap root's staging plan and apply role outputs
+pull_account_ids              = []                        # the staging account

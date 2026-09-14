@@ -1,0 +1,11 @@
+{
+  "schema_version": 2,
+  "purpose": "The admission policy staging-plan and staging-apply each apply, independently, to a release image before promoting or applying its digest (ADR 0012 decisions 13 and 15). The scan must be complete for exactly the release digest, and its findings per severity must not exceed these maxima once unexpired exceptions for that exact digest are applied. An exception names one exact image digest, exact CVE or GHSA identifiers (at most ten), a reason, its approver, the reviewed pull request, and a creation and a mandatory expiry at most 30 days apart. A security stop refuses one exact digest and commit outright, whatever its approval or scan; historical approval is never rewritten. Changing this file is a CODEOWNERS-reviewed pull request to protected main; no workflow input, option or environment variable can add an exception or relax a maximum. A malformed, expired-before-created or overly broad entry refuses every admission.",
+  "require_scan_status": "COMPLETE",
+  "maximum_findings": {
+    "CRITICAL": 0,
+    "HIGH": 0
+  },
+  "exceptions": [],
+  "security_stops": []
+}

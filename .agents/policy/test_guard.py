@@ -173,7 +173,8 @@ def test_cloud():
     denies("terraform destroy", "cloud-mutation", tool="Bash", command="terraform destroy")
     denies("terraform state rm", "cloud-mutation", tool="Bash", command="terraform state rm aws_instance.x")
     allows("terraform validate", tool="Bash", command="terraform validate")
-    allows("aws sts get-caller-identity", tool="Bash", command="aws sts get-caller-identity")
+    # Milestone 3.3b: no agent-run AWS API call, read-only included (ADR 0012).
+    denies("aws sts get-caller-identity", "cloud-access", tool="Bash", command="aws sts get-caller-identity")
     denies(
         "fb run against verda", "billable-launch",
         tool="Bash", command="python3 -m firmbatch.fb run --provider verda --max-workers 4",
@@ -667,8 +668,8 @@ def test_gh_aws_global_options():
     denies("aws s3 rm --recursive", "cloud-mutation", tool="Bash", command="aws s3 rm s3://b/p --recursive")
     denies("aws s3 sync --delete", "cloud-mutation", tool="Bash", command="aws s3 sync . s3://b --delete")
     allows("gh pr view with -R", tool="Bash", command="gh -R owner/repo pr view 1")
-    allows("aws sts with --region", tool="Bash", command="aws --region us-east-1 sts get-caller-identity")
-    allows("aws s3 ls", tool="Bash", command="aws s3 ls s3://bucket")
+    denies("aws sts with --region", "cloud-access", tool="Bash", command="aws --region us-east-1 sts get-caller-identity")
+    denies("aws s3 ls", "cloud-access", tool="Bash", command="aws s3 ls s3://bucket")
 
 
 def test_shell_flag_and_prefix_forms():
@@ -735,6 +736,232 @@ def test_env_family_credentials():
     allows("reading .env.sample", tool="Read", path=".env.sample")
 
 
+def test_m3_3b_terraform_aws_registry_and_deployment_evidence():
+    """Milestone 3.3b (ADR 0012): bounded Terraform, no AWS call, no push, no staging evidence."""
+    print("\nMilestone 3.3b: Terraform, AWS, registries and deployment evidence")
+    staging = "infra/terraform/environments/staging"
+    for sub in ("plan", "apply -auto-approve", "destroy", "import aws_vpc.x vpc-1", "refresh",
+                "taint aws_vpc.x", "untaint aws_vpc.x", "force-unlock 1234"):
+        denies(f"terraform {sub}", "cloud-mutation", tool="Bash", command=f"terraform {sub}")
+    denies("terraform -chdir plan", "cloud-mutation", tool="Bash", command=f"terraform -chdir={staging} plan -out=x.tfplan")
+    for sub in ("rm aws_vpc.x", "mv a b", "push x.tfstate", "replace-provider a b"):
+        denies(f"terraform state {sub}", "cloud-mutation", tool="Bash", command=f"terraform state {sub}")
+    for sub in ("state pull", "state list", "output -raw x", "show -json", "console", "workspace new prod",
+                "login", "test", "get", "graph"):
+        denies(f"terraform {sub}", "terraform-bounded", tool="Bash", command=f"terraform {sub}")
+    denies("terraform init with the backend", "terraform-bounded", tool="Bash", command=f"terraform -chdir={staging} init")
+    denies("terraform init -backend=true", "terraform-bounded", tool="Bash", command="terraform init -backend=true")
+    denies("terraform plan hidden in bash -lc", "cloud-mutation", tool="Bash", command="bash -lc 'cd infra && terraform plan'")
+    denies("terraform test after a cd", "terraform-bounded", tool="Bash", command=f"cd {staging} && terraform test")
+    allows("terraform fmt -check -recursive", tool="Bash", command="terraform fmt -check -recursive infra/terraform")
+    allows("terraform init -backend=false", tool="Bash",
+           command=f"terraform -chdir={staging} init -backend=false -lockfile=readonly -input=false")
+    allows("terraform validate with -chdir", tool="Bash", command=f"terraform -chdir={staging} validate -no-color")
+    allows("terraform version", tool="Bash", command="terraform version -json")
+    allows("terraform -version", tool="Bash", command="terraform -version")
+    allows("terraform providers lock", tool="Bash", command="terraform providers lock -platform=linux_amd64 -platform=darwin_arm64")
+    allows("the static-checks script", tool="Bash", command="bash infra/terraform/scripts/static-checks.sh")
+
+    for command in ("aws s3 cp x s3://b/x", "aws ecs run-task --task-definition x", "aws kms schedule-key-deletion --key-id k",
+                    "aws ec2 authorize-security-group-ingress --group-id g", "aws ec2 request-spot-instances",
+                    "aws cognito-idp admin-create-user --user-pool-id p", "aws sso login", "aws configure list",
+                    "aws secretsmanager get-secret-value --secret-id s", "aws ecr get-login-password",
+                    "aws cognito-idp list-users --user-pool-id p", "aws s3api head-object --bucket b --key k",
+                    "aws --profile staging sts get-caller-identity",
+                    "aws s3 cp s3://bucket/key help", "aws configure set region help"):
+        denies(f"denied: {command}", "cloud-access", tool="Bash", command=command)
+    denies("mutating verb with a trailing help operand", "cloud-mutation", tool="Bash",
+           command="aws s3api put-object --bucket b --key k help")
+    denies("s3 mv with a trailing help operand", "cloud-mutation", tool="Bash", command="aws s3 mv s3://bucket/key help")
+    denies("time wrapping terraform apply", "cloud-mutation", tool="Bash", command="time terraform apply -auto-approve")
+    denies("exec wrapping an aws s3 rm", "cloud-mutation", tool="Bash", command="exec aws s3 rm s3://b/k")
+    denies("exec wrapping a read-only aws call", "cloud-access", tool="Bash", command="exec aws sts get-caller-identity")
+    denies("init whose last -backend is true", "terraform-bounded", tool="Bash", command="terraform init -backend=false -backend=true")
+    denies("terraform providers schema", "terraform-bounded", tool="Bash", command="terraform providers schema -json")
+    denies("bare terraform providers", "terraform-bounded", tool="Bash", command="terraform providers")
+    for command in ("docker buildx build -o type=registry -t repo/x .", "docker buildx build --output type=image,push=true .",
+                    "docker buildx imagetools create -t repo/x:t src", "buildah push image", "finch push image",
+                    "oras attach ref file", "crane tag img t", "crane delete img", "skopeo delete docker://img"):
+        denies(f"registry: {command}", "registry-push", tool="Bash", command=command)
+    denies("gh variable delete", "git-destructive", tool="Bash", command="gh variable delete STAGING_AWS_REGION")
+    denies("gh workflow enable", "git-destructive", tool="Bash", command="gh workflow enable staging-apply.yml")
+    for command in ("touch docs/evidence/m3/aws-staging/summary.txt",
+                    "curl -o docs/evidence/m3/aws-staging/summary.txt https://example.invalid/x",
+                    "tar -C docs/evidence/m3/aws-staging -xf bundle.tar",
+                    "unzip -d docs/evidence/m3/aws-staging bundle.zip",
+                    "git mv notes.txt docs/evidence/m3/aws-staging/notes.txt",
+                    "wget -O docs/evidence/m3/aws-staging/x https://example.invalid/x"):
+        denies(f"staging evidence via {command.split()[0]}", "deployment-evidence-deferred", tool="Bash", command=command)
+    allows("listing the staging evidence directory", tool="Bash", command="ls docs/evidence/m3/aws-staging")
+    allows("aws --version", tool="Bash", command="aws --version")
+    allows("aws help", tool="Bash", command="aws help")
+    allows("aws service help page", tool="Bash", command="aws s3api put-object help")
+
+    for command in ("docker push 111111111111.dkr.ecr.eu-central-1.amazonaws.com/x@sha256:ab", "docker login -u AWS",
+                    "podman push image", "docker image push image", "docker buildx build --push .",
+                    "skopeo copy docker://a docker://b", "nerdctl login registry", "crane push img ref"):
+        denies(f"registry: {command}", "registry-push", tool="Bash", command=command)
+    denies("ECR login piped into docker", "cloud-access", tool="Bash",
+           command="aws ecr get-login-password | docker login --password-stdin x")
+    allows("docker build without push", tool="Bash", command="docker build --tag firmbatch-control-plane:local .")
+
+    denies("gh variable set", "git-destructive", tool="Bash", command="gh variable set STAGING_AWS_ACCOUNT_ID --env staging-plan")
+    denies("gh run rerun", "git-destructive", tool="Bash", command="gh run rerun 123")
+    denies("gh workflow run staging-apply", "git-destructive", tool="Bash", command="gh workflow run staging-apply.yml")
+
+    denies("writing M3.3 staging evidence", "deployment-evidence-deferred", tool="Write",
+           path="docs/evidence/m3/aws-staging/plan-summary.txt")
+    denies("redirecting into M3.3 staging evidence", "deployment-evidence-deferred", tool="Bash",
+           command="echo x > docs/evidence/m3/aws-staging/cost-estimate.txt")
+    denies("copying into M3.3 staging evidence", "deployment-evidence-deferred", tool="Bash",
+           command="cp /tmp/x docs/evidence/m3/aws-staging/inventory.txt")
+    allows("capturing new M3.1 or M3.2 evidence stays allowed", tool="Write", path="docs/evidence/m3/portal-suite-capture.txt")
+    allows("capturing new evidence for another phase stays allowed", tool="Write", path="docs/evidence/m2/brand-new-capture.txt")
+
+
+def test_m3_3b_review_bypasses():
+    """Each bypass the independent M3.3b review confirmed, and the ordinary spellings beside it."""
+    print("\nMilestone 3.3b review: wrapper grammars, gh api methods, program-name spellings")
+    # timeout's own options take values; the command follows its DURATION.
+    for command in ("timeout -s KILL 5 terraform apply -auto-approve",
+                    "timeout -sKILL 5 terraform apply",
+                    "timeout --signal KILL 5 terraform apply",
+                    "timeout --signal=KILL 5 terraform apply",
+                    "timeout -k 10 5 terraform apply",
+                    "timeout --kill-after 10 5 terraform apply",
+                    "timeout --kill-after=10s -s TERM 5m terraform destroy",
+                    "timeout --preserve-status 5 terraform apply"):
+        denies(f"timeout grammar: {command}", "cloud-mutation", tool="Bash", command=command)
+    denies("timeout -s hiding a push", "git-destructive", tool="Bash", command="timeout -s INT 30 git push origin main")
+    # env's -C/--chdir moves the directory paths resolve against; -S splits a command string.
+    denies("env -C into the evidence tree", "evidence-immutable", tool="Bash",
+           command=f"env -C {REPO / 'docs/evidence/v0'} rm {Path(EXISTING_EVIDENCE).name}")
+    denies("env --chdir=DIR into the evidence tree", "evidence-immutable", tool="Bash",
+           command=f"env --chdir={REPO / 'docs/evidence/v0'} rm {Path(EXISTING_EVIDENCE).name}")
+    denies("env -C then terraform apply", "cloud-mutation", tool="Bash", command="env -C /tmp terraform apply")
+    denies("env --chdir DIR then aws", "cloud-access", tool="Bash", command="env --chdir /tmp aws sts get-caller-identity")
+    denies("env -S splitting terraform apply", "cloud-mutation", tool="Bash", command="env -S 'terraform apply -auto-approve'")
+    denies("env --split-string with a push", "git-destructive", tool="Bash", command="env --split-string='git push origin main'")
+    denies("env -u NAME -C DIR", "cloud-mutation", tool="Bash", command="env -u AWS_PROFILE -C /tmp terraform apply")
+    denies("nice --adjustment=5", "cloud-mutation", tool="Bash", command="nice --adjustment=5 terraform apply")
+    denies("stdbuf -o L", "cloud-mutation", tool="Bash", command="stdbuf -o L terraform apply")
+    denies("ionice -c 3", "cloud-mutation", tool="Bash", command="ionice -c 3 terraform apply")
+    denies("time -o FILE", "cloud-mutation", tool="Bash", command="time -o /tmp/t terraform apply")
+    denies("exec -a NAME", "cloud-access", tool="Bash", command="exec -a x aws sts get-caller-identity")
+    allows("timeout -s around the property tests", tool="Bash", command="timeout -s KILL 300 python3 -m firmbatch.tests.test_recovery")
+    allows("env -C around a read", tool="Bash", command="env -C /tmp ls")
+
+    # gh api: only GET or HEAD with no field and no input.
+    for command in ("gh api -XPOST /repos/o/r/merges",
+                    "gh api -X=POST /repos/o/r/merges",
+                    "gh api -X PATCH /repos/o/r",
+                    "gh api --method PUT /repos/o/r/topics",
+                    "gh api --method=DELETE /repos/o/r/git/refs/heads/x",
+                    "gh api --method post /repos/o/r/merges",
+                    "gh api -X OPTIONS /repos/o/r",
+                    "gh api /repos/o/r/issues --field title=x",
+                    "gh api /repos/o/r/issues --field=title=x",
+                    "gh api /repos/o/r/issues --raw-field title=x",
+                    "gh api /repos/o/r/issues --raw-field=title=x",
+                    "gh api /repos/o/r/issues -Ftitle=x",
+                    "gh api /repos/o/r/issues -ftitle=x",
+                    "gh api -X GET /repos/o/r/issues -f state=open",
+                    "gh api /repos/o/r/issues --input body.json",
+                    "gh api /repos/o/r/issues --input=body.json",
+                    "gh api graphql",
+                    "gh -R o/r api --method PATCH /repos/o/r"):
+        denies(f"gh api write: {command}", "git-destructive", tool="Bash", command=command)
+    allows("gh api GET", tool="Bash", command="gh api /repos/o/r/pulls/1/reviews")
+    allows("gh api -X GET", tool="Bash", command="gh api -X GET /repos/o/r/actions/runs/1/attempts/1")
+    allows("gh api --method=HEAD", tool="Bash", command="gh api --method=HEAD /repos/o/r")
+    allows("gh api with a jq filter", tool="Bash", command="gh api /repos/o/r --jq .default_branch")
+
+    # Program-name spellings reach the same rules.
+    for command in ("terraform.exe apply", "Terraform.EXE plan", "tofu apply -auto-approve", "opentofu destroy",
+                    "/usr/local/bin/tofu plan", "C:\\\\tools\\\\terraform.exe apply"):
+        denies(f"terraform spelling: {command}", "cloud-mutation", tool="Bash", command=command)
+    denies("tofu test", "terraform-bounded", tool="Bash", command="tofu test")
+    denies("tofu init with a backend", "terraform-bounded", tool="Bash", command="tofu init")
+    allows("tofu fmt", tool="Bash", command="tofu fmt -check")
+    for command in ("aws.exe s3 rm s3://b/k", "aws2 ec2 terminate-instances --instance-ids i-1", "AWS.EXE ecs update-service --service x"):
+        denies(f"aws spelling: {command}", "cloud-mutation", tool="Bash", command=command)
+    for command in ("aws.exe sts get-caller-identity", "aws2 s3 ls", "/opt/aws/bin/aws2 ecr describe-images"):
+        denies(f"aws spelling: {command}", "cloud-access", tool="Bash", command=command)
+    allows("aws2 --version", tool="Bash", command="aws2 --version")
+    denies("git.exe push", "git-destructive", tool="Bash", command="git.exe push origin main")
+    denies("docker.exe push", "registry-push", tool="Bash", command="docker.exe push image")
+
+    # The narrow M3.3 staging-evidence restriction is unchanged, and other evidence stays writable.
+    denies("env -C into the staging evidence directory", "deployment-evidence-deferred", tool="Bash",
+           command=f"env -C {REPO / 'docs/evidence/m3'} touch aws-staging/summary.txt")
+    allows("new M3.1 evidence through a wrapper", tool="Bash", command="timeout -s KILL 60 ls docs/evidence/m3")
+
+
+def test_m3_3b_second_review_spellings():
+    """Each spelling the second independent M3.3b review still found allowed, and the reads beside it."""
+    print("\nMilestone 3.3b second review: gh api flag clusters, find and tree writes, long-option prefixes")
+    staging = REPO / "docs/evidence/m3/aws-staging"
+    existing = REPO / EXISTING_EVIDENCE
+
+    # gh api: a short-flag cluster is read letter by letter.
+    for command in ("gh api repos/o/r/actions/runs/1/pending_deployments -if state=approved",
+                    "gh api /repos/o/r/issues -iF title=x",
+                    "gh api -iXPOST /repos/o/r/merges",
+                    "gh api -iX POST /repos/o/r/merges",
+                    "gh api -Hfoo -f a=b /repos/o/r/issues",
+                    "gh api -H 'Accept: application/json' -if a=b /repos/o/r/issues",
+                    "gh api -q .x --input body.json /repos/o/r/issues"):
+        denies(f"gh api cluster: {command}", "git-destructive", tool="Bash", command=command)
+    allows("gh api -i", tool="Bash", command="gh api -i /repos/o/r")
+    allows("gh api -H with a separate value", tool="Bash", command="gh api -H 'Accept: application/vnd.github+json' /repos/o/r")
+    allows("gh api -q", tool="Bash", command="gh api /repos/o/r -q .name")
+    allows("gh api -iX GET", tool="Bash", command="gh api -iX GET /repos/o/r")
+    allows("gh api --jq", tool="Bash", command="gh api /repos/o/r --jq .default_branch")
+    allows("gh api -t whose value looks like a field flag", tool="Bash", command="gh api /repos/o/r -t -f")
+
+    # find: -ok and -okdir run commands; -fprint, -fprint0, -fprintf and -fls write a file.
+    denies("find -ok", "fs-destructive", tool="Bash", command="find . -name '*.db' -ok rm {} ;")
+    denies("find -okdir", "fs-destructive", tool="Bash", command="find . -name '*.db' -okdir rm {} ;")
+    for option in ("-fprint", "-fprint0", "-fls"):
+        denies(f"find {option} into the staging evidence directory", "deployment-evidence-deferred", tool="Bash",
+               command=f"find . -name x {option} {staging / 'summary.txt'}")
+        denies(f"find {option} over existing evidence", "evidence-immutable", tool="Bash",
+               command=f"find . -name x {option} {existing}")
+    denies("find -fprintf into the staging evidence directory", "deployment-evidence-deferred", tool="Bash",
+           command=f"find . -fprintf {staging / 'summary.txt'} '%p\\n'")
+    denies("find -fprintf over existing evidence", "evidence-immutable", tool="Bash",
+           command=f"find . -fprintf {existing} '%p\\n'")
+    allows("find reading the staging evidence directory", tool="Bash", command=f"find {staging} -name x")
+    allows("find -fprint to a scratch file", tool="Bash", command="find . -name '*.py' -fprint /tmp/scratch-list.txt")
+
+    # tree: -o FILE, -oFILE, --output=FILE and --output's prefixes write a file.
+    for spelling in ("-o {}", "-o{}", "--output={}", "--output {}", "--out {}", "--out={}"):
+        denies(f"tree {spelling} into the staging evidence directory", "deployment-evidence-deferred", tool="Bash",
+               command="tree docs " + spelling.format(staging / "tree.txt"))
+        denies(f"tree {spelling} over existing evidence", "evidence-immutable", tool="Bash",
+               command="tree docs " + spelling.format(existing))
+    allows("tree reading the evidence tree", tool="Bash", command="tree docs/evidence")
+    allows("tree -o to a scratch file", tool="Bash", command="tree -o /tmp/scratch-tree.txt docs")
+
+    # Wrapper long options, by any unique GNU getopt_long prefix.
+    for command in ("timeout --sig KILL 5 terraform apply",
+                    "timeout --sig=KILL 5 terraform apply",
+                    "timeout --kill 10 5 terraform apply",
+                    "env --ch=/tmp terraform apply",
+                    "env --u FOO terraform apply",
+                    "nice --adj=5 terraform apply",
+                    "stdbuf --out L terraform apply"):
+        denies(f"long-option prefix: {command}", "cloud-mutation", tool="Bash", command=command)
+    denies("env --chd DIR then aws", "cloud-access", tool="Bash", command="env --chd /tmp aws sts get-caller-identity")
+    denies("env --spl with a push", "git-destructive", tool="Bash", command="env --spl='git push origin main'")
+    denies("env --ch= into the evidence tree", "evidence-immutable", tool="Bash",
+           command=f"env --ch={REPO / 'docs/evidence/v0'} rm {Path(EXISTING_EVIDENCE).name}")
+    denies("an ambiguous long-option prefix", "malformed-input", tool="Bash", command="timeout --ver 5 terraform apply")
+    allows("timeout --sig around the property tests", tool="Bash",
+           command="timeout --sig KILL 300 python3 -m firmbatch.tests.test_recovery")
+    allows("env --ch= around a read", tool="Bash", command="env --ch=/tmp ls")
+
+
 def main():
     print("firmbatch agent policy tests")
     check("evidence fixture exists", (REPO / EXISTING_EVIDENCE).exists(), str(REPO / EXISTING_EVIDENCE))
@@ -763,6 +990,9 @@ def main():
     test_git_restore_checkout()
     test_unknown_tool_fails_closed()
     test_env_family_credentials()
+    test_m3_3b_terraform_aws_registry_and_deployment_evidence()
+    test_m3_3b_review_bypasses()
+    test_m3_3b_second_review_spellings()
     test_claude_protocol()
     test_codex_protocol()
     test_adapter_exceptions()

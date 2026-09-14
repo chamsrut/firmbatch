@@ -1,0 +1,28 @@
+# Deny by default. The build context holds only what the Dockerfile's COPY lines name, so a
+# credential, a valued environment file, Terraform state or a saved plan cannot enter the image
+# by accident, whatever else sits in the working tree.
+*
+
+!__init__.py
+!control_plane
+!requirements-v1-lock.txt
+!portal/package.json
+!portal/package-lock.json
+!portal/.npmrc
+!portal/index.html
+!portal/tsconfig.json
+!portal/vite.config.ts
+!portal/scripts
+!portal/src
+
+# Never, even inside a directory allowed above.
+control_plane/tests
+control_plane/testing
+**/__pycache__
+**/*.pyc
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.tfstate
+**/*.tfplan

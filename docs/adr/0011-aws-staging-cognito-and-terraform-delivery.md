@@ -6,6 +6,44 @@
   (see "Review corrections"). **Corrected again the same day** in a final pass that turned
   six further architecture questions into decisions (see "Final correction pass").
 - **Date:** 2026-09-13
+- **Later refined by ADR 0012 (Milestone 3.3b), without rewriting the decisions below:** the
+  application image is built once per release by a separate `artifact-publish` workflow and
+  promoted by digest, where decision 9's pipeline and the topology's §8 built an image as part of
+  each deployment; the GitHub OIDC provider and every delivery identity move from decision 8's
+  `delivery` module to the human-applied bootstrap root, and ECR to a separate human-applied
+  artifacts root; and the M3.3c identity-mapping migration is `0008`, not `0007`, because M3.3b's
+  incidental password-hash correction took `0007` (ADR 0012 decision 14). The migration references
+  below carry that number with a pointer.
+- **Amended by ADR 0012, declared here so the two records are read together** (ADR 0012 "Amendments to ADR
+  0011"); the text below is not rewritten, and where it disagrees ADR 0012 governs:
+  - **deployment authority** — decision 9's fourth stage, an application deployment that "neither the plan
+    approval nor the apply approval authorizes", is folded into `staging-apply`: workload rollout inside the
+    ECS delivery contract is applied from a reviewed saved plan, authorized by a deployment authorization
+    in `readiness.json` naming that plan and one release, plus the `staging-apply` approval — never by the
+    apply approval alone (ADR 0012 decisions 5 and 15);
+  - **migrate before rollout** — decision 9's "the migration ECS task runs before service rollout; the
+    rollout is aborted on migration failure" is not a pipeline guarantee: the apply role cannot run a task,
+    so an operator runs the `migrate` task before applying a plan whose release needs it, and pipeline
+    migration is ADR 0012's open item;
+  - **a third environment** — decision 9.1 names two environments; `artifact-publish` is a third, with its
+    own role, trusting exactly that environment (ADR 0012 decision 13);
+  - **plan-version reads** — decision 9.1's table and 9.3 say neither role can retrieve arbitrary historical
+    plan versions; the apply role can read any plan version under the environment's prefix whose version
+    ID it already holds, an accepted IAM limitation with its compensating controls (ADR 0012 decision 7);
+  - **image build** — §9.3's closing paragraph builds "one immutable container image … per deployment";
+    an image is instead built once per approved release commit by `artifact-publish` and promoted by digest
+    to every deployment (ADR 0012 decision 13);
+  - **the policy guard** — decision 8's last bullet describes the guard as allowing `fmt`, `init`,
+    `validate`, `test` and `plan`, and says extending it "is not this slice's"; with the human's approval
+    M3.3b extended it, and agents may now run only `fmt`, `validate`, `version`, `providers lock` and
+    `init -backend=false`, with `terraform test` only through the static-checks script (ADR 0012 decision 11);
+  - **policy results and the cost summary** — decision 9.2 has GitHub display policy results and the cost
+    summary beside the action counts, and decision 10 lists both in the M3.3d plan summary; the plan job
+    produces neither, its sanitized summary saying so, and the current cost estimate is produced by the
+    operator during the separately authenticated plan review and recorded at M3.3d (ADR 0012 decision 7
+    and "Still open").
+
+  Everything else stands as decided.
 - **Decision owners:** Firmbatch product owner and maintainers
 - **Milestone:** 3.3a — AWS staging, Cognito and Terraform architecture adoption, on
   `docs/milestone-3-3-aws-terraform-architecture` from `main` at `ae61747` (Milestone 3.2,
@@ -85,7 +123,7 @@ would otherwise reverse-engineer from a plan file:
 | --- | --- | --- |
 | **M3.3a** — this branch | Adopt the AWS staging, Cognito and Terraform architecture: this ADR, the topology document, and the status and roadmap reconciliation | No AWS resource, no Terraform, no application code, no migration, no CI change, no evidence |
 | **M3.3b** | **Scaffolding only:** the Terraform modules and environment roots, including the separate state and plan buckets (decision 8); ECS task-definition and service scaffolding, parameterized by image digest, command and secret reference; the container-build foundation; ECR, the `staging-plan` and `staging-apply` environments, the distinct plan and apply roles and the manually dispatched workflows, with the **required acceptance tests** of decision 9; the reviewer allow-list validation and its independently tested policy check (decision 6); static Terraform verification | No cloud `plan` against a real backend and no `apply`; **no deployable identity-broker, database-bootstrap or identity-binding implementation**; its task definitions are not operational |
-| **M3.3c** | **Every program the scaffolding runs, and its dependencies:** the production database bootstrap command; the identity-binding command and its **dedicated database boundary** (decision 5); the Cognito identity-broker entry point; the Cognito authorization, callback, refresh, revocation and logout clients; JWT and JWKS verification; the KMS encryption and decryption integration; the staging environment configuration mode; the `__Host-fb_session` change (decision 4.1); the AWS-mode route changes including the logout move (decision 4.4); metadata-safe access and unhandled-error logging (decision 10); the database identity mapping (decision 5, migration `0007`); the portal's adaptation to `/auth/*`; the **browser-evidence tooling** M3.3d runs (decision 10); the production runtime dependencies with the runtime and development requirement files and both lock files (`requirements-v1.txt`, `requirements-v1-dev.txt`, `requirements-v1-lock.txt`, `requirements-v1-dev-lock.txt`); the runtime-import gate's module inventory; the container entry points and tests for **every** one-off and long-running command; RDS-compatibility and security tests that can run against local PostgreSQL 16 | No deployment; local authentication retained for development and test |
+| **M3.3c** | **Every program the scaffolding runs, and its dependencies:** the production database bootstrap command; the identity-binding command and its **dedicated database boundary** (decision 5); the Cognito identity-broker entry point; the Cognito authorization, callback, refresh, revocation and logout clients; JWT and JWKS verification; the KMS encryption and decryption integration; the staging environment configuration mode; the `__Host-fb_session` change (decision 4.1); the AWS-mode route changes including the logout move (decision 4.4); metadata-safe access and unhandled-error logging (decision 10); the database identity mapping (decision 5, migration `0008` — renumbered from `0007` by ADR 0012 decision 14); the portal's adaptation to `/auth/*`; the **browser-evidence tooling** M3.3d runs (decision 10); the production runtime dependencies with the runtime and development requirement files and both lock files (`requirements-v1.txt`, `requirements-v1-dev.txt`, `requirements-v1-lock.txt`, `requirements-v1-dev-lock.txt`); the runtime-import gate's module inventory; the container entry points and tests for **every** one-off and long-running command; RDS-compatibility and security tests that can run against local PostgreSQL 16 | No deployment; local authentication retained for development and test |
 | **M3.3d** | A reviewed Terraform plan, a current cost estimate, **explicit human deployment authorization**, then apply, bootstrap, migrations, identity binding, browser tests against the real URL, the restore drill, inventories, post-deployment cost and alarm checks, and evidence capture | Nothing before the authorization is recorded |
 
 **M3.3b cannot be applied, and its task definitions are not operational, until the M3.3c
@@ -483,7 +521,8 @@ superuser the CI container has and the non-superuser administrator the local clu
 The repository's principal check and role reconciliation read `pg_roles`, not `pg_authid`,
 which is the right catalogue for RDS; everything else is a qualification, not an assumption.
 **M3.3d must qualify, against managed RDS**: migrations `0001`–`0006` upgrading cleanly, and
-`0007` once M3.3c adds it; `FORCE` row-level security on every tenant relation; the ownership
+`0008` once M3.3c adds it (renumbered from `0007`, which M3.3b's password-hash correction took —
+ADR 0012 decision 14 — and which M3.3d qualifies with the rest); `FORCE` row-level security on every tenant relation; the ownership
 of every `SECURITY DEFINER` function by the schema owner, or by the dedicated `NOLOGIN` owner
 decision 5 allows for the binding function, and never by the master user; the `NOLOGIN`
 lifecycle writer's installation and `SET ROLE` semantics; **the identity-binding login role's
@@ -546,6 +585,8 @@ infra/terraform/
     delivery/                ECR, the GitHub OIDC provider, the distinct plan and apply
                              roles (the apply role under a permissions boundary), the
                              operator permission to run identity binding, deploy permissions
+                             (refined by ADR 0012: the OIDC provider and the delivery
+                             roles moved to bootstrap/, ECR to artifacts/)
   environments/
     staging/                 the staging root: one state key, pinned versions, tfvars example
     production/README.md     a placeholder stating production is a separate root, account

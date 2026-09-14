@@ -41,7 +41,7 @@ from argon2 import PasswordHasher
 from argon2 import exceptions as _argon2_exceptions
 from argon2.low_level import Type as _Argon2Type
 
-from .secrets import Secret, SecretError, looks_like_secret
+from .secrets import Secret, SecretError
 
 #: The RFC 9106 second recommended parameter set for Argon2id: 64 MiB, 3 passes, 4 lanes.
 #: Stated as data so a test can read it and so a change is a diff rather than a surprise.
@@ -237,11 +237,20 @@ def needs_rehash(stored_hash: str) -> bool:
 
 
 def is_well_formed_password_hash(value: object) -> bool:
-    """Whether ``value`` has the stored shape. A plaintext, or a bcrypt hash, does not."""
+    """Whether ``value`` has the stored shape. A plaintext, or a bcrypt hash, does not.
+
+    Structure alone decides it: text, at most :data:`PASSWORD_HASH_MAX_LENGTH` characters,
+    and an exact match of :data:`PASSWORD_HASH_REGEX`. The generic secret-shape recogniser is
+    deliberately **not** applied here (migration ``0007``, found by Milestone 3.3b's
+    verification). A PHC hash's salt and digest are random base64, which forms an AWS
+    access-key-id shape by chance, so the scan refused valid hashes -- including
+    :func:`hash_password`'s own output -- at random. Nothing but an Argon2id PHC hash matches
+    the pattern. The raw password is validated before hashing (:func:`_require_password`), and
+    the recogniser still applies to every other value it guards.
+    """
     return (
         isinstance(value, str)
         and len(value) <= PASSWORD_HASH_MAX_LENGTH
-        and looks_like_secret(value) is None
         and _PASSWORD_HASH_PATTERN.fullmatch(value) is not None
     )
 

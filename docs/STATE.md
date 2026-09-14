@@ -14,9 +14,16 @@ Five labels, kept strictly apart:
 - **NOT VERIFIED** — asserted, expected, or reasoned about, with no captured run behind it.
   Documentation, comments, and passing-in-the-moment are not evidence.
 
-Last updated: 2026-09-13, on `docs/milestone-3-3-aws-terraform-architecture` from `main` at
-`ae61747` (Milestone 3.2, PR #10), with **Milestone 3.3a — the AWS staging, Cognito and
-Terraform architecture adoption — as the current slice, documentation only** (ADR 0011).
+Last updated: 2026-09-14, on `feat/milestone-3-3b-terraform-foundation` from `main` at
+`86d4195`, with **Milestone 3.3b — the Terraform, container and delivery foundation — as the
+current slice, implemented, statically tested and independently reviewed at implementation commit
+`cff27c8`, with every actionable review finding closed, and awaiting pull-request CI and merge** (ADR 0012).
+Its final local canonical run was **16 gates passed, 0 failed**, with **257** required files; the image has not
+been built locally because Docker is unavailable, and the first actual container build remains a required PR CI
+condition. **Milestone 3.3a — the AWS staging, Cognito and Terraform architecture adoption — is merged** through
+PR #11 at `86d4195` (documentation only, ADR 0011). **No Terraform plan or apply has run, no AWS or GitHub
+resource has been created, no image has been pushed, and no deployment or evidence artifact exists for
+Milestone 3.3; nothing of it is VERIFIED LIVE.**
 **Milestone 3.2 — the customer-only product portal — is merged** through PR #10 at
 `ae61747` (implementation commit `ce097cb`, status commit `59d82a7`), implemented, tested
 and independently reviewed: every actionable finding from its four review passes — the
@@ -65,12 +72,17 @@ signs) rather than Milestone 6. **Milestone 3.1 — membership-bound identity, s
 credential issuance — is merged at `87159d5` (PR #9); it is not deployed and not VERIFIED
 LIVE.** **Milestone 3.2 — the customer-only product portal — is merged at `ae61747` (PR #10,
 implementation `ce097cb`); implemented, tested and independently reviewed, not deployed and
-not VERIFIED LIVE** (ADR 0010). **Milestone 3 remains active and M3.3a is the current
-slice**: the AWS staging, Cognito and Terraform architecture adoption (ADR 0011), which
-records the Cognito adoption decision and splits M3.3 into four slices — M3.3a architecture,
-M3.3b Terraform and task scaffolding, M3.3c the bootstrap, identity-binding and broker programs with the identity mapping and dependencies, M3.3d
-authorized deployment and evidence. Nothing of it is implemented or deployed; the customer
-can see the real hosted portal only after M3.3d. See the CURRENT sections and PLANNED below.
+not VERIFIED LIVE** (ADR 0010). **Milestone 3 remains active.** M3.3a — the AWS staging,
+Cognito and Terraform architecture adoption (ADR 0011) — is merged through PR #11 at `86d4195`;
+it records the Cognito adoption decision and splits M3.3 into four slices — M3.3a architecture,
+M3.3b Terraform and task scaffolding, M3.3c the bootstrap, identity-binding and broker programs
+with the identity mapping and dependencies, M3.3d authorized deployment and evidence. **M3.3b
+is the current slice**: implemented, statically tested and independently reviewed at `cff27c8`, awaiting
+pull-request CI and merge; scaffolding only, with nothing planned, applied, pushed or deployed (ADR 0012). **M3.3c is next** and owns the
+executable identity broker, database bootstrap and identity-binding programs and migration
+`0008` (renumbered: `0007` is the incidental password-hash correction found by M3.3b's
+verification, ADR 0012 decision 14). Nothing of M3.3 is deployed; the customer can see the real hosted portal only after
+M3.3d. See the CURRENT sections and PLANNED below.
 
 ---
 
@@ -1977,7 +1989,7 @@ principal, which neither worsens nor solves the limitation ADR 0009 decision 6 s
 
 ---
 
-## CURRENT — Milestone 3.3a AWS staging, Cognito and Terraform architecture adoption — **this branch, documentation only**
+## CURRENT — Milestone 3.3a AWS staging, Cognito and Terraform architecture adoption — **merged through PR #11 at `86d4195`, documentation only**
 
 Documentation only, on `docs/milestone-3-3-aws-terraform-architecture` from `main` at
 `ae61747` (Milestone 3.2, PR #10). It changes no product behaviour, no migration, no test,
@@ -2095,7 +2107,9 @@ pass" maps each decision to where it lives.
   authority.
 - **Plan retention.** A proposed one-day governance retention tied to the saved-plan lifetime,
   24 hours recommended; lifecycle expiry of current and noncurrent plan versions and delete
-  markers; no bypass or historical read by either role; apply refuses a plan past the allowed
+  markers; no bypass or historical read by either role (as implemented by M3.3b: no version
+  listing, and IAM cannot confine `s3:GetObjectVersion` to one version, so a version ID already
+  held stays readable within the retention window — ADR 0012 decision 7); apply refuses a plan past the allowed
   age; state keeps its own retention and never expires with plans. The earlier wording that a
   refused plan is deleted is replaced: a delete in a versioned bucket only adds a marker.
 - **The reviewer allow-list.** Fail-closed structural validation by Terraform and an
@@ -2115,6 +2129,444 @@ The deployment-parameter lists are reconciled to the genuine human decisions: ac
 domains, CIDRs, SES identity, alert recipient, budget, RDS sizing and minor, plan lifetime and
 reviewers, identities to bind, AWS-managed log retention, the current cost estimate and the
 deployment authorization.
+
+---
+
+## CURRENT — Milestone 3.3b Terraform, container and delivery foundation — **implemented, statically tested and independently reviewed at `cff27c8`; awaiting PR CI and merge; nothing planned, applied, pushed or deployed**
+
+On `feat/milestone-3-3b-terraform-foundation` from `main` at `86d4195` (M3.3a, PR #11), committed at
+implementation commit `cff27c8` and awaiting pull-request CI and merge; every actionable finding of its
+independent reviews is closed (the correction passes below). ADR 0012
+records the implementation decisions and the places they refine ADR 0011. It is **scaffolding
+only**: no Terraform plan or apply has run against AWS; no AWS resource, GitHub environment,
+branch protection, ruleset, variable, secret, image, deployment or evidence artifact exists
+because of it; and no agent made an AWS API call while building it. Milestone 3.3 remains active,
+and **M3.3c is next**: the executable identity broker, database bootstrap and identity-binding
+programs, their dependencies and the identity-mapping migration, now `0008`. **`0007` is taken** by an
+incidental correction on this branch: the password-hash contract (below; ADR 0012 decision 14).
+
+| Area | What exists now |
+| --- | --- |
+| `infra/terraform/bootstrap/` | Applied first. The state bucket (versioned, customer-managed KMS, public access blocked, TLS only, lockfile backend; current state never expired, superseded versions expired after the configured retention with the thirty newest always kept) and the separate saved-plan bucket (versioned, KMS, Object Lock in GOVERNANCE mode with a configurable retention, lifecycle expiry of current and noncurrent versions and delete markers under `plans/` only, a policy refusing overwrite, retention bypass and history enumeration to the pipeline roles, and every write to any principal but the exact plan role). The state, plan and release keys. The account's one GitHub OIDC provider and **every GitHub delivery identity** — the staging plan and apply roles and the artifact-publish role, their trust and permission policies and boundaries. Applied by a human only (`infra/terraform/runbooks/bootstrap.md`) |
+| `infra/terraform/artifacts/` | Applied second. The canonical release registry (ADR 0012 decision 13): a private release repository with `IMMUTABLE` tags and no exclusion filter, KMS encryption under the bootstrap root's release key, scan on push, untagged-only expiry and a repository policy letting only artifact-publish push and nobody delete; the Object-Locked, write-once release-record bucket; no replication. It creates no identity or key, and refuses to plan until every role it names exists. Applied by a human only |
+| `infra/terraform/environments/staging/` | The staging composition of the eight modules, its own state key, `allowed_account_ids` and caller-identity and region postconditions, `eu-central-1` default and `us_east_1` aliases, a values-free example |
+| `infra/terraform/modules/` | Exactly `network`, `edge`, `compute`, `database`, `identity`, `secrets`, `observability`, `delivery` — the topology of ADR 0011 decisions 3–8; `delivery` now holds only the workload boundary and the operator's identity-binding policy |
+| `infra/terraform/policy/` | The repository's independent checks (standard library HCL and YAML readers, the reviewer allow-list validator, an IAM policy evaluator, twenty-three rules) with mutation tests that remove each rule's main properties and expect a refusal — not an exhaustive test of every line each rule reads |
+| `infra/terraform/scripts/static-checks.sh` | What the new verification gate runs |
+| `infra/delivery/` | `delivery.py`, the workflows' fail-closed checks and their tests — among them the resumable publication state machine, the versioned release-record contract, the frozen approval, the exact publish-attempt check, admission with digest-scoped exceptions and security stops, the deployment-authorization binding, rollback and destination-digest checks, and the ECS delivery contract applied to saved plans; `admission-policy.json`, zero critical and high findings and no exception; `readiness.json`, **every prerequisite false and no deployment authorization** |
+| `.github/workflows/artifact-publish.yml`, `staging-plan.yml`, `staging-apply.yml` | Manual dispatch only; a preflight job with no environment and no OIDC token; publication builds once and publishes or resumes one release, plan promotes a verified release by digest, apply re-verifies the authorized release and refuses any other image; every file in a private runner directory removed by an always-run cleanup; **none can run today** |
+| `.github/workflows/ci.yml` | Installs the pinned Terraform for the new gate; a `container` job that builds and inspects the image and never logs in or pushes; reusable through `workflow_call` as publication's required verification |
+| `.github/CODEOWNERS` | Owners for infrastructure, workflows, scripts, the container files and agent configuration |
+| `Dockerfile`, `.dockerignore` | Three stages, digest-pinned bases, locked dependencies, a non-root runtime with no tests, no credential and no environment file |
+| `docs/adr/0012-terraform-container-and-delivery-foundation.md` | The decisions |
+
+### What M3.3b establishes — statically, and nowhere else
+
+Asserted by the mocked Terraform tests, the independent policy checks with their negative tests,
+and the delivery checks' unit tests. **None of it has run against AWS or GitHub.**
+
+- Every Terraform test is confined to a root's `tests/` directory, mocks every provider
+  configuration its root declares, and plans only; the check runs before any `terraform test`,
+  which the gate runs with every AWS credential removed and instance metadata disabled.
+- Account enforcement on every provider and root; separate roots and state keys; no workspace; one
+  pinned Terraform and one pinned provider with committed lock files.
+- No provisioner, PostgreSQL provider, secret version, generated password, IAM user or access key,
+  Identity Pool, Cognito group or user, ALB authentication, WAF on the ALB, CloudFront, valued
+  `tfvars`, state or plan file.
+- ECS tasks without public IPs or ECS Exec, with circuit-breaker rollback, one verified release
+  reference by digest from the approved repository with tags refused, containers unprivileged, non-root,
+  with a read-only root filesystem, every capability dropped and no volume, a separate credential per task — the identity-binding task never holds
+  the authenticator credential — and no ECS task definition or service plannable until
+  `runtime_contract_reviewed`, a human-set boolean, is true after M3.3c's review (the services'
+  precondition is asserted by the policy check, the task definitions' also by a Terraform test).
+- RDS PostgreSQL 16: private, encrypted, SSL-enforced, Single-AZ, seven-day backups, deletion
+  protection, final snapshot, RDS-managed master secret, an explicit minor.
+- Ingress from a CIDR only through the reviewer allow-list on ports 80 (redirect only) and 443; the
+  allow-list refused by Terraform and independently by Python when empty, invalid, non-canonical,
+  non-routable, duplicated, overlapping, broader than `/24` or `/64`, longer than 16 entries or over
+  its address-space allowance.
+- An invite-only pool with required TOTP, a confidential code-grant client with exact URLs and
+  `openid email`, Managed Login v2 with its certificate in `us-east-1`, a WAF on the pool.
+- IAM and bucket policies written with exact OIDC audience and subjects, distinct plan, apply and
+  artifact-publish roles — all created, with the OIDC provider, by the human-applied bootstrap root —
+  and the authority split of ADR 0012 decision 5 (its privilege and resource ownership matrix is
+  there): trust anchors — IAM, KMS, secret containers, the release registry, buckets — are
+  human-applied. The apply role's boundary **admits** only the staging service families, exact IAM
+  reads and `iam:PassRole` on the ten pre-created workload roles to ECS tasks — no IAM mutation is
+  within it — and denies secret values and secret-container writes, key policies, one-off tasks and ECS
+  Exec, deregistration, another family on either service, service changes outside the two services,
+  image publication and registry changes, release-record writes, data export and log reads, purchases,
+  alarm suppression and budget actions. The apply role registers, and never deregisters, revisions of the
+  five approved families and rolls out each service only with its own family; only the plan role may
+  write a saved plan; and no statement grants either staging role an overwrite of a saved plan, a
+  retention bypass or a history listing. Written, checked as text, and evaluated against representative
+  requests by the repository's own evaluator and the mocked bootstrap tests — never evaluated by AWS.
+- A saved plan checked against the ECS delivery contract at plan and again before apply: the image
+  must be the verified release digest, roles the family's pre-created roles, secret references the
+  family's approved containers, and containers unprivileged, non-root, read-only, capability-dropped,
+  awsvpc, volume-free and without ECS Exec; a change to a trust anchor or a budget action refuses apply.
+- Build once, promote by digest (ADR 0012 decisions 13 and 15), as written and unit-tested against
+  in-memory fakes of GitHub, ECR and S3: publication after the full CI verification, one build with no
+  build argument and its provenance in its labels before any credential, an SBOM and a release draft;
+  then a fresh push of one immutable `git-<commit>` tag or the resumption of an earlier attempt's push,
+  proven from the registry's own bytes, never an overwrite; a deterministic, versioned, write-once release
+  record freezing the approval and naming the original publish attempt, a 412 or lost response accepted only
+  for a byte-for-byte and semantically identical object; promotion that validates the frozen approval and
+  the exact publish attempt, resolves the digest by digest only, and admits it under the committed policy
+  with digest-scoped, expiring exceptions and security stops; apply that re-verifies the exactly authorized
+  release immediately before applying, under a deployment authorization bound to one plan and one release;
+  rollback to a retained earlier digest and revision; destination-digest equality before any cross-account
+  or cross-region deployment. Nothing has been built, pushed or promoted.
+- Workflows written to run only on manual dispatch of protected `main` in this repository, to
+  reference an environment only after a preflight job checks it exists and is protected, to
+  upload no artifact, to keep plan output off the log, never to plan at apply, and to apply only
+  a named, retained, unexpired, checksum-verified saved-plan version whose provider lock matches
+  the approved commit. The workflow structure is checked statically and the verification
+  functions by unit tests; neither workflow has run.
+
+### The correction pass before commit (2026-09-14)
+
+Three corrections before the implementation commit, at the human's instruction:
+
+1. **An incidental reliability and security correction: the password-hash contract, migration
+   `0007_password_hash_contract`.** M3.3b's canonical verification failed once in the PostgreSQL suite
+   with `PasswordPolicyError` from `hash_password`. M3.1's password-hash validation — in
+   `security/passwords.py` and in `signup_account`, `complete_account_recovery` and
+   `change_account_password` — applied the generic secret-shape recogniser to the Argon2id PHC hash,
+   whose random base64 salt and digest can form an AWS access-key-id shape, so a valid hash was
+   refused at random. Python now validates the hash structurally (text, at most 512 characters, the
+   exact Argon2id PHC pattern), and the forward migration replaces the three function bodies with
+   `CREATE OR REPLACE`, removing only the `secret_shape(<hash>)` term and restoring the earlier bodies
+   exactly on downgrade, owner, ACL and hardening unchanged. The recogniser itself is unchanged, and
+   migrations `0001`–`0006` are unedited. `control_plane/tests/test_password_hash_contract.py`
+   (**110 tests**, passing three consecutive runs locally) uses a valid hash whose salt encodes the
+   formerly refused shape, and holds signup, recovery and the signed-in password change to accepting
+   it; every malformed, unsupported, oversized or NULL hash to refusal at every boundary; the raw
+   access key id to recognition; the downgrade to `0006` to the catalogue a fresh `0006` produces; and
+   nothing to logging the password or the hash. **The M3.3c identity mapping moves to `0008`**: ADR
+   0011 and the M3.3 topology document carry the new number in place, each with a pointer to ADR 0012,
+   and ADR 0009's M3.1 record is not rewritten. Implemented and
+   tested, not VERIFIED LIVE.
+2. **The authority split** replaces the blanket human-only rule (ADR 0012 decision 5).
+3. **Build once, promote by digest** replaces manual image publication (ADR 0012 decision 13).
+
+### The second correction pass: the independent M3.3b review (2026-09-14)
+
+An independent review of the corrected tree raised sixteen findings and asked for a regression sweep;
+all are corrected before the implementation commit, at the human's instruction (ADR 0012, whose
+decisions are amended in place, with decision 15 new). Implemented and statically tested, not VERIFIED LIVE.
+
+1. **The apply boundary.** The former `DenyEveryIamChange` `NotAction` statement denied everything
+   outside a short allow-list — S3, EC2, RDS and ECS included — and is gone, with no broad replacement.
+   The boundary's Allow set is its ceiling: the staging service families, exact IAM reads and
+   `iam:PassRole` on the ten workload roles to `ecs-tasks.amazonaws.com`; no IAM create, update,
+   delete, attach, detach, policy-version, trust or boundary change is within it. The policy check's
+   evaluator and the mocked bootstrap test hold representative required requests — state and
+   exact-plan access, VPC, RDS, task-definition registration, service changes, observability and
+   budget operations — to being allowed, and IAM mutations to being denied. Every `NotAction` and
+   `NotResource` statement in the tree is judged by what it denies, so a deny of everything but a
+   short allow-list is refused whatever it is called.
+2. **Revisions are kept.** Task definitions carry `skip_destroy = true`; the apply boundary denies
+   deregistration; a digest rollout registers a new revision and deregisters none.
+3. **No bootstrap cycle.** The bootstrap root creates the plan, apply and artifact-publish roles with
+   their trusts, policies and boundaries, and the release key; the `artifacts` root reads the roles it
+   names and refuses to plan until they exist, and no resource policy names a principal that does not
+   exist. Order: bootstrap → artifacts → the human's first staging apply → the pipeline.
+4. **Idempotent, recoverable publication.** The image is built and inspected, with its provenance
+   (repository, commit, workflow, original run and attempt) in its labels, and its SBOM and release
+   draft written, before any credential. `git-<commit>` is pushed once if absent; if present, its
+   digest is resolved and its provenance and registry bytes verified. It is never overwritten or
+   deleted, and only a missing SBOM or record is written. S3 writes are conditional; a 412 or lost
+   response is accepted only for an object identical in full SHA-256 and semantic identity. A
+   different digest or incompatible provenance refuses for human recovery. Artifact-publish gains only
+   the ECR reads and `s3:GetObject` on release records this needs.
+5. **The exact publish attempt** is named in the record and verified at its own attempt endpoint; a
+   later failed rerun does not invalidate the release.
+6. **Apply re-verifies the release.** Only the plan role may write a saved plan. Apply takes the
+   release commit and the record's version and SHA-256, and immediately before applying re-verifies
+   the record, digest, repository, commit, publish attempt, a fresh scan, admission and exceptions,
+   and that the saved plan names the same digest. The apply role reads ECR by digest and the exact
+   record version only.
+7. **Historical, non-oracular approval.** Reviews from accounts without write access and reviews
+   after `merged_at` are ignored; the approval evidence is frozen into the record and validated at
+   promotion and rollback; revoking a release is an explicit security stop.
+8. **The checker.** `*.tf.json`, override files and override directories refused; the exact
+   credential-job guard; no status function, `continue-on-error` or step-level `if` but the cleanup;
+   triggers, permissions and checkout settings read from the parsed file; `pull_request_target` and
+   `write-all` refused; each protected environment reserved to its own workflow file; quoted YAML keys
+   fail closed. One mutation test per bypass.
+9. **ECS conditions.** Service creation and update are confined to the service's own family and to
+   `ecs:enable-execute-command = false`, with the cluster and service resources and the saved-plan
+   checks kept.
+10. **KMS.** No KMS right for ECR; artifact-publish generates data keys and decrypts through S3 only;
+    readers decrypt release records through S3 only; no ECR consumer grant.
+11. **Scan exceptions** are committed and owner-reviewed, never inputs: an exact digest, exact
+    vulnerability IDs, a reason, approver, approval reference, creation time and mandatory expiry.
+    Anything expired, malformed, broad or mismatched refuses, at plan and at apply.
+12. **Deployment authorization** is read from `readiness.json` on `main`, binds one plan key, version,
+    SHA-256, release commit and image, expires within 24 hours, appears in the run name the approver
+    sees, and is checked before any credential.
+13. **Runner files.** `umask 077`, a private directory, and an always-run cleanup of plans, logs,
+    `errored.tfstate` and crash logs that cannot mask the job's own failure; nothing printed or uploaded.
+14. **Versioned release-record contracts.** Version 1 freezes its components, lock files, workflow and
+    rules; a later component or lock file does not invalidate it; an unknown version refuses; retiring
+    one is an explicit decision.
+15. **The guard** unwraps `timeout -s/--signal/-k/--kill-after` and `env -C/--chdir`, refuses mutating
+    `gh api` spellings, and applies the Terraform and AWS rules to `.exe`, OpenTofu and `aws2` names.
+16. **Documents** reconciled; ADR 0011 and the topology document carry pointers to ADR 0012, and the
+    migration references in both were renumbered to `0008` in place.
+
+### The third correction pass: the review's verification (2026-09-14)
+
+The same independent reviewer verified the second pass and found nine of its seventeen corrections
+incomplete, one at P1. Each is corrected before the implementation commit, at the human's instruction, and
+the eight it verified closed are preserved with their regression tests. Implemented and statically tested,
+not VERIFIED LIVE.
+
+1. **P1 — apply now reads the live security overlay from `main` (findings 6, 7, 11).** `verify-release`
+   read the admission policy from the checkout, which at apply is the plan's older source commit, so a
+   security stop or an exception's removal merged after the plan was ignored. It now reads
+   `infra/delivery/admission-policy.json` from `origin/main` (`security_overlay_from_main`), at plan and
+   at apply; the plan job's checkout fetches main's history. A test drives the `verify-release` command
+   path with a checkout that lacks a stop `main` has, and it refuses.
+2. **The historical contract and the live overlay are separate (finding 14).** Each release-record
+   version's contract now also freezes the gate and publication job names and the approval rules (keys,
+   qualifying associations, write permissions); verification uses the record's own contract for those, so a
+   renamed CI job or changed rule is a new version beside the earlier one. The attempt's workflow path was
+   still the module constant after this pass; the fourth pass reads it from the record's contract too. The
+   overlay is in no contract.
+3. **No bootstrap cycle (finding 3).** Readiness prerequisites are per workflow (`WORKFLOW_PREREQUISITES`):
+   publication no longer requires `human_applied_resources_applied_by_human`, attested only after the
+   first staging apply that deploys a published release; `readiness.json` must record exactly the known
+   prerequisites. The bootstrap runbook orders publication before that apply, in two attestation PRs.
+4. **The canonical artifact registry is declared (finding 3).** The bootstrap root takes
+   `artifact_registry_account_id` and `artifact_registry_region` and builds every release ARN and
+   release-key condition from them, never from its own account or region; it refuses a registry declared
+   elsewhere, because it creates the publisher and the release key beside the registry. `staging-plan`
+   checks its Terraform variables' registry declaration against the environment's before its OIDC token,
+   and `plan-summary` refuses a plan whose `release_registry_*` inputs name another repository. A registry
+   in a dedicated artifact account passes every check when every place declares it.
+5. **An image store reporting a manifest digest fails before any credential (finding 4).** The build
+   records BuildKit's configuration digest (`--metadata-file`); `release-draft` refuses a manifest
+   descriptor or a local image ID that is not that digest, and the SBOM is addressed by the draft's digest,
+   never the local image ID.
+6. **The publish job checks its own attempt before any credential (finding 5)** — `check-publish-attempt`,
+   the gate predicate promotion applies later — so a partial rerun whose gates are listed under an earlier
+   attempt stops before the push rather than stranding the commit.
+7. **Approval wording and rule (finding 7).** The association GitHub reports on a review is not described
+   as proof of write access; the deployment source commit's approval is documented as requiring its
+   approver's write permission when the job runs, and a revoked approver's effect on plan, rollback and
+   apply is stated with its recovery.
+8. **The checker (findings 8 and 17)** refuses an environment named by an expression or in another letter
+   case, `dynamic` blocks, provider blocks in modules, module sources that do not resolve to
+   `infra/terraform/modules`, `continue-on-error` or conditional jobs and steps in `ci.yml`, and step-level
+   `if` in preflight jobs; its evaluator gives every request the keys AWS always attaches, fails closed on a
+   condition key it does not model, evaluates the plan role, and reads every policy form a resource can hold,
+   refusing any it cannot.
+9. **The guard (finding 15)** parses `gh api` short-flag clusters by gh's grammar, routes `find` and `tree`
+   write options through the write rules and refuses `find -ok`/`-okdir`, and resolves wrapper long options
+   by GNU unique prefix, refusing an ambiguous one.
+10. **Documents (finding 16).** ADR 0012 declares its amendments to ADR 0011 — deployment authority,
+    migrate before rollout, the third environment, plan-version reads — and ADR 0011's header points to them;
+    stale dates, root counts, guard wording, citations and environment counts are corrected; the external
+    assumptions are assigned to M3.3d qualification. Boolean counts, maxima and identifiers gain tests.
+
+**Protected files changed in this pass, under the human's instruction for these findings:** the three
+delivery workflows, `.agents/policy/guard.py`, `.agents/policy/test_guard.py` and
+`.agents/skills/verify/SKILL.md`. `scripts/verify-repository.sh`, `ci.yml`, `CODEOWNERS`, `AGENTS.md`,
+`CLAUDE.md` and the hook configuration are unchanged; `REQUIRED_FILES` stays at **257**, since no file was
+added.
+
+**Component runs, locally, before the canonical run on the final staged tree** (runs, not artifacts): the
+policy check, **23 rules, no findings**; the policy unit tests, **207**; the delivery unit tests, **97**;
+`terraform fmt -check -recursive` clean; `terraform test` against mocked providers, **18 passed** for
+`bootstrap`, **12** for `artifacts` and **41** for `environments/staging`; the agent policy tests, **460
+checks passed**; `ruff check .` clean. The canonical run on the final staged tree is reported with the change
+rather than written here.
+
+### The fourth correction pass: findings 14, 16 and 17, and two regression gaps (2026-09-14)
+
+The same reviewer found three findings still incomplete and two regression tests missing under closed findings.
+Each is corrected before the implementation commit, at the human's instruction; the behaviour of every finding
+already verified closed is unchanged. Implemented and statically tested, not VERIFIED LIVE.
+
+1. **Finding 14 — the versioned workflow identity.** `verify_publish_attempt` compared the attempt's workflow path
+   with the module-level `PUBLISH_WORKFLOW`; it now uses the workflow the record's declared contract names. A
+   test defines a version-2 contract with a renamed publication workflow — and renames the module constant too —
+   and verifies the unchanged version-1 record by its original identity; an attempt of the renamed workflow is
+   refused for that record, a record relabelled version 2 is refused, and unknown versions still fail closed.
+   The earlier wording that a later contract "strands no" release, written while the workflow path was still the
+   module constant, is corrected wherever it appeared.
+2. **Finding 17 — every policy a delivery identity can hold.** The checker now walks every IAM policy and
+   attachment resource in every root and module against an explicit graph: each delivery identity holds exactly
+   one literal inline policy and one boundary in the bootstrap root. Another inline policy, a managed or exclusive
+   attachment, `managed_policy_arns` or `inline_policy` on a role, a policy held in a local or built by `for_each`,
+   or an attachment to a role not proven to be declared beside it, is refused. Every admitted statement is read in
+   full: no delivery policy may grant every action, a secret value, an SSM parameter, or decryption beyond the
+   state, plan and release keys. **The plan role gains a permissions boundary**, human-applied in the bootstrap
+   root: its ceiling is exactly the plan policy's actions, and its denies refuse secret values and parameters,
+   other keys, the release key outside S3, saved-plan reads and state writes. Each boundary is evaluated alone
+   against a side-door policy granting every action; a mocked bootstrap test does the same for the plan boundary,
+   and confirms state reads, the lockfile, saved-plan writes and refresh still work.
+3. **Finding 16 — documents.** The verification script's comment names all three roots; the guard's refusal
+   message and `docs/tasks/current.md` say `providers lock`; the roadmap includes the artifacts root; the three
+   delivery environments are distinguished; `delivery.py` cites ADR 0012 decision 13 for versioned contracts;
+   ADR 0012 cites ADR 0011 §9.3 for build-per-deployment and, with ADR 0011's header, declares the guard,
+   cost-summary, rollout and migration-order amendments; the workflow-token assumption is assigned to M3.3d
+   everywhere; the guard-count progression runs through 460; 241 and 256 are labelled historical.
+4. **Closed finding 4 — a regression test** distinguishes the local image ID, BuildKit's configuration digest and
+   the registry manifest digest, shows the draft refuses the mismatch before any credential, shows the post-push
+   comparison refuses a forged draft with no record written and no further write, and runs the same code with that
+   comparison removed to show it would then produce a record binding the pushed image to a draft that attested
+   another digest.
+5. **Closed finding 12 — a command-level test** runs `check-deployment-authorization` with a checkout whose
+   `readiness.json` authorizes the dispatched tuple and an `origin/main` that does not: it refuses. With exactly
+   the tuple on main and an unreadable checkout copy, it passes, proving the checkout is never read.
+
+**Protected files changed in this pass, each with the human's exact approval:** `scripts/verify-repository.sh`
+(one comment; no gate or command) and `.agents/policy/guard.py` (one refusal message; no behaviour).
+`REQUIRED_FILES` stays at **257** and the gates at **16**; no file was added.
+
+**Component runs, locally, before the canonical run on the final staged tree** (runs, not artifacts): the policy
+check, **23 rules, no findings**; the policy unit tests, **213**; the delivery unit tests, **101**; `terraform fmt
+-check -recursive` clean; `init -backend=false -lockfile=readonly` and `validate` for all three roots; `terraform
+test` against mocked providers, **19 passed** for `bootstrap`, **12** for `artifacts` and **41** for
+`environments/staging`; the agent policy tests, **460 checks passed**; `ruff check .` clean. The canonical run on
+the final staged tree is reported with the change rather than written here.
+
+### The fifth correction pass: finding 17's delivery-identity adoption, and two policy-checker test gaps (2026-09-14)
+
+The reviewer showed that a role outside the bootstrap root could still become a delivery identity — a staging-root
+role imported from `firmbatch-staging-github-plan` and given `AdministratorAccess`, and a compute-module role named
+`${var.name_prefix}-github-apply` — and that two policy-checker paths had no direct test. Corrected before the
+implementation commit at the human's instruction; the behaviour of every finding already verified closed is unchanged.
+Implemented and statically tested, not VERIFIED LIVE.
+
+1. **Only the bootstrap root declares or owns a GitHub delivery identity** — the staging plan, staging apply and
+   artifact-publish roles.
+2. **Every other root and module declares only its explicitly allow-listed workload roles**: the compute module's
+   `execution` and `task`, each with its reviewed name template.
+3. **A role is judged by its effective `name` and `name_prefix`**, resolved through locals, interpolation, variables
+   and module values, not by its Terraform resource label. An effective name ending in `-github-plan`,
+   `-github-apply` or `-artifact-publish`, in any letter case, is refused; a name that cannot be resolved, or
+   plan-time text that could complete one, fails closed.
+4. **Terraform `import` blocks are refused everywhere under `infra/terraform`.** Adopting an existing AWS identity or
+   resource needs a separate, explicitly reviewed human procedure and is never hidden inside an environment's
+   ordinary configuration.
+5. **An additional, unresolved or indirectly attached policy on a delivery identity fails closed**; outside the
+   bootstrap root a policy may attach only, by reference, to an allow-listed workload role declared beside it.
+
+Both reproductions are refused, and each rule has a negative test. The checker gaps are closed by direct tests: the
+literal-policy-document check refuses each admitted policy in another form, and the always-refused request set is
+shown to catch what the statement scan cannot. The R0 policy-engine row carries the guard-count progression
+247 → 315 → 343 → 408 → 460 (finding 16). `REQUIRED_FILES` stays at **257** and the gates at **16**.
+
+**Current final verification, locally** (runs, not artifacts). Component runs on the corrected tree: the policy unit
+and mutation tests, **225** on the final tree (**221** at `cff27c8` and the fourth pass's **213** above are historical;
+the four added tests guard the numeric `USER 10001:10001` of the PR CI container-build correction); the delivery
+unit tests, **101**;
+`terraform test` against mocked providers, **19 passed** for `bootstrap`, **12** for `artifacts` and **41** for
+`environments/staging`; the agent policy tests, **460 checks passed**. The canonical run on that staged tree
+(staged-diff SHA-256 `5f426da6869ce990b401218cd795ab48fa962d4ae1399f491a9a0d96efc66db6`): **16 passed, 0 failed**,
+**257** required files. The documentation reconciliation came after that run; **the final local canonical run**, on
+its staged tree (staged-diff SHA-256 `e6b90bc5efb35903bae89ef6f35933c9198a5a1ead2ee16788ccc66a1930dd0d`, the tree
+committed as `cff27c8`): **16 passed, 0 failed**, **257** required files. None of this is AWS-live: no plan or apply, no image built or pushed, no
+deployment and no evidence.
+
+### What M3.3b does not do, and does not claim
+
+- **No cloud plan, no apply, no AWS call, no GitHub change.** The IAM policies, the plan bucket's
+  conditional-write condition, the workflows and the preflight's GitHub API reads have never run.
+- **The GitHub protections do not exist.** At the pre-flight check — read-only GitHub API calls,
+  an unrecorded observation rather than an artifact — `main` had no branch protection, no ruleset
+  and no environment; the workflows refuse for exactly that reason, and nothing here
+  claims otherwise because a test checks their shape.
+- **The image has not been built locally.** Docker is unavailable locally; the first actual container build is
+  CI's `container` job, which has not yet run and remains a required condition of the pull request's CI.
+- **Not operational.** The broker, bootstrap and identity-binding programs do not exist; the
+  existing web/API entry point still requires an authenticator URL the AWS-mode task does not
+  receive; today's API does not serve the compiled portal the image carries.
+- **Open, recorded in ADR 0012 "Still open":** one-off task execution in the pipeline (an operator runs
+  `migrate` before a rollout that needs it, amending ADR 0011); replication, signing and a production
+  registry; measured admission thresholds; **the external assumptions assigned to M3.3d qualification** —
+  the ECS condition keys, ECR manifest bytes and bucket-policy conditions against AWS; the attempt-jobs names,
+  partial-rerun job listing, `author_association` timing and the workflow token's view of environment
+  protection against GitHub; the runner's image store and BuildKit metadata digest, and `origin/main` in a
+  full-history checkout — each failing closed, and each gating publication failing before any credential and
+  so before the push; egress
+  narrowing through the NAT; a dual-stack ALB for IPv6 reviewer entries; the plan job's cost summary;
+  the IAM action lists against a real plan; who writes the Cognito client secret value (M3.3c); the
+  OIDC trust binding the environment rather than the workflow file; the static checks outside
+  `AGENTS.md`'s ask-before list; and `npm ci --ignore-scripts`. (The workflow token's view of environment
+  protection fields is among the M3.3d qualifications above.)
+- Nothing in M3.3 is VERIFIED LIVE.
+
+### Protected files changed, each with the human's explicit approval (2026-09-13)
+
+`scripts/verify-repository.sh` (one new gate and the M3.3b `REQUIRED_FILES`; no gate removed,
+reordered or weakened), `.agents/skills/verify/SKILL.md` (the gate documented, and the stale gate
+count replaced by a pointer to the script's own summary), `.agents/skills/record-evidence/SKILL.md`
+(M3.3 AWS staging evidence unavailable until M3.3d; other evidence unaffected),
+`.agents/policy/guard.py` and `.agents/policy/test_guard.py`, `.github/workflows/ci.yml`, the new
+`.github/workflows/staging-plan.yml`, `.github/workflows/staging-apply.yml` and
+`.github/CODEOWNERS`. The approval's amendments are applied: **no agent-run AWS CLI call except
+local commands** (the proposed read-only allow-list was not introduced), and the evidence
+restriction confined to `docs/evidence/m3/aws-staging/`. No other protected file changed.
+
+The two correction passes of 2026-09-14 changed further protected files at the human's explicit
+direction. The first added `.github/workflows/artifact-publish.yml` and fifteen `REQUIRED_FILES`
+entries and changed `ci.yml` and the two staging workflows. The second changed the three delivery
+workflows, `.agents/policy/guard.py` and `.agents/policy/test_guard.py`, and — with the human's
+separate explicit approval — `scripts/verify-repository.sh`, only to add its new
+`infra/terraform/bootstrap/delivery_policies.tf` to `REQUIRED_FILES` (257 entries), with no gate,
+command or ordering changed.
+
+### Findings recorded while building it
+
+- ADR 0011 decision 8 says extending the guard "is not this slice's"; M3.3b extended it with
+  explicit approval, and ADR 0012 records that the sentence is superseded rather than rewriting it.
+- The topology's secrets table has Terraform writing the Cognito client secret; M3.3b creates its
+  container and no value, and leaves the writer to M3.3c.
+- `control_plane/api/__main__.py` loads the authenticator URL unconditionally and binds loopback by
+  default; the image passes `--host 0.0.0.0`, and the AWS-mode entry point is M3.3c's.
+- `terraform validate` checks test files by default and fails on the teardown of a module that
+  receives its `us-east-1` provider only through `configuration_aliases`; the gate validates with
+  `-no-tests`, and `terraform test` validates and runs those files itself.
+
+### Independent review corrections (2026-09-13)
+
+A read-only security review and a read-only evidence audit ran over the finished tree before it
+was staged; their findings were applied in the same change.
+
+- **Security — the human-applied set widened** *(superseded on 2026-09-14 by the authority split,
+  ADR 0012 decision 5: task definitions, services and ordinary budget changes are the apply role's
+  again, inside the ECS delivery contract; kept here as the record of that pass)*. The review found that an apply role able to create
+  or re-trust ECS roles, update a secret, register a task definition, share a database snapshot,
+  export logs or replace the operator policy could read or replace runtime secrets and data. Every
+  IAM resource, KMS key and alias, Secrets Manager container, ECS task definition and service, and
+  the budget is now human-applied: the apply boundary denies the calls, the apply workflow refuses a
+  plan that changes those types, and the first full staging apply is a human's (ADR 0012 decision
+  5). This is wider than the "delivery trust" first approved, and stricter.
+- **Security — also corrected:** purchases, alarm and budget tampering, other database classes and
+  non-certificate `us-east-1` use denied to the apply role; the workload boundary narrowed to this
+  environment's repository, log groups, secrets, keys and pools; the preflight counts only
+  approvals from collaborators with write access and reads every page of reviews; apply credentials
+  outlast the apply job; inventory and replication denied on the plan bucket; and the guard refuses
+  `help` as a trailing operand, unwraps `time` and `exec`, refuses further registry-push spellings, an
+  `init` whose last `-backend` is not `false`, `providers` subcommands other than `lock`, and any
+  non-reading command naming a path in the M3.3 staging evidence directory.
+- **Evidence — corrected:** the verification record and the gate-by-gate status table added to
+  `docs/tasks/current.md`; the state bucket's retention described as it is; mutation tests added for
+  the identity rule, every apply-workflow verification, the boundary's denies, lifecycle expiry,
+  database settings and the container's locks; a check that the apply workflow keeps its checksum
+  step; `.tftest.json` tests refused; stale gate and guard counts replaced; runtime wording for
+  never-run workflows and policies replaced by "written and statically checked"; point-in-time
+  observations labelled as unrecorded.
+- **Left open, stated in ADR 0012:** binding the OIDC trust to the workflow file; putting the static
+  checks on `AGENTS.md`'s ask-before list; `npm ci --ignore-scripts`; and an apply session's residual
+  power over the infrastructure it does apply.
+
+Verification for this slice is recorded in `docs/tasks/current.md` under M3.3b.
 
 ---
 
@@ -2191,16 +2643,16 @@ Established by the repository-initialization pass and its R0 remediation (see
 | Item | State |
 | --- | --- |
 | `AGENTS.md` | Canonical instructions. `CLAUDE.md` imports it and adds Claude-only surfaces. Carries the guardrail's scope limits and the approval-required file list. |
-| `scripts/verify-repository.sh` | The one verification entry point. **Fifteen** gates: fourteen since M2.1, unchanged by M2.2, M2.3, M2.4 and M3.1, and **one added by M3.2** — the customer-portal gate, which runs `npm run verify` in `portal/` (format, lint, types, tests, production build) and **fails rather than skips** when `npm` or `portal/node_modules` is absent, because an unrun test suite reports the same green as a passing one. Of the fourteen, the thirteenth checks that production code imports nothing outside the runtime lock, and the fourteenth runs the PostgreSQL foundation suite. Invoked identically by the human, the `verify` skill, and CI. No longer side-effect free: the last gate creates and drops one disposable database and, since M3.1, **five** per-run roles (owner, application, provisioning, authenticator, and the `NOLOGIN` lifecycle writer), and leaves the persistent `firmbatch_disposable_test_cluster` attestation marker in place. M2.4 changed it in two approved, narrow ways: **eleven more entries in `REQUIRED_FILES`** — nine with the milestone and two more with its third correction pass, taking the manifest to 97 files — and a header comment describing the then four-role test lifecycle. M3.1 changed it the same two ways, with the human's explicit approval: **twenty-two more `REQUIRED_FILES` entries**, taking the manifest to **119** files, so deleting any one of them fails the layout gate, and a header comment describing the five-role lifecycle. **M3.2 changed it in two approved, narrow ways**: **forty-eight more `REQUIRED_FILES` entries** — forty-seven with the milestone and one more with the independent review's corrections (`portal/src/lib/one-time-token.ts`), under the same approval — taking the manifest to **167** files, and the one new gate above. Through M3.1 no gate had been added; M3.2 adds one and removes, reorders and weakens none. |
+| `scripts/verify-repository.sh` | The one verification entry point. **Sixteen** gates since Milestone 3.3b, which added the Terraform and delivery foundation gate (it fails rather than skips without the pinned Terraform) and **74 more `REQUIRED_FILES` entries, taking the manifest to 241**, with the human's explicit approval and no gate removed, reordered or weakened; its first correction pass (2026-09-14), at the human's instruction, added **15 more**, taking the manifest to **256**, and its second correction pass, with the human's explicit approval, added **one more** (`infra/terraform/bootstrap/delivery_policies.tf`), taking it to **257**, changing no gate, command or ordering. Before that, fifteen gates: fourteen since M2.1, unchanged by M2.2, M2.3, M2.4 and M3.1, and **one added by M3.2** — the customer-portal gate, which runs `npm run verify` in `portal/` (format, lint, types, tests, production build) and **fails rather than skips** when `npm` or `portal/node_modules` is absent, because an unrun test suite reports the same green as a passing one. Of the fourteen, the thirteenth checks that production code imports nothing outside the runtime lock, and the fourteenth runs the PostgreSQL foundation suite. Invoked identically by the human, the `verify` skill, and CI. No longer side-effect free: the last gate creates and drops one disposable database and, since M3.1, **five** per-run roles (owner, application, provisioning, authenticator, and the `NOLOGIN` lifecycle writer), and leaves the persistent `firmbatch_disposable_test_cluster` attestation marker in place. M2.4 changed it in two approved, narrow ways: **eleven more entries in `REQUIRED_FILES`** — nine with the milestone and two more with its third correction pass, taking the manifest to 97 files — and a header comment describing the then four-role test lifecycle. M3.1 changed it the same two ways, with the human's explicit approval: **twenty-two more `REQUIRED_FILES` entries**, taking the manifest to **119** files, so deleting any one of them fails the layout gate, and a header comment describing the five-role lifecycle. **M3.2 changed it in two approved, narrow ways**: **forty-eight more `REQUIRED_FILES` entries** — forty-seven with the milestone and one more with the independent review's corrections (`portal/src/lib/one-time-token.ts`), under the same approval — taking the manifest to **167** files, and the one new gate above. Through M3.1 no gate had been added; M3.2 adds one and removes, reorders and weakens none. |
 | `.agents/skills/` | `verify`, `record-evidence`, `milestone`. Symlinked into `.claude/skills/`; single body each. |
-| `.agents/policy/guard.py` | Shared deterministic policy engine, `--adapter claude` and `--adapter codex`. An accident-prevention guardrail, **not** a sandbox or security boundary. |
-| `.agents/policy/test_guard.py` | 247 synthetic checks. |
+| `.agents/policy/guard.py` | Shared deterministic policy engine, `--adapter claude` and `--adapter codex`. An accident-prevention guardrail, **not** a sandbox or security boundary. **Milestone 3.3b extended it, with the human's explicit approval (ADR 0012 decision 11):** every AWS CLI call but `aws --version` and help pages is refused, read-only calls included; Terraform is limited to `fmt`, `validate`, `version`, `providers lock` and `init -backend=false`, with the mocked tests run only through `infra/terraform/scripts/static-checks.sh`; registry login and push are refused; and writes under `docs/evidence/m3/aws-staging/` are refused until M3.3d. |
+| `.agents/policy/test_guard.py` | **460** synthetic checks after Milestone 3.3b's third correction pass (2026-09-14; observed locally, no artifact), including the M3.3b cases for bounded Terraform, refused AWS CLI calls, registry pushes and M3.3 staging evidence; the second pass's wrapper-option, mutating `gh api` and `.exe`/OpenTofu/`aws2` spellings; and the third pass's `gh api` flag clusters, `find`/`tree` write options and GNU long-option prefixes. The progression, each an earlier local count kept as history: **247** before Milestone 3.3b; **315** at M3.3b's first full run (2026-09-13); **343** after the independent reviews' corrections; **408** after the second correction pass; **460** after the third, and current. |
 | `.claude/settings.json` | Blocking `PreToolUse` hook over `Write\|Edit\|MultiEdit\|NotebookEdit\|Bash\|Read\|Grep\|Glob`. |
 | `.codex/hooks.json` | Synchronous blocking `PreToolUse` hook over `shell\|local_shell\|apply_patch\|Edit\|Write`. Resolves the guard via `git rev-parse --show-toplevel`, so it works from any directory **inside** the work tree rather than only from its root. It is not fully cwd-independent: from outside the tree — including `/home/chams/src`, the parent directory `AGENTS.md` tells every command to run from — the substitution is empty and the hook blocks every action with empty stdout. See `docs/tasks/current.md`. |
 | Reviewers | `distributed-systems-reviewer`, `test-evidence-reviewer`, `security-operations-reviewer`, defined for both agents. **Declared** read-only: `tools: Read, Grep, Glob` on Claude (Bash removed), `read_only = true` on Codex — though Codex is also granted `shell` and must honour the flag itself. Whether either harness enforces the declaration is NOT VERIFIED; see below. |
 | `pyproject.toml` | Ruff config only — no packaging table, deliberately. Frozen per-file ignores for the three v0 files. Unchanged by M2.1: the parent-directory import contract is preserved and `control_plane/` passes the full rule set. |
 | `requirements-v1.txt`, `requirements-v1-dev.txt` | Pinned v1 direct dependencies: SQLAlchemy 2.0.44, alembic 1.16.5, psycopg[binary] 3.2.10, pytest 8.4.2, ruff 0.16.5. Separate from the v0 `requirements.txt`; the two are never installed together by any gate. |
-| `.github/workflows/ci.yml` | Calls `scripts/verify-repository.sh` exactly once. Checks out into `firmbatch/`; `permissions: contents: read`; runs a `postgres:16` service container; marks that container as a disposable test cluster in an explicit step; and installs **`requirements-v1-dev-lock.txt` with `--require-hashes`** — the fully resolved graph, never the unlocked input file. Its only credentials are the ephemeral container's test-only `postgres:postgres`. **M3.2 added two steps, with the human's explicit approval**: `actions/setup-node@v4` pinned to Node 24 LTS, and `npm ci` in `portal/`, which installs exactly the tracked `package-lock.json` and fails if the lock and the manifest disagree — the same property `--require-hashes` gives the Python locks. It still calls the verify script exactly once and re-spells no gate. |
+| `.github/workflows/ci.yml` | Calls `scripts/verify-repository.sh` exactly once. Checks out into `firmbatch/`; `permissions: contents: read`; runs a `postgres:16` service container; marks that container as a disposable test cluster in an explicit step; and installs **`requirements-v1-dev-lock.txt` with `--require-hashes`** — the fully resolved graph, never the unlocked input file. Its only credentials are the ephemeral container's test-only `postgres:postgres`. **M3.2 added two steps, with the human's explicit approval**: `actions/setup-node@v4` pinned to Node 24 LTS, and `npm ci` in `portal/`, which installs exactly the tracked `package-lock.json` and fails if the lock and the manifest disagree — the same property `--require-hashes` gives the Python locks. It still calls the verify script exactly once and re-spells no gate. **Milestone 3.3b added, with the human's explicit approval**, `hashicorp/setup-terraform` pinned by SHA to Terraform 1.15.8 for the new gate, `AWS_EC2_METADATA_DISABLED` on the verify job, and a separate `container` job written to build the production image with no registry login, push or AWS credential; that job has not yet run. |
 
 ---
 
@@ -2246,7 +2698,7 @@ capture new artifacts with provenance matching the committed tree.
 
 | Claim | How to settle it |
 | --- | --- |
-| All gates in `scripts/verify-repository.sh` pass — **fifteen** gates over **167** required files since Milestone 3.2, **15 passed, 0 failed** at the 2026-09-13 Milestone 3.3a run recorded at the end of this cell. The lineage, kept as history: at Milestone 2.4 there were **fourteen** gates, **14 passed, 0 failed**: layout (**119** required files since Milestone 3.1 registered its production and test modules; 97 at Milestone 2.4), agent configuration, hygiene, v0 property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 247/247, the runtime import closure check, and the PostgreSQL foundation suite **1,746 collected — 1,745 passed, 1 skipped** locally — the one skip is the pre-existing REPLICATION skip (granting REPLICATION needs a superuser admin, which CI has and the developer cluster does not. On CI that test runs and two others skip instead -- the owner-only-refusal assertions, which have no meaning for a superuser bootstrap administrator). Observed locally on 2026-09-06, after all three correction passes, against PostgreSQL 16.15 on the developer's WSL machine, at Milestone 2.4 implementation commit `d91e4f2` — that suite count is HISTORICAL to that commit. **Re-run for Milestone 3.0** on 2026-09-06 at `main` `4511f7d`, twice — once with the rev D documentation changes uncommitted in the working tree, and again after the correction to rev D.1 with the documentation changes staged — against the same attested PostgreSQL 16.15 cluster: **14 gates passed, 0 failed** both times, 97 required files; the script's passing output does not print the foundation suite's collected/passed/skipped counts, so no new count is claimed here. Still no artifact. **Re-run for Milestone 3.1** on 2026-09-09 at implementation commit `f92ecb9`, against the same attested PostgreSQL 16.15 cluster: **14 gates passed, 0 failed**, with **119** required files in the layout gate, and no disposable database, role or session left behind. The foundation-suite figure current at that commit is the **2,038 collected — 2,037 passed, 1 environment-dependent REPLICATION skip** recorded in the Milestone 3.1 row below; the 1,746 above stays HISTORICAL to `d91e4f2`. **No milestone from M2.2 to M3.1 added a gate**; the foundation-suite gate already runs the whole `control_plane/tests` directory, so each of those milestones' new modules runs inside it. **Milestone 3.2 is the first since M2.1 to add one** — the customer portal is TypeScript and the foundation-suite gate cannot reach it — taking the count to **fifteen**; see the Milestone 3.2 row below. **Re-run for Milestone 3.3a** on 2026-09-13 at the working tree over `main` `ae61747`, with the documentation changes uncommitted, against the same attested PostgreSQL 16 cluster: **15 gates passed, 0 failed**, 167 required files; the passing output prints no suite counts, so none is claimed for this run. **Re-run after the M3.3a review corrections** the same day, at the corrected working tree before it was re-staged, against PostgreSQL 16.15 and Node 24.19.0: **15 gates passed, 0 failed**, 167 required files. Wording fixes prompted by the post-correction reviews, all in the eight M3.3a markdown files, came after that run. Still no artifact. | `/record-evidence` → `docs/evidence/r0/gates.txt` (and a Milestone 2 artifact for the foundation suite). Not yet captured. |
+| All gates in `scripts/verify-repository.sh` pass — **sixteen** gates since Milestone 3.3b, over **257** required files since its second correction pass (2026-09-14; **256** after its first, **241** before it): **16 passed, 0 failed** at the 2026-09-13 run of the uncommitted M3.3b working tree over `86d4195` (241 files) and at the first correction pass's run (256 files). The second correction pass's edits came after both runs, which verify none of them. The third correction pass's canonical run on its final staged tree (staged-diff SHA-256 `7b93440739c6b6e7e860ed9c7b462cce8ff114377d325107d39d71ecd3284c17`), observed locally on 2026-09-14 with no artifact: **16 passed, 0 failed**, **257** required files — the current gate and manifest counts (the 241 and 256 above are historical). The fourth and fifth correction passes came after that run; **the final local canonical run**, on the finished tree committed as M3.3b implementation commit `cff27c8` (staged-diff SHA-256 `e6b90bc5efb35903bae89ef6f35933c9198a5a1ead2ee16788ccc66a1930dd0d`), observed locally on 2026-09-14 with no artifact: **16 passed, 0 failed**, **257** required files. All recorded in `docs/tasks/current.md` under M3.3b; **fifteen** gates over **167** required files from Milestone 3.2 to Milestone 3.3a, **15 passed, 0 failed** at the 2026-09-13 Milestone 3.3a run recorded at the end of this cell. The lineage, kept as history: at Milestone 2.4 there were **fourteen** gates, **14 passed, 0 failed**: layout (**119** required files since Milestone 3.1 registered its production and test modules; 97 at Milestone 2.4), agent configuration, hygiene, v0 property tests 14/14, `ruff check .` clean under the frozen per-file ignores, policy tests 247/247, the runtime import closure check, and the PostgreSQL foundation suite **1,746 collected — 1,745 passed, 1 skipped** locally — the one skip is the pre-existing REPLICATION skip (granting REPLICATION needs a superuser admin, which CI has and the developer cluster does not. On CI that test runs and two others skip instead -- the owner-only-refusal assertions, which have no meaning for a superuser bootstrap administrator). Observed locally on 2026-09-06, after all three correction passes, against PostgreSQL 16.15 on the developer's WSL machine, at Milestone 2.4 implementation commit `d91e4f2` — that suite count is HISTORICAL to that commit. **Re-run for Milestone 3.0** on 2026-09-06 at `main` `4511f7d`, twice — once with the rev D documentation changes uncommitted in the working tree, and again after the correction to rev D.1 with the documentation changes staged — against the same attested PostgreSQL 16.15 cluster: **14 gates passed, 0 failed** both times, 97 required files; the script's passing output does not print the foundation suite's collected/passed/skipped counts, so no new count is claimed here. Still no artifact. **Re-run for Milestone 3.1** on 2026-09-09 at implementation commit `f92ecb9`, against the same attested PostgreSQL 16.15 cluster: **14 gates passed, 0 failed**, with **119** required files in the layout gate, and no disposable database, role or session left behind. The foundation-suite figure current at that commit is the **2,038 collected — 2,037 passed, 1 environment-dependent REPLICATION skip** recorded in the Milestone 3.1 row below; the 1,746 above stays HISTORICAL to `d91e4f2`. **No milestone from M2.2 to M3.1 added a gate**; the foundation-suite gate already runs the whole `control_plane/tests` directory, so each of those milestones' new modules runs inside it. **Milestone 3.2 is the first since M2.1 to add one** — the customer portal is TypeScript and the foundation-suite gate cannot reach it — taking the count to **fifteen**; see the Milestone 3.2 row below. **Re-run for Milestone 3.3a** on 2026-09-13 at the working tree over `main` `ae61747`, with the documentation changes uncommitted, against the same attested PostgreSQL 16 cluster: **15 gates passed, 0 failed**, 167 required files; the passing output prints no suite counts, so none is claimed for this run. **Re-run after the M3.3a review corrections** the same day, at the corrected working tree before it was re-staged, against PostgreSQL 16.15 and Node 24.19.0: **15 gates passed, 0 failed**, 167 required files. Wording fixes prompted by the post-correction reviews, all in the eight M3.3a markdown files, came after that run. Still no artifact. | `/record-evidence` → `docs/evidence/r0/gates.txt` (and a Milestone 2 artifact for the foundation suite). Not yet captured. |
 | The M2.1 tenant-isolation properties hold in PostgreSQL: absent context reads nothing and writes nothing; tenant A cannot read, insert, update or delete tenant B's rows; a fabricated cross-tenant or dangling foreign key is rejected; tenant context is not inherited from a session value, a pooled connection, or a URL option; a reused ORM `Session` cannot serve a previous tenant's object; a temporary relation cannot shadow a Firmbatch table; the application role is non-owner, `NOSUPERUSER`, `NOBYPASSRLS`, is refused at connect time if it were any of those, cannot disable a policy, cannot create tables or temporary tables, cannot read the schema history, and cannot create a tenant even with matching context; workspace uniqueness is tenant-local. | `/record-evidence` → `docs/evidence/m2/tenant-isolation-suite.txt`, after the Milestone 2.1 commit. Until then this is a re-runnable claim with no captured artifact. |
 | The M2.2 idempotency and outbox properties hold in PostgreSQL: an identical retry returns the stored result and invokes the mutation once; four identical calls leave one workspace, one claim and one linked event; a conflicting reuse is rejected; two callers observed contending on a real lock commit one effect and one event, and the loser replays; a failure before commit leaves nothing and does not block the retry; a mutation callback cannot commit or roll back the primitive's transaction and an escape by any other route is detected; unflushed ORM state at entry is rejected; malformed operations and keys are refused before the mutation runs; the same key is independent between tenants; cross-tenant reads and writes on both new tables fail closed; missing context fails closed; a committed event is immutable to the application role and matches zero rows even for the owner; an internal state change appends an event with no idempotency record and a rollback removes both; and no value of the request identity reaches a row. **At M2.2 this was 511 passing checks with 1 skipped, of which 130 were new; the same properties are asserted at M2.3 inside a suite of 806.** | `/record-evidence` → `docs/evidence/m2/idempotency-outbox-suite.txt`, at or after Milestone 2.2 implementation commit `d362717`. Until then this is a re-runnable claim with no captured artifact, and M2.2 is **not** VERIFIED LIVE. |
 | The M2.3 authenticated-context, authorization, audit and secrets properties hold in PostgreSQL: a forged `app.tenant_id` or any fabricated setting grants nothing; a fabricated tenant, binding id, fingerprint, actor or scope grants nothing; the function that writes a context is executable by nobody; a relation forged where the context lives is ignored because it is not owned by the schema owner; unknown, malformed, revoked and expired credentials fail closed with one indistinguishable message; binding twice or switching identity is refused; context survives no commit, rollback, failed statement, pool reuse or `Session` reuse, and a Connection-bound `Session` is refused; a valid credential reaches its own tenant and no other; the credential is never stored; authorization is deny-by-default with read/write scope distinctions, minimal framework capabilities and no non-customer scope; every `SECURITY DEFINER` function is owned, path-pinned, `PUBLIC`-revoked, minimally granted and free of dynamic SQL; the registry has no grants and no policy; audit events derive tenant and actor, refuse a supplied alternative, cannot be backdated, are immutable, roll back with their action and reject secret-shaped metadata; secrets never render themselves and production fails closed; and the migration reverses to the M2.2 shape and back. **1,314 pytest checks pass, 1 skipped**, a net increase of 803 collected checks over M2.2's 512 -- five new modules, plus every existing module moved onto the authenticated mechanism, plus a handful of M2.1 tests replaced by the stronger property that superseded them. | `/record-evidence` → `docs/evidence/m2/authenticated-context-suite.txt`, at or after Milestone 2.3 implementation commit `89fbdd9`. No evidence artifact has been captured, so this remains a re-runnable claim and M2.3 is **implemented and tested**, **not** VERIFIED LIVE. |
@@ -2254,11 +2706,19 @@ capture new artifacts with provenance matching the committed tree.
 | The M3.1 identity properties hold in PostgreSQL — the four `AUTH-MEMBERSHIP-BOUND-IDENTITY` cases and everything listed under "What M3.1 proves": **2,038 pytest checks collected, 2,037 pass, 1 environment-dependent REPLICATION skip** at implementation commit `f92ecb9` on 2026-09-09 — a net increase over M2.4's 1,746 that is the new modules, the extended migration, shape and protected-state assertions, and the correction passes' regression and concurrency coverage. The final independent review's focused verification of the same state passed **202 tests with no failures**, and the canonical verification passed all 14 gates over 119 required files. | `/record-evidence` → `docs/evidence/m3/identity-membership-suite.txt`, **at or after Milestone 3.1 implementation commit `f92ecb9`**. No evidence artifact has been captured and nothing is deployed, so this remains a re-runnable claim and M3.1 is **implemented, tested and independently reviewed**, **not** VERIFIED LIVE. |
 | The M3.2 portal properties hold — everything listed under "What M3.2 proves": `./scripts/verify-repository.sh` reports **15 gates passed, 0 failed** with **167** required files; the PostgreSQL foundation suite is **2,188 passed, 1 environment-dependent REPLICATION skip** of 2,189 collected, a net increase of **151** over M3.1's 2,037 (four new modules — preferences and the mutation boundary, the password change and the account-plane lock order, the HTTP surface including the expected-workspace contract on every workspace route, and the migration's drift, hardening and restore checks); and the portal's own suite is **392 tests across 10 files**, run by the new gate together with `biome ci`, `tsc --noEmit` and a production `vite build`. Observed on 2026-09-12, after the independent review's eleven corrections, the centralised sign-out operation, the session lease on every route, the clean-context review's eight corrections and the final review's two P3 corrections, against the attested local PostgreSQL 16.15 cluster, on the code committed as implementation commit `ce097cb`; the canonical script re-run at `ce097cb` on 2026-09-13 reports the same **15 gates passed, 0 failed** over 167 required files; the 2026-09-09 figures (2,133 passed, 239 portal tests) and the 327 portal tests of 2026-09-11 are HISTORICAL to the earlier trees. The gate's fail-closed behaviour was checked rather than assumed: with `portal/node_modules` moved aside the portal gate fails and the script exits non-zero (the "13 passed, 2 FAILED" once recorded here included a foundation-suite failure from a `FIRMBATCH_TEST_DATABASE_URL` emptied in the same experiment; see the Milestone 3.2 section). | `/record-evidence` → `docs/evidence/m3/portal-suite.txt`, **at or after Milestone 3.2 implementation commit `ce097cb`**. No evidence artifact has been captured and nothing is deployed, so this remains a re-runnable claim and M3.2 is **implemented, tested and independently reviewed**, **not** VERIFIED LIVE. |
 | The destructive-safety properties hold: a forged, altered, cross-server, or foreign-cluster teardown handle is refused and the database survives; an unattested server refuses both creation and teardown; a failure after creation removes the database and both roles; a generated password never reaches exception text, stdout, or stderr. Covered by `control_plane/tests/test_bootstrap_safety.py`. | Same artifact as the row above. |
-| The shared policy engine denies the R0 accident classes across both adapter protocols — multi-line blocks classified line by line, `git -C`/`git -c`, `gh` and `aws` global options, `env`/`timeout` prefixes, `cd`/`cd -`/`pushd`/`popd`/`||` sequences, subshell grouping, argparse-abbreviated provider selection, evidence-tree ancestors including glob and `mv` forms, source and destination operands, in-place archivers, `git restore`/`checkout` over a path, credential reads on every surface including the `.env.*` family, wrapper- and prefix-depth exhaustion, unparseable input, unknown tool names carrying a payload, and engine exceptions. 247 synthetic checks pass. | `/record-evidence` → `docs/evidence/r0/policy-tests.txt`, after the R0 commit. |
+| The shared policy engine denies the R0 accident classes across both adapter protocols — multi-line blocks classified line by line, `git -C`/`git -c`, `gh` and `aws` global options, `env`/`timeout` prefixes, `cd`/`cd -`/`pushd`/`popd`/`||` sequences, subshell grouping, argparse-abbreviated provider selection, evidence-tree ancestors including glob and `mv` forms, source and destination operands, in-place archivers, `git restore`/`checkout` over a path, credential reads on every surface including the `.env.*` family, wrapper- and prefix-depth exhaustion, unparseable input, unknown tool names carrying a payload, and engine exceptions. The synthetic check count, each value kept as history: **247** before Milestone 3.3b; **315** at Milestone 3.3b's first full run (2026-09-13), which adds bounded Terraform, refused AWS CLI calls (read-only included), refused registry login and push, and refused writes of M3.3 staging evidence; **343** after that milestone's independent reviews' corrections; **408** after its second correction pass (2026-09-14), which adds `timeout` and `env` wrapper options, mutating `gh api` spellings, and `.exe`, OpenTofu and `aws2` program names; and **460**, current, after its third correction pass (2026-09-14), which adds `gh api` flag clusters, `find`/`tree` write options and GNU long-option prefixes. The `.agents/policy/test_guard.py` row carries the same progression. | `/record-evidence` → `docs/evidence/r0/policy-tests.txt`, after the R0 commit. |
 
 ---
 
 ## NOT VERIFIED — do not claim
+
+- **Any Milestone 3.3b behaviour outside a static check.** The Terraform has been validated and
+  tested against mocked providers only; no plan, apply, IAM policy, bucket policy, S3
+  conditional-write condition, workflow run, GitHub API read by the preflight job, or image build
+  has happened. In particular it is unobserved whether the workflow token can read an
+  environment's `can_admins_bypass` and `prevent_self_review` fields; if it cannot, the preflight
+  refuses, failing closed. That assumption is assigned to M3.3d qualification with the others in ADR 0012
+  "Still open". The CI `container` job has never run.
 
 - **Three workers SIGKILLed in the v0 baseline, and the deadline being met.** Neither appears
   in any artifact. See above. `README.md` previously presented both as a captured result, in an
@@ -2402,7 +2862,7 @@ ADR 0010): the authenticated customer application with honest empty states for l
 features, the four gate cases now also exercised through the interface's own journeys, one
 new tenant-plane relation for the customer's stated policy, and the signed-in password change
 M3.1 left to it. **Customer-facing deployment stays blocked until an authorized M3.3d.**
-**M3.3 is in progress as four slices (ADR 0011).** **M3.3a**, the current slice, adopts the
+**M3.3 is in progress as four slices (ADR 0011).** **M3.3a**, merged through PR #11 at `86d4195`, adopts the
 AWS staging, Cognito and Terraform architecture — one customer origin,
 `https://staging.app.firmbatch.com`, with the API same-origin under `/v1/*`; Cognito
 authenticating behind a Firmbatch identity broker on `/auth/*` with no token in the browser;
@@ -2411,16 +2871,18 @@ with a managed-RDS qualification; Terraform in separate roots with an S3 lockfil
 OIDC delivery through two protected GitHub environments with saved plans kept out of GitHub — and records the **Cognito adoption decision**: Amazon Cognito owns
 customer authentication (password, required TOTP, recovery and verification email in AWS
 mode), while Firmbatch retains its server-side browser session, the CSRF cookie, workspace
-authorization, row-level security, the audit trail, consent and API credentials. **M3.3b**
-builds Terraform and task scaffolding with static checks only, and is not operational until
-M3.3c passes review; **M3.3c** builds every program that scaffolding runs — database
+authorization, row-level security, the audit trail, consent and API credentials. **M3.3b**,
+the current slice, is implemented, statically tested and independently reviewed at `cff27c8`, awaiting
+pull-request CI and merge — the Terraform and task
+scaffolding, the container build and the fail-closed delivery structure, not operational until
+M3.3c passes review (ADR 0012); **M3.3c**, next, builds every program that scaffolding runs — database
 bootstrap, identity binding, the broker and its Cognito, JWT and KMS clients — with migration
-`0007`, the `__Host-fb_session` rename, the AWS-mode route changes, the portal adaptation,
+`0008` (renumbered from `0007`, which the M3.3b password-hash correction took), the `__Host-fb_session` rename, the AWS-mode route changes, the portal adaptation,
 the reviewed dependencies and lock files, and the security tests;
 **M3.3d** — and only M3.3d, after a reviewed plan, a current cost estimate and the human's
 explicit authorization — deploys, qualifies RDS, runs the browser journey and captures
-evidence. **Nothing of M3.3 is implemented or deployed**: no AWS resource, no Terraform and
-no evidence exists; M3.2 signs customers in through the M3.1 path; the customer can see the
+evidence. **Nothing of M3.3 is deployed**: M3.3b's Terraform exists as scaffolding only, and no
+AWS resource, plan, apply, image, deployment or evidence exists; M3.2 signs customers in through the M3.1 path; the customer can see the
 real hosted portal only after M3.3d.
 
 **The portal Milestone 3 builds is the customer application and nothing else.** The
