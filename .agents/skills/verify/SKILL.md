@@ -1,6 +1,6 @@
 ---
 name: verify
-description: Run the Firmbatch verification pass — one script covering layout, agent configuration, repository hygiene, v0 property tests, ruff, the agent policy tests, and the v1 PostgreSQL foundation suite. It needs a real PostgreSQL 16 server and creates and drops a disposable database and roles. Use before claiming any change is complete, and whenever asked to verify, check, or validate the repository. The destructive chaos experiment is opt-in via --chaos and is never part of the default pass.
+description: Run the Firmbatch verification pass — one script covering layout, agent configuration, repository hygiene, v0 property tests, ruff, the agent policy tests, the runtime import closure, the customer portal, the Terraform and delivery foundation, and the v1 PostgreSQL foundation suite. It needs a real PostgreSQL 16 server and creates and drops a disposable database and roles, and it needs the pinned Terraform. Use before claiming any change is complete, and whenever asked to verify, check, or validate the repository. The destructive chaos experiment is opt-in via --chaos and is never part of the default pass.
 ---
 
 # Firmbatch verification
@@ -32,16 +32,45 @@ exists in someone's memory of the right command line is a gate that stops being 
 If a check is missing, add it to the script.
 
 It prints PASS or FAIL per gate, runs every gate even after one fails, and exits
-non-zero if any failed. Currently **fourteen** gates, in four groups:
+non-zero if any failed. The script's own summary line is the authority for how many gates
+there are; do not restate a count here that a later milestone could leave stale. The groups:
 
 | Group | Gates |
 | --- | --- |
-| layout | directory named `firmbatch`; all required repository files present (R0 tooling plus the v1 control-plane foundation); the three `.claude/skills` symlinks resolve into `.agents/skills` |
+| layout | directory named `firmbatch`; all required repository files present (R0 tooling, the v1 control-plane foundation, the customer portal, and the Milestone 3.3b Terraform, container and delivery files); the three `.claude/skills` symlinks resolve into `.agents/skills` |
 | agent configuration | JSON parses; TOML parses and declares the read-only sandbox; the Claude hook covers the right tools and invokes the shared guard; Claude reviewers grant only read-only tools; Codex reviewers declare the read-only sandbox schema |
 | repository hygiene | no credential file, private key, or SQLite database is tracked by git |
-| functional | v0 property tests (from the parent directory), `ruff check`, agent policy tests, the runtime import closure check, **the v1 PostgreSQL foundation suite** |
+| functional | v0 property tests (from the parent directory), `ruff check`, agent policy tests, the runtime import closure check |
+| customer portal | format, lint, types, tests and production build of `portal/` (Milestone 3.2) |
+| Terraform and delivery foundation | `infra/terraform/scripts/static-checks.sh` as one gate (Milestone 3.3b) — see below |
+| PostgreSQL | **the v1 PostgreSQL foundation suite** |
 
 Report each gate as PASS or FAIL with the failing names. All must pass.
+
+### The Terraform and delivery foundation gate
+
+Milestone 3.3b; ADR 0012. `infra/terraform/scripts/static-checks.sh` runs, in order: the
+pinned Terraform version check; `infra/terraform/policy/check.py`, the repository's own
+structural policy checks, which include the check that **every Terraform test mocks every
+provider configuration its root declares** and which run before any `terraform test`; the
+policy checks' negative tests and the delivery checks' unit tests; `terraform fmt -check
+-recursive`; and for each of the three roots (`bootstrap`, `artifacts`, `environments/staging`)
+`init -backend=false -lockfile=readonly`, `validate` and
+`terraform test`.
+
+- **It makes no AWS API call.** The gate removes every AWS credential variable, points the AWS
+  config and credential files at `/dev/null` and sets `AWS_EC2_METADATA_DISABLED=true`, and the
+  script scrubs its own environment again. The tests use `mock_provider` only.
+- **It needs the pinned Terraform** (`infra/terraform/.terraform-version`) and **fails, never
+  skips**, when Terraform is absent or a different version.
+- **Its one network access** is `terraform init` fetching the pinned `hashicorp/aws` provider
+  from the Terraform Registry when a root's `.terraform/` does not already hold it. The
+  committed `.terraform.lock.hcl` files are read-only to it.
+- **The container image is not built by this gate.** Docker is not available everywhere the
+  script runs; the build is the separate `container` job in `.github/workflows/ci.yml`, and
+  this gate checks only the Dockerfile's shape. A local pass says nothing about the image build.
+- Agents may not run `terraform test`, `plan`, `apply`, state commands, AWS CLI calls or
+  registry pushes directly; the policy guard refuses them. Run this script, or the whole pass.
 
 ### The runtime import closure gate
 

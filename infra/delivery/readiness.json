@@ -1,0 +1,20 @@
+{
+  "schema_version": 2,
+  "purpose": "Repository-owned readiness attestation read by the preflight job of the publish, staging plan and staging apply workflows before any GitHub environment is referenced or any OIDC token is requested. Every prerequisite stays false until a human has made it true outside the repository and a CODEOWNERS-reviewed pull request to protected main records it. A true value here is a human's attestation, not evidence; the preflight job re-checks what the GitHub API can show. A deployment authorization names exactly one saved plan (key, version ID, SHA-256) and one release (commit, image digest, release-record version ID and SHA-256), expires within 24 hours, and is read from origin/main by both the apply preflight and the apply job before any OIDC token exists.",
+  "github_repository": "chamsrut/firmbatch",
+  "github_repository_id": "1349512121",
+  "prerequisites": {
+    "state_plan_buckets_and_delivery_identities_bootstrapped_by_human": false,
+    "release_registry_applied_by_human": false,
+    "artifact_publish_environment_created_and_protected": false,
+    "human_applied_resources_applied_by_human": false,
+    "github_environments_created_and_protected": false,
+    "main_branch_protected_with_code_owner_review": false,
+    "second_qualified_reviewer_available": false,
+    "m3_3c_programs_dependencies_and_image_reviewed": false
+  },
+  "deployment_authorization": {
+    "schema_version": 1,
+    "authorizations": []
+  }
+}

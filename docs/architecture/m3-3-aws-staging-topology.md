@@ -2,9 +2,11 @@
 
 **Status:** Architecture, adopted by ADR 0011 (Milestone 3.3a, 2026-09-13), corrected the same
 day after an independent architecture review and again in a final correction pass (ADR 0011
-"Review corrections" and "Final correction pass"). **Nothing here exists**: no AWS resource,
-no Terraform, no image, no pipeline, no broker, no bootstrap or binding command, no binding
-role, no evidence tooling. This document says what M3.3b, M3.3c and M3.3d build, and in what
+"Review corrections" and "Final correction pass"). **Nothing here is deployed**: no AWS resource,
+no broker, no bootstrap or binding command, no binding role, no evidence tooling. Since M3.3b
+(ADR 0012) the Terraform roots and modules, the Dockerfile and the delivery workflows exist in the
+repository as statically tested scaffolding that has never planned, applied, built, pushed or run;
+ADR 0012 amends parts of this design and its "Amendments to ADR 0011" governs where they disagree. This document says what M3.3b, M3.3c and M3.3d build, and in what
 order, and it authorizes none of it. **Deploying is M3.3d's, after a reviewed plan, a current
 cost estimate and explicit human authorization.**
 **Decision record:** `docs/adr/0011-aws-staging-cognito-and-terraform-delivery.md`
@@ -90,7 +92,8 @@ the boundary.
 
 ## 3. Compute: two services, three one-off tasks, one image
 
-**One immutable image**, built once per deployment, in ECR with immutable tags and
+**One immutable image**, built once per release by `artifact-publish` and promoted by digest (ADR
+0012 decision 13; this document first said "once per deployment"), in ECR with immutable tags and
 scan-on-push, deployed **by digest** to every task definition below.
 
 | Task definition | Kind | Entry point (M3.3c) | Database credential | Other secret and AWS access | Egress beyond the common set |
@@ -178,8 +181,9 @@ administrator locally). The repository already reads `pg_roles` rather than `pg_
 which is right for RDS. **M3.3d qualifies, against the deployed instance and records under
 `docs/evidence/m3/`:**
 
-1. migrations `0001`–`0006` upgrade cleanly under the migration credential, and `0007` once
-   M3.3c adds it;
+1. migrations `0001`–`0007` upgrade cleanly under the migration credential, and `0008` once
+   M3.3c adds it (the identity mapping, renumbered from `0007`: M3.3b's password-hash correction
+   took `0007`, ADR 0012 decision 14);
 2. `FORCE` row-level security is in force on every tenant relation;
 3. every `SECURITY DEFINER` function is owned by the schema owner, or by the dedicated
    `NOLOGIN` owner ADR 0011 decision 5 allows for the binding function, and never by the
@@ -326,7 +330,10 @@ portal → POST /auth/logout  (top-level form navigation; __Host-fb_session cook
 - A `Strict` session cookie is not sent on a cross-site request, so a third-party page
   cannot trigger the logout; the CSRF check inside the entry point is the second layer.
 
-### 6.6 The identity mapping, the binding boundary and the binding task (M3.3c, migration `0007`)
+### 6.6 The identity mapping, the binding boundary and the binding task (M3.3c, migration `0008`)
+
+The migration is `0008`, renumbered from `0007`: M3.3b's incidental password-hash correction took
+`0007` (ADR 0012 decision 14).
 
 ```text
 auth_identity(provider, issuer, subject, account_id, created_at, last_seen_at)
@@ -454,7 +461,7 @@ infra/terraform/
 | `identity` | The Cognito user pool, domain, managed-login branding, app client, the `us-east-1` certificate, and **the Cognito-associated WAF** with the reviewed list and the separate NAT EIP `/32` |
 | `secrets` | Secrets Manager containers with no versions, including the identity-binding DB URL; the refresh-token KMS key and grants |
 | `observability` | CloudWatch log groups with explicit retention, alarms, the budget, and the retention, encryption and access settings M3.3d's review of AWS-managed logs requires (§10) |
-| `delivery` | ECR; the GitHub OIDC provider; the **distinct** `staging-plan` and `staging-apply` roles, each trusting only its exact repository and environment, the apply role under a **permissions boundary**; the operator permission to run only `identity-binding`, with `PassRole` for its own roles only |
+| `delivery` | ECR; the GitHub OIDC provider; the **distinct** `staging-plan` and `staging-apply` roles, each trusting only its exact repository and environment, the apply role under a **permissions boundary**; the operator permission to run only `identity-binding`, with `PassRole` for its own roles only. *Refined by M3.3b (ADR 0012 decisions 5 and 13): the OIDC provider, the plan, apply and artifact-publish roles and their boundaries are created by the bootstrap root and ECR by the `artifacts` root; `delivery` keeps the workload boundary and the operator policy.* |
 
 - Separate roots and state keys per environment; **no workspaces**.
 - **S3 backend with `use_lockfile = true`** in the state bucket; no DynamoDB lock table.
@@ -468,10 +475,13 @@ infra/terraform/
 - Account enforcement: `allowed_account_ids` on the provider plus a caller-identity
   precondition; region as a variable with the recommended default and a confirmation step
   outside Terraform.
-- The policy guard already denies `apply`, `destroy`, `import`, `taint`, `untaint` and
-  `state rm|mv|push`, and allows `fmt`, `init`, `validate`, `test` and `plan`. **`terraform
+- The policy guard, as it stood at M3.3a, denied `apply`, `destroy`, `import`, `taint`, `untaint`
+  and `state rm|mv|push`, and allowed `fmt`, `init`, `validate`, `test` and `plan`. **Superseded by
+  ADR 0012 decision 11:** agents may now run only `fmt`, `validate`, `version`, `providers lock` and
+  `init -backend=false`; `plan` is refused as a mutation and `test` is refused outside
+  `infra/terraform/scripts/static-checks.sh`, which proves every test mocks its providers first. **`terraform
   test` is not harmless**: its `run` blocks apply real resources unless they use
-  `command = plan` or mocked providers, so M3.3b's tests run with mocks or plan-only and with
+  `command = plan` or mocked providers, so M3.3b's tests run with mocks and plan-only and with
   no credentials. `AGENTS.md`'s rule, not the hook, keeps an agent from creating a resource.
 
 ## 9. Delivery pipeline
@@ -492,6 +502,8 @@ workflow files under CODEOWNERS and branch protection; never from a fork or pull
    │     terraform plan -out → NEW object in the plan bucket, key = source commit + SHA-256
    │       (versioned · Object Lock governance retention · no overwrite of an approved
    │        version · no retention change · no historical read)
+   │       (refined by ADR 0012 decision 7: no version listing; IAM cannot confine
+   │        s3:GetObjectVersion to one version, so an already-held version ID is readable)
    │     GitHub shows ONLY: action counts · policy results · cost summary · checksum
    │     (no binary plan, no full rendering, no artifact, nothing in a public log)
    │
@@ -514,6 +526,7 @@ workflow files under CODEOWNERS and branch protection; never from a fork or pull
    └─► application deployment — a separate, later stage; its identity and approval are
          specified with M3.3b's delivery structure, and neither approval above authorizes it
          build image → ECR (immutable tag, scan) → run `migrate` task by digest
+           (refined by ADR 0012 decision 13: built once by artifact-publish, promoted by digest)
          → abort on migration failure → roll services to the digest
          → ECS circuit breaker rolls back an unhealthy rollout
 
@@ -531,7 +544,8 @@ and of delete markers. The state bucket keeps its own retention and is never exp
   the apply role's permissions boundary and non-assumability through `staging-plan`; the plan
   role's create-only, no-overwrite, no-retention-change, no-apply permissions; and the apply
   job's fail-closed verification.
-- **Approval of planning does not authorize applying.** Both environments require human
+- **Approval of planning does not authorize applying.** Both deployment environments (`staging-plan`,
+  `staging-apply`; ADR 0012 adds `artifact-publish` as a third, publication-only one) require human
   approval, because the plan identity can read sensitive state.
 - **Plan-produced metadata may aid review but is never an authority for apply.**
 - **The saved plan is never a GitHub artifact.** Deleting a current object in the versioned
@@ -617,7 +631,7 @@ not cap spend.**
 | --- | --- |
 | **M3.3a** | This document and ADR 0011 exist, with the review corrections and the final correction pass applied; the roadmap, target §14.1, register, STATE, task file and README are reconciled; source snapshots, migrations and §17 unchanged; `./scripts/verify-repository.sh` passes. No resource, no code. |
 | **M3.3b** | **Scaffolding only.** `infra/terraform/` matches §8, including the separate state and plan buckets, the five task definitions, the distinct plan and apply roles and the allow-list policy check; `fmt -check`, `init -backend=false`, `validate` and `terraform test` pass locally and in a pull-request static-check workflow; the container-build foundation builds from the pinned locks and passes every existing gate; ECR and the delivery workflow structure are defined, holding no credential and creating nothing; Git excludes in place. **Required acceptance tests, each failing when its property is absent:** every environment, workflow, OIDC-trust, role, plan-bucket and apply-verification property listed in §9; no binary plan or full plan rendering reaches a GitHub artifact or log; plan-bucket lifecycle expires current and noncurrent plan versions and delete markers and never touches state; the allow-list validation and the independently tested policy check each reject an empty list, a non-canonical or invalid CIDR, an IPv4 prefix shorter than `/24`, an IPv6 prefix shorter than `/64`, more than the maximum entries, an unspecified, multicast, loopback, link-local or otherwise non-routable range, a duplicate or overlapping entry, and a list over the maximum address-space allowance. **No cloud `plan`, no `apply`, no credential in the repository, and no deployable broker, bootstrap or identity-binding implementation.** Not operational until M3.3c passes review. |
-| **M3.3c** | Every program the scaffolding runs, with its dependencies, entry points and tests: the database bootstrap command; the identity-binding command and its dedicated database boundary; the broker entry point; the Cognito authorization, callback, refresh, revocation and logout clients; JWT and JWKS verification; KMS encryption and decryption; the staging configuration mode; the `__Host-fb_session` rename with every affected test and setting; the AWS-mode route changes including `/auth/logout` and the disabled browser routes; metadata-safe access and unhandled-error logging; migration `0007`; the portal's `/auth/*` adaptation; the reviewed and pinned HTTP, JOSE/JWT and AWS SDK dependencies, the requirement files and both lock files, and the runtime-import inventory; the web/API entry point serving the compiled portal; the browser-evidence tooling — Playwright persistence off for authentication tests, the allow-listed summary collector, the evidence scanner. Adversarial tests against real PostgreSQL 16: an unbound identity is refused; an email match binds nothing; a replayed or forged `state`, handle, `nonce` or code is refused; every callback outcome is a `303` to the clean URL with the handle cleared and `no-store` and `no-referrer`; no token, claim, verifier or callback parameter reaches a response body, a log, an audit or outbox row, or an exception chain; a federated session is an ordinary session under every M3.1 and M3.2 protection; logout revokes; refresh tokens are unreadable by the application role; **the identity-binding login role's catalogue is `EXECUTE` on its one function and nothing else, and arbitrary SQL as that role opens no session, issues no credential, changes no membership, assumes no role and writes no table**; **binding is idempotent for an identical request, refuses a conflicting one, never binds by email, and commits its success or refusal audit event atomically**; **the evidence scanner fails on a planted secret, query-string URL, cookie, bearer value or email address, and the collector emits only allow-listed fields**; `verify-full` against a local certificate authority works; local authentication remains for development and test. Nothing deployed. |
+| **M3.3c** | Every program the scaffolding runs, with its dependencies, entry points and tests: the database bootstrap command; the identity-binding command and its dedicated database boundary; the broker entry point; the Cognito authorization, callback, refresh, revocation and logout clients; JWT and JWKS verification; KMS encryption and decryption; the staging configuration mode; the `__Host-fb_session` rename with every affected test and setting; the AWS-mode route changes including `/auth/logout` and the disabled browser routes; metadata-safe access and unhandled-error logging; migration `0008` (renumbered from `0007`, which M3.3b's password-hash correction took — ADR 0012 decision 14); the portal's `/auth/*` adaptation; the reviewed and pinned HTTP, JOSE/JWT and AWS SDK dependencies, the requirement files and both lock files, and the runtime-import inventory; the web/API entry point serving the compiled portal; the browser-evidence tooling — Playwright persistence off for authentication tests, the allow-listed summary collector, the evidence scanner. Adversarial tests against real PostgreSQL 16: an unbound identity is refused; an email match binds nothing; a replayed or forged `state`, handle, `nonce` or code is refused; every callback outcome is a `303` to the clean URL with the handle cleared and `no-store` and `no-referrer`; no token, claim, verifier or callback parameter reaches a response body, a log, an audit or outbox row, or an exception chain; a federated session is an ordinary session under every M3.1 and M3.2 protection; logout revokes; refresh tokens are unreadable by the application role; **the identity-binding login role's catalogue is `EXECUTE` on its one function and nothing else, and arbitrary SQL as that role opens no session, issues no credential, changes no membership, assumes no role and writes no table**; **binding is idempotent for an identical request, refuses a conflicting one, never binds by email, and commits its success or refusal audit event atomically**; **the evidence scanner fails on a planted secret, query-string URL, cookie, bearer value or email address, and the collector emits only allow-listed fields**; `verify-full` against a local certificate authority works; local authentication remains for development and test. Nothing deployed. |
 | **M3.3d** | Every parameter confirmed; the plan reviewed in an operator session; the cost estimate current; the authorization recorded; apply started with the approved object's key, version ID and checksum and verified independently; bootstrap, migrations, identity binding with the dedicated credential; every evidence item of §10 captured under the browser-evidence rules; Milestone 3 closes. |
 
 ## 12. Explicit deferrals

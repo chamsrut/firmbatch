@@ -1,0 +1,279 @@
+# Build once, publish by digest, and resume what an earlier attempt left incomplete (ADR 0012
+# decisions 13 and 15).
+#
+# FAIL-CLOSED UNTIL A HUMAN HAS PREPARED IT. The preflight job references no GitHub environment and
+# requests no OIDC token. It refuses unless the run is a manual dispatch of protected main in this
+# exact repository (by pinned ID), infra/delivery/readiness.json attests every human prerequisite,
+# the artifact-publish environment already exists with required reviewers, self-review prevention,
+# no administrator bypass and a main-only branch policy, and the commit is the merge of a pull
+# request a qualified reviewer other than its author approved before the merge. That approval is
+# output as evidence and frozen into the release record. Nothing runs from a pull request or a fork:
+# the only trigger is workflow_dispatch, and the preflight refuses a fork.
+#
+# Then the full required verification (ci.yml, reused unchanged), and publication as a resumable
+# state machine.
+#
+# Before any credential exists: a check that this run attempt's own preflight and verification jobs
+# succeeded IN THIS ATTEMPT -- the predicate promotion applies later -- so a partial rerun whose gates
+# GitHub lists under an earlier attempt stops here rather than after an irreversible push; ONE build of
+# the commit from the pinned base-image digests and the committed locks, with no build argument, whose
+# labels embed its provenance -- repository, commit, workflow identity, run ID and attempt, build time
+# -- and whose BuildKit metadata records its configuration digest; a local inspection that refuses
+# anything but a single linux/amd64 image whose local ID is that configuration digest (an image store
+# reporting a manifest digest instead is refused here); the SBOM of that image; and the release draft,
+# binding the configuration digest, its provenance, the SBOM, the frozen approval and the committed
+# build inputs.
+#
+# Then the artifact-publish role, and exactly one of two paths:
+#   fresh  -- git-<commit> does not exist: create this image's SBOM under its configuration digest,
+#             push the one tag once, and prove from the registry's own bytes that it holds exactly
+#             the image this attempt built;
+#   resume -- git-<commit> exists: push nothing and never delete or overwrite; prove from the
+#             registry's bytes that the tag is this commit's release pushed by an earlier attempt,
+#             whose SBOM is stored. Incompatible provenance, another tag or a different digest stops
+#             for explicit human recovery (infra/terraform/runbooks/staging-delivery.md, part C).
+# Both paths then generate the release record as a deterministic function of the pushed image, the
+# stored SBOM and the commit -- naming the ORIGINAL run ID and attempt from the image's labels -- and
+# create it with If-None-Match. A 412, or a response that never arrived, reads back that exact key and
+# succeeds only if the stored object is byte-for-byte, and by its stored metadata, this release's.
+# Dispatching a completed publication again changes nothing. Nothing is uploaded as a GitHub
+# artifact, and every file stays in a private runner directory removed when the job ends.
+#
+# staging-plan later promotes the recorded digest; staging-apply re-verifies and applies it; neither
+# builds, tags or pushes anything. Production promotes the same digest through its own plan and
+# approval.
+#
+# This workflow cannot run in Milestone 3.3b: readiness.json is false, the artifact-publish
+# environment does not exist, main is not protected, and the release registry has not been applied.
+
+name: artifact-publish
+run-name: "artifact publish of ${{ github.sha }}"
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: artifact-publish
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  preflight:
+    name: Preflight (no environment, no AWS)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      source_commit: ${{ steps.preflight.outputs.source_commit }}
+      approval_evidence: ${{ steps.preflight.outputs.approval_evidence }}
+    steps:
+      - name: Refuse anything but a manual dispatch of main in this repository
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+        run: |
+          test "$EVENT_NAME" = "workflow_dispatch"
+          test "$REF" = "refs/heads/main"
+          test "$REPOSITORY_ID" = "1349512121"
+
+      - name: Check out main with history for the reachability check
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Preflight
+        id: preflight
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 infra/delivery/delivery.py preflight --workflow publish
+
+  verify:
+    name: Full required verification (ci.yml, reused unchanged)
+    needs: preflight
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: Build once, publish or resume one immutable release (artifact-publish)
+    needs: [preflight, verify]
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.repository_id == '1349512121'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: artifact-publish
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      AWS_EC2_METADATA_DISABLED: "true"
+      PRIVATE_DIR: ${{ runner.temp }}/firmbatch-private
+      SOURCE_COMMIT: ${{ needs.preflight.outputs.source_commit }}
+      APPROVAL_EVIDENCE: ${{ needs.preflight.outputs.approval_evidence }}
+      ARTIFACT_REGISTRY_ACCOUNT_ID: ${{ vars.ARTIFACT_REGISTRY_ACCOUNT_ID }}
+      ARTIFACT_REGISTRY_REGION: ${{ vars.ARTIFACT_REGISTRY_REGION }}
+      ARTIFACT_REPOSITORY_NAME: ${{ vars.ARTIFACT_REPOSITORY_NAME }}
+      ARTIFACT_RELEASE_BUCKET: ${{ vars.ARTIFACT_RELEASE_BUCKET }}
+      ARTIFACT_RELEASE_KMS_KEY_ARN: ${{ vars.ARTIFACT_RELEASE_KMS_KEY_ARN }}
+      ARTIFACT_PUBLISH_ROLE_ARN: ${{ vars.ARTIFACT_PUBLISH_ROLE_ARN }}
+    steps:
+      - name: Check out the preflighted commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.source_commit }}
+          persist-credentials: false
+
+      - name: Create the private working directory every release file stays in
+        run: |
+          umask 077
+          mkdir -m 700 "$PRIVATE_DIR"
+
+      - name: Refuse any checkout but the preflighted commit, an unpinned base image or a build argument
+        run: python3 infra/delivery/delivery.py check-build-inputs --dockerfile Dockerfile
+
+      - name: Refuse malformed or mismatched environment configuration
+        run: python3 infra/delivery/delivery.py check-environment-variables --workflow publish
+
+      - name: Refuse unless this attempt's own preflight and verification jobs succeeded in it, before any credential
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 infra/delivery/delivery.py check-publish-attempt
+
+      - name: Build the image once, with its provenance in its labels, before any credential exists
+        run: |
+          umask 077
+          BUILD_CREATED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          docker build --pull --provenance=false --sbom=false --platform linux/amd64 \
+            --metadata-file "$PRIVATE_DIR/build-metadata.json" \
+            --label "org.opencontainers.image.source=https://github.com/chamsrut/firmbatch" \
+            --label "org.opencontainers.image.revision=$SOURCE_COMMIT" \
+            --label "org.opencontainers.image.created=$BUILD_CREATED" \
+            --label "io.firmbatch.release.provenance=firmbatch.release-provenance.v1" \
+            --label "io.firmbatch.release.repository-id=$GITHUB_REPOSITORY_ID" \
+            --label "io.firmbatch.release.workflow-ref=$GITHUB_WORKFLOW_REF" \
+            --label "io.firmbatch.release.run-id=$GITHUB_RUN_ID" \
+            --label "io.firmbatch.release.run-attempt=$GITHUB_RUN_ATTEMPT" \
+            --tag "firmbatch-release:git-$SOURCE_COMMIT" .
+          docker image inspect "firmbatch-release:git-$SOURCE_COMMIT" > "$PRIVATE_DIR/image-inspect.json"
+
+      - name: Generate the SBOM of that image, before any credential exists
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: firmbatch-release:git-${{ needs.preflight.outputs.source_commit }}
+          format: spdx-json
+          output-file: ${{ runner.temp }}/firmbatch-private/sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Inspect the image and write the release draft, before any credential exists
+        run: |
+          umask 077
+          python3 infra/delivery/delivery.py release-draft --image-inspect "$PRIVATE_DIR/image-inspect.json" --build-metadata "$PRIVATE_DIR/build-metadata.json" --sbom "$PRIVATE_DIR/sbom.spdx.json" --out "$PRIVATE_DIR/draft.json"
+
+      - name: Assume the artifact-publish role through OIDC
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        with:
+          role-to-assume: ${{ vars.ARTIFACT_PUBLISH_ROLE_ARN }}
+          aws-region: ${{ vars.ARTIFACT_REGISTRY_REGION }}
+          audience: sts.amazonaws.com
+          role-session-name: firmbatch-artifact-publish-${{ github.run_id }}
+          role-duration-seconds: 3600
+          allowed-account-ids: ${{ vars.ARTIFACT_REGISTRY_ACCOUNT_ID }}
+          mask-aws-account-id: true
+
+      - name: Publish or resume the release -- one push at most, never an overwrite
+        run: |
+          umask 077
+          DELIVERY="infra/delivery/delivery.py"
+          REGISTRY="$ARTIFACT_REGISTRY_ACCOUNT_ID.dkr.ecr.$ARTIFACT_REGISTRY_REGION.amazonaws.com"
+          REPOSITORY_URL="$REGISTRY/$ARTIFACT_REPOSITORY_NAME"
+          TAG="git-$SOURCE_COMMIT"
+
+          # Create a release object once. A 412, or a response that never arrived, reads back exactly
+          # that key and succeeds only if the stored object is byte-for-byte and semantically this one.
+          put_once() {
+            local key="$1" body="$2" kind="$3" digest="$4" metadata
+            metadata="$(python3 "$DELIVERY" object-metadata --kind "$kind" --commit "$SOURCE_COMMIT" --digest "$digest" --body "$body")"
+            if aws s3api put-object --bucket "$ARTIFACT_RELEASE_BUCKET" --key "$key" --body "$body" --if-none-match '*' --server-side-encryption aws:kms --ssekms-key-id "$ARTIFACT_RELEASE_KMS_KEY_ARN" --checksum-algorithm SHA256 --content-type application/json --metadata "$metadata" > "$PRIVATE_DIR/put.json" 2> "$PRIVATE_DIR/put.err"; then
+              return 0
+            fi
+            aws s3api get-object --bucket "$ARTIFACT_RELEASE_BUCKET" --key "$key" "$PRIVATE_DIR/existing-object" > "$PRIVATE_DIR/existing-head.json"
+            python3 "$DELIVERY" compare-release-object --kind "$kind" --commit "$SOURCE_COMMIT" --digest "$digest" --expected "$body" --existing "$PRIVATE_DIR/existing-object" --head "$PRIVATE_DIR/existing-head.json"
+          }
+
+          # What git-<commit> is now: an empty answer only for ImageNotFoundException, never for an
+          # error that merely failed to read.
+          describe_tag() {
+            if aws ecr describe-images --registry-id "$ARTIFACT_REGISTRY_ACCOUNT_ID" --repository-name "$ARTIFACT_REPOSITORY_NAME" --image-ids "imageTag=$TAG" --output json > "$PRIVATE_DIR/tag.json" 2> "$PRIVATE_DIR/tag.err"; then
+              return 0
+            fi
+            if grep -q ImageNotFoundException "$PRIVATE_DIR/tag.err"; then
+              printf '%s' '{"imageDetails": []}' > "$PRIVATE_DIR/tag.json"
+              return 0
+            fi
+            echo "::error::The registry could not be read; nothing was published."
+            return 1
+          }
+
+          describe_tag
+          MODE="$(python3 "$DELIVERY" publication-mode --draft "$PRIVATE_DIR/draft.json" --repository-url "$REPOSITORY_URL" --tag-json "$PRIVATE_DIR/tag.json")"
+          LOCAL_REPO_DIGEST=""
+          if [ "$MODE" = "fresh" ]; then
+            # This attempt's SBOM first: an image is never pushed without the SBOM a later attempt
+            # needs to resume its publication. It is addressed by the configuration digest the build
+            # recorded and the draft verified -- never by the local image ID, which some image stores
+            # report as a manifest digest the registry's configuration digest would never match.
+            LOCAL_CONFIG_DIGEST="$(python3 "$DELIVERY" draft-config-digest --draft "$PRIVATE_DIR/draft.json")"
+            put_once "$(python3 "$DELIVERY" sbom-key --draft "$PRIVATE_DIR/draft.json")" "$PRIVATE_DIR/sbom.spdx.json" sbom "$LOCAL_CONFIG_DIGEST"
+            aws ecr get-login-password --region "$ARTIFACT_REGISTRY_REGION" | docker login --username AWS --password-stdin "$REGISTRY" > /dev/null
+            docker tag "firmbatch-release:$TAG" "$REPOSITORY_URL:$TAG"
+            docker push "$REPOSITORY_URL:$TAG" > "$PRIVATE_DIR/push.log" 2>&1
+            docker logout "$REGISTRY" > /dev/null
+            LOCAL_REPO_DIGEST="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$REPOSITORY_URL:$TAG" | grep -F "$REPOSITORY_URL@sha256:" | head -n 1)"
+            describe_tag
+          fi
+
+          # From the registry's own bytes: the manifest, its configuration blob and the provenance in it.
+          DIGEST="$(python3 "$DELIVERY" tag-digest --draft "$PRIVATE_DIR/draft.json" --repository-url "$REPOSITORY_URL" --tag-json "$PRIVATE_DIR/tag.json")"
+          aws ecr batch-get-image --registry-id "$ARTIFACT_REGISTRY_ACCOUNT_ID" --repository-name "$ARTIFACT_REPOSITORY_NAME" --image-ids "imageDigest=$DIGEST" --accepted-media-types application/vnd.oci.image.manifest.v1+json application/vnd.docker.distribution.manifest.v2+json --output json > "$PRIVATE_DIR/manifest.json"
+          CONFIG_DIGEST="$(python3 "$DELIVERY" image-config-digest --repository-url "$REPOSITORY_URL" --images-json "$PRIVATE_DIR/tag.json" --manifest-json "$PRIVATE_DIR/manifest.json")"
+          CONFIG_URL="$(aws ecr get-download-url-for-layer --registry-id "$ARTIFACT_REGISTRY_ACCOUNT_ID" --repository-name "$ARTIFACT_REPOSITORY_NAME" --layer-digest "$CONFIG_DIGEST" --query downloadUrl --output text)"
+          curl --fail --silent --proto '=https' --max-filesize 1048576 --output "$PRIVATE_DIR/config.blob" "$CONFIG_URL"
+          unset CONFIG_URL
+          python3 "$DELIVERY" registry-identity --draft "$PRIVATE_DIR/draft.json" --mode "$MODE" --repository-url "$REPOSITORY_URL" --images-json "$PRIVATE_DIR/tag.json" --manifest-json "$PRIVATE_DIR/manifest.json" --config-blob "$PRIVATE_DIR/config.blob" --local-repo-digest "$LOCAL_REPO_DIGEST" --out "$PRIVATE_DIR/identity.json"
+
+          # The stored SBOM of the image the tag names -- this attempt's, or the pushing attempt's --
+          # then the release record, deterministically, created once.
+          aws s3api get-object --bucket "$ARTIFACT_RELEASE_BUCKET" --key "releases/$SOURCE_COMMIT/sbom-${CONFIG_DIGEST#sha256:}.spdx.json" "$PRIVATE_DIR/sbom-object.json" > "$PRIVATE_DIR/sbom-head.json"
+          python3 "$DELIVERY" release-record --draft "$PRIVATE_DIR/draft.json" --identity "$PRIVATE_DIR/identity.json" --sbom-object "$PRIVATE_DIR/sbom-object.json" --sbom-head "$PRIVATE_DIR/sbom-head.json" --out "$PRIVATE_DIR/release-record.json"
+          put_once "releases/$SOURCE_COMMIT/release-manifest.json" "$PRIVATE_DIR/release-record.json" record "$DIGEST"
+          RECORD_VERSION_ID="$(aws s3api head-object --bucket "$ARTIFACT_RELEASE_BUCKET" --key "releases/$SOURCE_COMMIT/release-manifest.json" --query VersionId --output text)"
+          RECORD_SHA256="$(sha256sum "$PRIVATE_DIR/release-record.json" | cut -d ' ' -f 1)"
+          {
+            echo "### Release published ($MODE) -- promote it with staging-plan's release_commit"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| release_commit | \`$SOURCE_COMMIT\` |"
+            echo "| tag | \`$TAG\` |"
+            echo "| digest | \`$DIGEST\` |"
+            echo "| release record | \`releases/$SOURCE_COMMIT/release-manifest.json\` |"
+            echo "| record version | \`$RECORD_VERSION_ID\` |"
+            echo "| record sha256 | \`$RECORD_SHA256\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove every release file from the runner and log out of the registry
+        if: always()
+        run: |
+          docker logout "$ARTIFACT_REGISTRY_ACCOUNT_ID.dkr.ecr.$ARTIFACT_REGISTRY_REGION.amazonaws.com" > /dev/null 2>&1 || true
+          rm -rf -- "$PRIVATE_DIR"

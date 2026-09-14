@@ -6,10 +6,14 @@
 > customer portal under `portal/` — M3.2 merged through PR #10 at `ae61747`, implemented,
 > tested and independently reviewed; **none of it deployed, none VERIFIED LIVE**. To run the
 > portal locally, see `portal/README.md`.
-> **Current slice:** Milestone 3.3a — the AWS staging, Cognito and Terraform architecture
-> (ADR 0011; `docs/architecture/m3-3-aws-staging-topology.md`), documentation only. **No AWS
-> deployment and no deployment evidence exists**; the hosted portal becomes visible only after
-> M3.3d's authorized deployment.
+> **Current slice:** Milestone 3.3b — the Terraform, container and delivery foundation under
+> `infra/`, `Dockerfile` and `.github/workflows/` (ADR 0012), implemented and statically tested
+> on its branch. M3.3a — the AWS staging, Cognito and Terraform architecture (ADR 0011) — merged
+> through PR #11 at `86d4195`. **No Terraform plan or apply has run, no AWS or GitHub resource
+> exists, and no deployment or deployment evidence exists**; the hosted portal becomes visible
+> only after M3.3d's authorized deployment. M3.3c — the broker, bootstrap and identity-binding
+> programs and the identity-mapping migration, now `0008` — is next. (`0007` is M3.3b's incidental
+> password-hash correction.)
 > **Target:** Firmbatch v1 revision D.1.
 >
 > The canonical target is `docs/architecture/v1-target-architecture.md`.

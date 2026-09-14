@@ -1,0 +1,79 @@
+# Values-free template for the staging root. Every empty value is a human-owned deployment
+# parameter confirmed at M3.3d (ADR 0011). Copy this OUTSIDE the repository; a valued tfvars
+# file is git-ignored and is never committed. In the pipeline the values come from the
+# staging-plan environment's protected configuration, never from the repository.
+
+expected_account_id = ""
+region              = "" # eu-central-1 recommended
+environment         = "staging"
+name_prefix         = "firmbatch-staging"
+
+# From the bootstrap root's outputs. The delivery identities are the bootstrap root's too; this
+# root names none of them.
+state_bucket_name = ""
+state_kms_key_arn = ""
+plan_bucket_name  = ""
+plan_kms_key_arn  = ""
+
+# From the artifacts root's outputs: the canonical release registry.
+release_registry_account_id = ""
+release_registry_region     = ""
+release_repository_name     = "firmbatch/control-plane"
+
+route53_zone_id = ""
+app_hostname    = "" # proposed staging.app.firmbatch.com
+auth_hostname   = "" # proposed auth.staging.app.firmbatch.com
+
+vpc_cidr              = ""
+availability_zones    = []
+public_subnet_cidrs   = []
+private_subnet_cidrs  = []
+database_subnet_cidrs = []
+
+# Explicitly reviewed by a human on every change; never committed.
+reviewer_cidrs = []
+reviewer_address_space_limit = {
+  ipv4_addresses        = 0
+  ipv6_slash64_networks = 0
+}
+
+# False until M3.3c's programs, dependencies and image have passed review.
+runtime_contract_reviewed = false
+release_image             = "" # <release repository>@sha256:<64 hex> from a verified release record; never a tag
+
+commands = {
+  web_api          = [] # the existing web/API entry point, e.g. python3 -m firmbatch.control_plane.api
+  identity_broker  = [] # M3.3c
+  migrate          = [] # python3 -m firmbatch.control_plane.migrate upgrade
+  bootstrap        = [] # M3.3c
+  identity_binding = [] # M3.3c
+}
+
+task_sizes = {
+  web_api          = { cpu = 0, memory = 0 }
+  identity_broker  = { cpu = 0, memory = 0 }
+  migrate          = { cpu = 0, memory = 0 }
+  bootstrap        = { cpu = 0, memory = 0 }
+  identity_binding = { cpu = 0, memory = 0 }
+}
+
+desired_counts = {
+  web_api         = 0
+  identity_broker = 0
+}
+
+firmbatch_env                     = "" # the staging configuration mode is M3.3c's
+identity_broker_health_check_path = "" # M3.3c
+
+postgres_engine_version       = "" # exact 16.x minor, checked immediately before deployment
+rds_instance_class            = ""
+rds_allocated_storage_gib     = 0
+rds_max_allocated_storage_gib = 0
+
+cognito_ses_identity_arn   = ""
+cognito_from_email_address = ""
+
+log_retention_days             = 0
+alert_email                    = ""
+budget_limit_usd               = "" # alerts only; not a cap
+budget_alert_threshold_percent = 0

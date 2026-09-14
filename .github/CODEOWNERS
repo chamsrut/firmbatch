@@ -1,0 +1,17 @@
+# Code owners (Milestone 3.3b, ADR 0011 decision 9.1).
+#
+# GitHub requests a review from these owners on every pull request that touches the paths
+# below. That request binds only once branch protection on main requires code-owner review,
+# which is a repository setting a human configures (infra/terraform/runbooks/staging-delivery.md).
+# This file is not evidence that the setting exists.
+
+/.github/       @chamsrut
+/infra/         @chamsrut
+/scripts/       @chamsrut
+/.agents/       @chamsrut
+/.claude/       @chamsrut
+/.codex/        @chamsrut
+/AGENTS.md      @chamsrut
+/CLAUDE.md      @chamsrut
+/Dockerfile     @chamsrut
+/.dockerignore  @chamsrut

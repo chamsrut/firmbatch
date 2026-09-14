@@ -72,6 +72,19 @@ standard. Cite them as HISTORICAL, do not treat them as the template, and do not
 them to add a header: back-filling provenance onto a run you did not observe is fabrication,
 and the artifacts are immutable for exactly that reason.
 
+## M3.3 AWS staging and deployment evidence is not available yet
+
+Evidence of the Milestone 3.3 AWS staging preview — the sanitized plan summary, cost estimate,
+deployment approval, RDS qualification, identity bindings, browser-journey summary, restore
+drill, inventories and the rest of ADR 0011 decision 10's list — is captured only by an
+explicitly authorized M3.3d deployment, under `docs/evidence/m3/aws-staging/`. Until then no
+such evidence exists to capture: the policy guard refuses a write there, and
+`infra/terraform/policy/check.py` fails if anything appears there before
+`infra/delivery/readiness.json` records the M3.3d authorization (ADR 0012).
+
+This restriction is that directory only. Capturing evidence for any other milestone —
+Milestone 3.1 or 3.2 included, elsewhere under `docs/evidence/m3/` — works exactly as below.
+
 ## Procedure
 
 1. Confirm the target path does not exist. If it does, choose a new name.

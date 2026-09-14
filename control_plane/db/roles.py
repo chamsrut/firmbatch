@@ -85,7 +85,7 @@ grant that is only correct because of a default is a grant that is only correct 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from sqlalchemy import Connection, text
 
@@ -548,6 +548,7 @@ M2_3_REVISION = "0003_auth_context_and_audit"
 M2_4_REVISION = "0004_lifecycle_state_machines"
 M3_1_REVISION = "0005_identity_and_membership"
 M3_2_REVISION = "0006_preferences_and_password"
+M3_3B_REVISION = "0007_password_hash_contract"
 
 #: The protected relations each revision actually has. Written out per revision rather than
 #: derived from :data:`PROTECTED_TABLES`, which describes **head**: deriving it is what made
@@ -1000,6 +1001,11 @@ _M3_2_PLAN = RevisionPlan(
     lifecycle_writer_column_grants=_M2_4_LIFECYCLE_WRITER_COLUMN_GRANTS,
 )
 
+#: ``0007``, the password-hash contract (an incidental correction found by Milestone 3.3b's
+#: verification). It replaces three function bodies with ``CREATE OR REPLACE`` and adds no
+#: relation, function or grant, so its plan is ``0006``'s with the revision changed.
+_M3_3B_PLAN = replace(_M3_2_PLAN, revision=M3_3B_REVISION)
+
 #: The revisions this module can wire. Anything else -- an older one, a newer one, a
 #: database with no version table, or a version table carrying more than one row -- is
 #: refused rather than guessed at.
@@ -1009,6 +1015,7 @@ REVISION_PLANS: dict[str, RevisionPlan] = {
     _M2_4_PLAN.revision: _M2_4_PLAN,
     _M3_1_PLAN.revision: _M3_1_PLAN,
     _M3_2_PLAN.revision: _M3_2_PLAN,
+    _M3_3B_PLAN.revision: _M3_3B_PLAN,
 }
 
 SUPPORTED_REVISIONS: tuple[str, ...] = tuple(sorted(REVISION_PLANS))

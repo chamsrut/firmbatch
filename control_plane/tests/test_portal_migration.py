@@ -79,11 +79,12 @@ def _grantees(acl: str | None) -> set[str]:
 # --------------------------------------------------------------------------- no drift
 
 
-def test_the_revision_is_the_head_and_follows_0005():
+def test_the_revision_follows_0005():
     migration = _migration()
     assert migration.revision == REVISION == roles.M3_2_REVISION
     assert migration.down_revision == roles.M3_1_REVISION
-    # Migrations 0001-0005 are history: this one adds, and modifies none of them.
+    # Migrations 0001-0005 are history: this one adds, and modifies none of them. It was the
+    # head until 0007; tests/test_password_hash_contract.py holds the head now.
     assert len(migration.revision) <= 32
 
 
@@ -490,7 +491,7 @@ def test_a_populated_database_downgrades_reconciles_and_reupgrades_with_the_boun
             authenticator.dispose()
 
         with migrate.migration_connection(handle.migration_url) as (connection, expected):
-            assert roles.schema_revision(connection) == roles.M3_2_REVISION
+            assert roles.schema_revision(connection) == roles.M3_3B_REVISION
             migrate.downgrade_to(connection, roles.M3_1_REVISION, expected=expected)
             connection.commit()
             assert migrate.current_revision(connection) == roles.M3_1_REVISION
@@ -512,7 +513,7 @@ def test_a_populated_database_downgrades_reconciles_and_reupgrades_with_the_boun
 
             assert migrate.upgrade_to_head(connection, expected=expected) == migrate.head_revision()
             connection.commit()
-            assert roles.schema_revision(connection) == roles.M3_2_REVISION
+            assert roles.schema_revision(connection) == roles.M3_3B_REVISION
             wire_handle_roles(connection, handle)
             connection.commit()
 

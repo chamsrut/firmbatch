@@ -25,6 +25,11 @@
 # FIRMBATCH_ENV=test, and issue the final DROP as the per-run database owner so that a
 # same-name replacement owned by anybody else survives.
 #
+# Since Milestone 3.3b one gate also runs the Terraform and delivery foundation's static
+# checks. It makes no AWS API call -- it runs with every AWS credential removed and instance
+# metadata disabled, against mocked AWS providers only -- but `terraform init` fetches the
+# pinned provider from the Terraform Registry when a root does not already hold it.
+#
 # The destructive chaos experiment is still NOT here; it is explicit, opt-in, and lives
 # in .agents/skills/verify/SKILL.md.
 
@@ -331,6 +336,10 @@ REQUIRED_FILES=(
   control_plane/tests/test_portal_password_change.py
   control_plane/tests/test_portal_http.py
   control_plane/tests/test_portal_migration.py
+  # Migration 0007, the password-hash contract: an incidental correction found by M3.3b's
+  # verification (structural hash validation in Python and all three database entry points).
+  control_plane/db/migrations/versions/0007_password_hash_contract.py
+  control_plane/tests/test_password_hash_contract.py
   # The portal itself. package-lock.json is tracked and is what `npm ci` installs from;
   # node_modules and dist are not, and are gitignored.
   portal/package.json
@@ -376,6 +385,98 @@ REQUIRED_FILES=(
   portal/tests/security.test.tsx
   portal/tests/storage.test.ts
   portal/tests/workspace-flows.test.tsx
+  # --- Terraform, container and delivery foundation (Milestone 3.3b) --------------------
+  # Scaffolding only: nothing here is planned, applied, pushed or deployed. It adds ONE gate
+  # -- see "Terraform and delivery foundation" below -- because its checks are Terraform's and
+  # the repository's own policy checks, which no earlier gate reaches.
+  docs/adr/0011-aws-staging-cognito-and-terraform-delivery.md
+  docs/adr/0012-terraform-container-and-delivery-foundation.md
+  docs/architecture/m3-3-aws-staging-topology.md
+  Dockerfile
+  .dockerignore
+  .github/CODEOWNERS
+  .github/workflows/staging-plan.yml
+  .github/workflows/staging-apply.yml
+  .github/workflows/artifact-publish.yml
+  infra/delivery/readiness.json
+  infra/delivery/admission-policy.json
+  infra/delivery/delivery.py
+  infra/delivery/tests/test_delivery.py
+  infra/terraform/.terraform-version
+  infra/terraform/README.md
+  infra/terraform/runbooks/bootstrap.md
+  infra/terraform/runbooks/staging-delivery.md
+  infra/terraform/scripts/static-checks.sh
+  infra/terraform/policy/__init__.py
+  infra/terraform/policy/check.py
+  infra/terraform/policy/cidr_allowlist.py
+  infra/terraform/policy/hcl.py
+  infra/terraform/policy/yaml_subset.py
+  infra/terraform/policy/tests/__init__.py
+  infra/terraform/policy/tests/test_cidr_allowlist.py
+  infra/terraform/policy/tests/test_policy_rules.py
+  infra/terraform/policy/tests/test_readers.py
+  infra/terraform/bootstrap/.terraform.lock.hcl
+  infra/terraform/bootstrap/versions.tf
+  infra/terraform/bootstrap/providers.tf
+  infra/terraform/bootstrap/variables.tf
+  infra/terraform/bootstrap/main.tf
+  infra/terraform/bootstrap/state_bucket.tf
+  infra/terraform/bootstrap/plan_bucket.tf
+  infra/terraform/bootstrap/outputs.tf
+  infra/terraform/bootstrap/bootstrap.tfvars.example
+  infra/terraform/bootstrap/tests/bootstrap.tftest.hcl
+  infra/terraform/bootstrap/github_oidc.tf
+  infra/terraform/bootstrap/delivery_policies.tf
+  infra/terraform/artifacts/.terraform.lock.hcl
+  infra/terraform/artifacts/versions.tf
+  infra/terraform/artifacts/providers.tf
+  infra/terraform/artifacts/variables.tf
+  infra/terraform/artifacts/main.tf
+  infra/terraform/artifacts/release_bucket.tf
+  infra/terraform/artifacts/publish_role.tf
+  infra/terraform/artifacts/outputs.tf
+  infra/terraform/artifacts/artifacts.tfvars.example
+  infra/terraform/artifacts/tests/artifacts.tftest.hcl
+  infra/terraform/environments/staging/.terraform.lock.hcl
+  infra/terraform/environments/staging/versions.tf
+  infra/terraform/environments/staging/providers.tf
+  infra/terraform/environments/staging/variables.tf
+  infra/terraform/environments/staging/main.tf
+  infra/terraform/environments/staging/outputs.tf
+  infra/terraform/environments/staging/staging.tfvars.example
+  infra/terraform/environments/staging/tests/staging.tftest.hcl
+  infra/terraform/environments/staging/tests/reviewer_allowlist.tftest.hcl
+  infra/terraform/environments/production/README.md
+  infra/terraform/modules/network/versions.tf
+  infra/terraform/modules/network/variables.tf
+  infra/terraform/modules/network/main.tf
+  infra/terraform/modules/network/security_groups.tf
+  infra/terraform/modules/network/outputs.tf
+  infra/terraform/modules/edge/versions.tf
+  infra/terraform/modules/edge/variables.tf
+  infra/terraform/modules/edge/main.tf
+  infra/terraform/modules/edge/outputs.tf
+  infra/terraform/modules/compute/versions.tf
+  infra/terraform/modules/compute/variables.tf
+  infra/terraform/modules/compute/main.tf
+  infra/terraform/modules/compute/iam.tf
+  infra/terraform/modules/compute/outputs.tf
+  infra/terraform/modules/database/versions.tf
+  infra/terraform/modules/database/main.tf
+  infra/terraform/modules/identity/versions.tf
+  infra/terraform/modules/identity/variables.tf
+  infra/terraform/modules/identity/main.tf
+  infra/terraform/modules/identity/outputs.tf
+  infra/terraform/modules/secrets/versions.tf
+  infra/terraform/modules/secrets/main.tf
+  infra/terraform/modules/observability/versions.tf
+  infra/terraform/modules/observability/main.tf
+  infra/terraform/modules/delivery/versions.tf
+  infra/terraform/modules/delivery/variables.tf
+  infra/terraform/modules/delivery/main.tf
+  infra/terraform/modules/delivery/policies.tf
+  infra/terraform/modules/delivery/outputs.tf
 )
 missing=()
 for f in "${REQUIRED_FILES[@]}"; do
@@ -616,6 +717,42 @@ elif [ ! -d "${REPO_ROOT}/portal/node_modules" ]; then
 else
   gate_in "${REPO_ROOT}/portal" "customer portal (format, lint, types, tests, build)" \
     npm run --silent verify
+fi
+
+# --- the Terraform, container and delivery foundation (Milestone 3.3b) -------------------
+#
+# infra/terraform/scripts/static-checks.sh, as ONE gate: the pinned Terraform version; the
+# repository's independent policy checks -- module layout, pinned versions, separate backends
+# and no workspaces, account restriction, forbidden constructs (provisioners, PostgreSQL
+# providers, secret versions, random passwords, Identity Pools, ALB authentication), secret
+# values, valued tfvars, the mocked-provider reach of every Terraform test, the compute,
+# database, network, identity, human-applied-resource and saved-plan properties, the CI and deployment
+# workflows, CODEOWNERS, the Dockerfile, the readiness attestation and M3.3 deployment
+# evidence -- with mutation tests for their main properties; the delivery checks' unit tests; `terraform fmt
+# -check -recursive`; and, for each of the three roots (bootstrap, artifacts, environments/staging),
+# `init -backend=false -lockfile=readonly`, `validate` and `terraform test` against mocked AWS providers.
+#
+# It makes NO AWS API call. The gate removes every AWS credential variable, disables instance
+# metadata and points the AWS config and credential files at /dev/null, and the script scrubs
+# its own environment the same way before any step runs. It FAILS rather than skips when
+# Terraform is missing or is not exactly infra/terraform/.terraform-version, for the same reason
+# the portal and PostgreSQL gates do. The container image is not built here -- Docker is not
+# available everywhere this script runs -- so the build is ci.yml's separate `container` job,
+# and this gate checks the Dockerfile's shape.
+printf '\nTerraform and delivery foundation\n'
+
+if ! command -v terraform >/dev/null 2>&1; then
+  fail "Terraform and delivery foundation (fmt, init, validate, mocked tests, policy)" \
+       "terraform is not installed. Install exactly the version in infra/terraform/.terraform-version;
+        see infra/terraform/README.md. This gate does not skip: an unrun check reports the same
+        green as a passing one."
+else
+  gate_in "${REPO_ROOT}" "Terraform and delivery foundation (fmt, init, validate, mocked tests, policy)" \
+    env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN -u AWS_SECURITY_TOKEN \
+      -u AWS_PROFILE -u AWS_DEFAULT_PROFILE -u AWS_ROLE_ARN -u AWS_WEB_IDENTITY_TOKEN_FILE \
+      -u AWS_CONTAINER_CREDENTIALS_RELATIVE_URI -u AWS_CONTAINER_CREDENTIALS_FULL_URI \
+      AWS_EC2_METADATA_DISABLED=true AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null \
+      bash infra/terraform/scripts/static-checks.sh
 fi
 
 # --- the v1 PostgreSQL foundation suite ---------------------------------------------
