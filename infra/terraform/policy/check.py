@@ -2512,9 +2512,19 @@ def rule_container(tree: Tree) -> list[str]:
     if not froms or any(not re.search(r"@sha256:[0-9a-f]{64}\b", line) for line in froms):
         findings.append("Dockerfile: every base image is pinned by digest")
     final_stage = instructions[instructions.index(froms[-1]):] if froms else []
-    users = [line.split(None, 1)[1] for line in final_stage if line.upper().startswith("USER ")]
-    if not users or not re.fullmatch(r"[1-9][0-9]*(:[1-9][0-9]*)?", users[-1]):
-        findings.append("Dockerfile: the final stage runs as a numeric, non-root user")
+    users = [line.split(None, 1)[1].strip() for line in final_stage if line.upper().startswith("USER ")]
+    if not users or not re.fullmatch(r"[1-9][0-9]*:[1-9][0-9]*", users[-1]):
+        findings.append("Dockerfile: the final stage runs as a numeric, non-root user and group (USER uid:gid)")
+    # The numeric identity needs no account: creating one depends on tools the slim runtime base does not
+    # reliably provide, and installing a package just to create it widens the image for nothing.
+    runs = [line for line in final_stage if line.upper().startswith("RUN ")]
+    if any(re.search(r"\b(groupadd|useradd|addgroup|adduser|usermod|groupmod)\b", line) for line in runs):
+        findings.append("Dockerfile: the final stage creates no OS user or group; the numeric USER needs no account")
+    if any(
+        re.search(r"\b(apt-get|apt|aptitude|dpkg|apk|dnf|microdnf|yum)\b.*\b(passwd|shadow|shadow-utils|adduser|login)\b", line)
+        for line in runs
+    ):
+        findings.append("Dockerfile: the final stage adds no OS package for user creation")
     for line in instructions:
         upper = line.upper()
         if upper.startswith("ADD "):

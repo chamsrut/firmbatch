@@ -2462,7 +2462,9 @@ shown to catch what the statement scan cannot. The R0 policy-engine row carries 
 247 → 315 → 343 → 408 → 460 (finding 16). `REQUIRED_FILES` stays at **257** and the gates at **16**.
 
 **Current final verification, locally** (runs, not artifacts). Component runs on the corrected tree: the policy unit
-and mutation tests, **221** (the fourth pass's **213** above is historical); the delivery unit tests, **101**;
+and mutation tests, **225** on the final tree (**221** at `cff27c8` and the fourth pass's **213** above are historical;
+the four added tests guard the numeric `USER 10001:10001` of the PR CI container-build correction); the delivery
+unit tests, **101**;
 `terraform test` against mocked providers, **19 passed** for `bootstrap`, **12** for `artifacts` and **41** for
 `environments/staging`; the agent policy tests, **460 checks passed**. The canonical run on that staged tree
 (staged-diff SHA-256 `5f426da6869ce990b401218cd795ab48fa962d4ae1399f491a9a0d96efc66db6`): **16 passed, 0 failed**,

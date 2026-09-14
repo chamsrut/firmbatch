@@ -221,8 +221,12 @@ jobs:
         working-directory: firmbatch
         run: docker build --pull --tag firmbatch-control-plane:ci .
 
-      - name: The image runs as a non-root user, imports its entry points and holds no test or environment file
+      - name: The image runs as numeric 10001:10001, imports its entry points and holds no test, environment or evidence file
         run: |
+          test "$(docker image inspect --format '{{.Config.User}}' firmbatch-control-plane:ci)" = "10001:10001"
           test "$(docker run --rm --network none --entrypoint id firmbatch-control-plane:ci -u)" = "10001"
+          test "$(docker run --rm --network none --entrypoint id firmbatch-control-plane:ci -g)" = "10001"
+          test "$(docker image inspect --format '{{json .Config.Cmd}}' firmbatch-control-plane:ci)" = '["python3","-m","firmbatch.control_plane.api","--host","0.0.0.0","--port","8080"]'
+          docker run --rm --network none --entrypoint python3 firmbatch-control-plane:ci -m firmbatch.control_plane.api --host 0.0.0.0 --port 8080 --help
           docker run --rm --network none --entrypoint python3 firmbatch-control-plane:ci -c "import firmbatch.control_plane.api.app, firmbatch.control_plane.migrate"
-          docker run --rm --network none --entrypoint sh firmbatch-control-plane:ci -c 'test ! -e /app/firmbatch/control_plane/tests && test ! -e /app/firmbatch/control_plane/testing && test ! -e /app/.env && test -f /app/firmbatch/portal/dist/index.html'
+          docker run --rm --network none --entrypoint sh firmbatch-control-plane:ci -c 'test ! -e /app/firmbatch/control_plane/tests && test ! -e /app/firmbatch/control_plane/testing && test ! -e /app/.env && test ! -e /app/firmbatch/.env && test ! -e /app/firmbatch/docs && test ! -e /app/firmbatch/infra && test ! -e /app/firmbatch/.github && test -f /app/firmbatch/portal/dist/index.html'

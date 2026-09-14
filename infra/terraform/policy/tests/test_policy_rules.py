@@ -1013,6 +1013,39 @@ class Refusals(unittest.TestCase):
     def test_root_container(self):
         self.assertReports(check.rule_container, mutated("Dockerfile", "USER 10001:10001", "USER root"), "non-root")
 
+    def test_a_user_that_is_not_an_explicit_numeric_non_root_uid_and_gid_is_refused(self):
+        for user in ("firmbatch", "10001", "10001:firmbatch", "firmbatch:10001", "0:0", "10001:0", "0:10001"):
+            with self.subTest(user=user):
+                tree = mutated("Dockerfile", "USER 10001:10001", f"USER {user}")
+                self.assertReports(check.rule_container, tree, "numeric, non-root user and group")
+
+    def test_creating_an_os_user_or_group_in_the_final_stage_is_refused(self):
+        # The regression CI found: groupadd was not found in the slim runtime stage, so the image never built.
+        for command in (
+            "groupadd --system --gid 10001 firmbatch \\\n && useradd --system --uid 10001 --gid 10001 firmbatch",
+            "/usr/sbin/useradd --uid 10001 firmbatch",
+            "addgroup --gid 10001 firmbatch && adduser --uid 10001 --ingroup firmbatch firmbatch",
+        ):
+            with self.subTest(command=command):
+                tree = mutated("Dockerfile", "WORKDIR /app\n", f"RUN {command}\n\nWORKDIR /app\n")
+                self.assertReports(check.rule_container, tree, "creates no OS user or group")
+
+    def test_an_os_package_added_for_user_creation_is_refused(self):
+        for package in ("passwd", "adduser", "shadow"):
+            with self.subTest(package=package):
+                install = f"RUN apt-get update && apt-get install -y --no-install-recommends {package}\n\n"
+                tree = mutated("Dockerfile", "WORKDIR /app\n", install + "WORKDIR /app\n")
+                self.assertReports(check.rule_container, tree, "no OS package for user creation")
+
+    def test_the_repository_image_runs_as_the_task_definitions_numeric_identity(self):
+        dockerfile = REPOSITORY.files["Dockerfile"]
+        final_stage = dockerfile[dockerfile.rindex("\nFROM ") :]
+        self.assertEqual([line for line in final_stage.splitlines() if line.startswith("USER ")], ["USER 10001:10001"])
+        self.assertEqual([line for line in final_stage.splitlines() if line.startswith("RUN ")], [])
+        task_user = 'user                   = "10001:10001"'
+        self.assertTrue(any(task_user in text for path, text in REPOSITORY.files.items() if path.startswith(COMPUTE)))
+        self.assertEqual(check.rule_container(REPOSITORY), [])
+
     def test_credential_in_the_image(self):
         line = "    PYTHONUNBUFFERED=1 \\\n"
         tree = mutated("Dockerfile", line, line + "    FIRMBATCH_DATABASE_URL=postgresql://synthetic \\\n")

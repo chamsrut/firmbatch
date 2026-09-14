@@ -49,16 +49,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH=/opt/firmbatch-venv/bin:/usr/local/bin:/usr/bin:/bin
 
-RUN groupadd --system --gid 10001 firmbatch \
- && useradd --system --uid 10001 --gid 10001 --home-dir /nonexistent --no-create-home \
-      --shell /usr/sbin/nologin firmbatch
-
 WORKDIR /app
 COPY --from=python-dependencies /opt/firmbatch-venv /opt/firmbatch-venv
 COPY __init__.py /app/firmbatch/__init__.py
 COPY control_plane /app/firmbatch/control_plane
 COPY --from=portal /build/portal/dist /app/firmbatch/portal/dist
 
+# A numeric OCI identity. No user or group is created and no account package is installed: nothing
+# in the image looks the user up by name, reads a home directory or needs an /etc/passwd entry.
+# Everything copied above stays root-owned, so the application and its virtual environment are
+# read-only to this identity, and nothing writes at runtime (PYTHONDONTWRITEBYTECODE; no cache, log
+# or state directory), so no writable directory is created or re-owned.
 USER 10001:10001
 EXPOSE 8080
 
